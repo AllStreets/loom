@@ -12,7 +12,11 @@ impl Ollama {
 
     pub async fn tags(&self) -> Result<Vec<String>, LoomError> {
         let url = format!("{}/api/tags", self.base);
-        let res = reqwest::get(&url).await.map_err(|e| LoomError::Http(e.to_string()))?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(5000))
+            .build().map_err(|e| LoomError::Http(e.to_string()))?;
+        let res = client.get(&url).send().await
+            .map_err(|e| if e.is_timeout() { LoomError::Timeout } else { LoomError::Http(e.to_string()) })?;
         let text = res.text().await.map_err(|e| LoomError::Http(e.to_string()))?;
         parse_tags(&text)
     }
