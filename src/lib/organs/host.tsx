@@ -158,8 +158,12 @@ export default function OrganHost() {
         const code = await organRead(state.entry.id, "organ.js");
         const blob = new Blob([code], { type: "text/javascript" });
         const url = URL.createObjectURL(blob);
-        const mod = await import(/* @vite-ignore */ url);
-        mod.default.render(el, makeLoomApi(state.entry.id, state.granted));
+        try {
+          const mod = await import(/* @vite-ignore */ url);
+          mod.default.render(el, makeLoomApi(state.entry.id, state.granted));
+        } finally {
+          URL.revokeObjectURL(url);
+        }
       } catch (err) {
         setOrgans((prev) =>
           prev
