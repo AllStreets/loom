@@ -5,6 +5,9 @@ use std::time::Duration;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Msg { pub role: String, pub content: String }
 
+#[derive(serde::Deserialize, Default, Clone)]
+pub struct ChatOpts { pub num_ctx: Option<u64>, pub temperature: Option<f32> }
+
 pub struct Ollama { base: String }
 
 impl Ollama {
@@ -21,14 +24,17 @@ impl Ollama {
         parse_tags(&text)
     }
 
-    pub async fn chat(&self, model: &str, messages: Vec<Msg>, keep_alive: i64, timeout_ms: u64)
+    pub async fn chat(&self, model: &str, messages: Vec<Msg>, keep_alive: i64, timeout_ms: u64, opts: &ChatOpts)
         -> Result<String, LoomError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
             .build().map_err(|e| LoomError::Http(e.to_string()))?;
+        let mut options = serde_json::Map::new();
+        options.insert("temperature".into(), serde_json::json!(opts.temperature.unwrap_or(0.6)));
+        if let Some(n) = opts.num_ctx { options.insert("num_ctx".into(), serde_json::json!(n)); }
         let body = serde_json::json!({
             "model": model, "messages": messages, "stream": false,
-            "keep_alive": keep_alive,
+            "keep_alive": keep_alive, "options": options,
         });
         let res = client.post(format!("{}/api/chat", self.base)).json(&body).send().await
             .map_err(|e| if e.is_timeout() { LoomError::Timeout } else { LoomError::Http(e.to_string()) })?;

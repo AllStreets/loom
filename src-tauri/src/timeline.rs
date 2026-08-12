@@ -63,7 +63,7 @@ pub fn last_good(p: &Path) -> Result<String, LoomError> {
     head.target().map(|o| o.to_string()).ok_or(LoomError::Git("no HEAD".into()))
 }
 
-fn loom_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, LoomError> {
+pub(crate) fn loom_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, LoomError> {
     use tauri::Manager;
     let dir = app.path().app_data_dir()
         .map_err(|e| LoomError::Git(e.to_string()))?.join("loom");

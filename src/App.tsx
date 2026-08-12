@@ -1,5 +1,7 @@
 import "./styles/tokens.css";
 import StatusPanel from "./components/StatusPanel";
+import LoomConsole from "./components/LoomConsole";
+import OrganHost from "./lib/organs/host";
 
 export default function App() {
   return (
@@ -9,6 +11,8 @@ export default function App() {
         <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)" }}>sovereign console</small>
       </header>
       <StatusPanel />
+      <LoomConsole />
+      <OrganHost />
     </main>
   );
 }
