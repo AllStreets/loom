@@ -13,7 +13,7 @@ const TOKENS = {
   t1: "#e8edf7",
   t2: "#9fb0cc",
   t3: "#5f6f8c",
-  accent: "#f59e0b",
+  accent: "#22d3ee",
   go: "#4ade80",
   warn: "#fbbf24",
   danger: "#f87171",

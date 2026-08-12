@@ -4,9 +4,10 @@
   --panel-2:#111a2e;
   --line:rgba(255,255,255,.06);
   --t1:#e8edf7; --t2:#9fb0cc; --t3:#5f6f8c;
-  --accent:#f59e0b;
+  --accent:#22d3ee;
+  --accent-soft:rgba(34,211,238,.12);
   --go:#4ade80; --warn:#fbbf24; --danger:#f87171;
-  --state-listen:#0a84ff; --state-think:#f59e0b; --state-speak:#10b981;
+  --state-listen:#0a84ff; --state-think:#a78bfa; --state-speak:#10b981;
   --f-sans:ui-sans-serif,system-ui,-apple-system,sans-serif;
   --f-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
 }

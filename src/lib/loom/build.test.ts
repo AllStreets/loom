@@ -25,34 +25,67 @@ describe("buildOrgan", () => {
       expect.arrayContaining([expect.objectContaining({ name: "manifest.json" })]),
       expect.stringContaining("runs"));
   });
-  it("attempts ONE repair on gate failure, then fails without writing if still red", async () => {
+  it("attempts TWO repair rounds on gate failure, then fails without writing if still red", async () => {
     const deps = mkDeps({ gate: vi.fn().mockResolvedValue({ ok: false, verdict: { ok: false, stage: "render", errors: ["boom"], testResults: [] } }) });
-    // 4th chat call = the repair round
-    deps.chat.mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='fixed'; } }\n```");
+    // 4th + 5th chat calls = the two repair rounds
+    deps.chat
+      .mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='fix1'; } }\n```")
+      .mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='fix2'; } }\n```");
     const r = await buildOrgan("x", deps);
     expect(r.ok).toBe(false);
     expect(r.stage).toBe("render");
-    expect(deps.chat).toHaveBeenCalledTimes(4);      // manifest, code, tests, repair
-    expect(deps.gate).toHaveBeenCalledTimes(2);      // initial + revalidation
+    expect(deps.chat).toHaveBeenCalledTimes(5);      // manifest, code, tests, repair x2
+    expect(deps.gate).toHaveBeenCalledTimes(3);      // initial + 2 revalidations
     expect(deps.write).not.toHaveBeenCalled();
     expect(r.error).toContain("boom");
-    // the repair prompt carried the error and the broken file
+    // the repair prompt carried the error and the target file
     const repairCall = deps.chat.mock.calls[3];
     expect(repairCall[1][1].content).toContain("boom");
     expect(repairCall[1][1].content).toContain("organ.js");
   });
-  it("repairs test.js when the tests stage fails, then writes on green", async () => {
+  it("tests-stage failure repairs the CODE first (tests are the spec), then writes on green", async () => {
     const gate = vi.fn()
-      .mockResolvedValueOnce({ ok: false, verdict: { ok: false, stage: "tests", errors: ["adds water: fails"], testResults: [] } })
+      .mockResolvedValueOnce({ ok: false, verdict: { ok: false, stage: "tests", errors: ["should not add empty movie"], testResults: [] } })
       .mockResolvedValueOnce({ ok: true, manifest: JSON.parse(MANIFEST), verdict: { ok: true, stage: "pass", errors: [], testResults: [] } });
     const deps = mkDeps({ gate });
-    deps.chat.mockResolvedValueOnce("```js\nexport const tests = [{ name: 'fixed', fn: async ({assert}) => assert(true) }];\n```");
+    deps.chat.mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='guarded'; } }\n```");
     const r = await buildOrgan("track water", deps);
     expect(r.ok).toBe(true);
     expect(deps.chat).toHaveBeenCalledTimes(4);
-    // the REPAIRED tests content is what gets written
+    // round 1 targeted organ.js — the REPAIRED code is what gets written
+    const repairCall = deps.chat.mock.calls[3];
+    expect(repairCall[1][1].content).toContain("fix organ.js so it satisfies them");
+    const written = deps.write.mock.calls[0][1].find((f: { name: string }) => f.name === "organ.js");
+    expect(written.content).toContain("guarded");
+  });
+  it("tests-stage failure falls back to repairing test.js on round 2", async () => {
+    const gate = vi.fn()
+      .mockResolvedValueOnce({ ok: false, verdict: { ok: false, stage: "tests", errors: ["e1"], testResults: [] } })
+      .mockResolvedValueOnce({ ok: false, verdict: { ok: false, stage: "tests", errors: ["e2"], testResults: [] } })
+      .mockResolvedValueOnce({ ok: true, manifest: JSON.parse(MANIFEST), verdict: { ok: true, stage: "pass", errors: [], testResults: [] } });
+    const deps = mkDeps({ gate });
+    deps.chat
+      .mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='try'; } }\n```")   // round 1: organ.js
+      .mockResolvedValueOnce("```js\nexport const tests = [{ name: 'sane', fn: async ({assert}) => assert(true) }];\n```"); // round 2: test.js
+    const r = await buildOrgan("x", deps);
+    expect(r.ok).toBe(true);
+    const round2Call = deps.chat.mock.calls[4];
+    expect(round2Call[1][1].content).toContain("test.js");
     const written = deps.write.mock.calls[0][1].find((f: { name: string }) => f.name === "test.js");
-    expect(written.content).toContain("fixed");
+    expect(written.content).toContain("sane");
+  });
+  it("review gate: declining discards without writing; approving writes", async () => {
+    const declined = await buildOrgan("a", mkDeps({ review: vi.fn().mockResolvedValue(false) }));
+    expect(declined.ok).toBe(false);
+    expect(declined.stage).toBe("review");
+    expect(declined.error).toContain("discarded");
+
+    const deps = mkDeps({ review: vi.fn().mockResolvedValue(true) });
+    const approved = await buildOrgan("b", deps);
+    expect(approved.ok).toBe(true);
+    expect(deps.review).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: "organ.js" })]));
+    expect(deps.write).toHaveBeenCalled();
   });
   it("never writes when the manifest is invalid", async () => {
     const deps = mkDeps({ chat: vi.fn().mockResolvedValue("not json at all") });

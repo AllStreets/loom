@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1640 760" width="1640" height="760" role="img" aria-label="LOOM anatomy">
+  <defs>
+    <linearGradient id="abg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#081021"/><stop offset="100%" stop-color="#04070f"/>
+    </linearGradient>
+    <radialGradient id="aorb" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#eafcff"/><stop offset="35%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#0d1424"/>
+    </radialGradient>
+    <filter id="agl" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="10"/></filter>
+  </defs>
+
+  <rect width="1640" height="760" rx="18" fill="url(#abg)"/>
+  <rect x="1" y="1" width="1638" height="758" rx="18" fill="none" stroke="rgba(255,255,255,.07)"/>
+
+  <text x="48" y="64" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="24" font-weight="700" fill="#e8edf7" letter-spacing="1">ANATOMY</text>
+  <text x="48" y="92" font-family="ui-monospace,Menlo,monospace" font-size="13.5" fill="#5f6f8c">a protected kernel · a growing body of organs · a loom that weaves it · everything remembered</text>
+
+  <!-- legend -->
+  <g font-family="ui-monospace,Menlo,monospace" font-size="12">
+    <circle cx="1236" cy="58" r="5" fill="#4ade80"/><text x="1248" y="63" fill="#9fb0cc">live now</text>
+    <circle cx="1346" cy="58" r="5" fill="#22d3ee"/><text x="1358" y="63" fill="#9fb0cc">weaving next</text>
+    <circle cx="1486" cy="58" r="5" fill="#5f6f8c"/><text x="1498" y="63" fill="#9fb0cc">vision</text>
+  </g>
+
+  <!-- KERNEL panel -->
+  <g transform="translate(48,120)">
+    <rect width="1004" height="428" rx="16" fill="#0b1226" stroke="rgba(34,211,238,.22)"/>
+    <text x="24" y="40" font-family="ui-monospace,Menlo,monospace" font-size="13" fill="#22d3ee" letter-spacing="3">KERNEL — built · protected · gorgeous</text>
+
+    <!-- orb card -->
+    <g transform="translate(24,64)">
+      <rect width="300" height="152" rx="12" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+      <circle cx="62" cy="76" r="34" fill="url(#aorb)" filter="url(#agl)" opacity=".95"/>
+      <circle cx="62" cy="76" r="34" fill="none" stroke="#bff4ff" stroke-width="1.2" opacity=".8"/>
+      <text x="118" y="60" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="16" font-weight="650" fill="#e8edf7">The Orb</text>
+      <text x="118" y="84" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">breathing, oracle-light presence</text>
+      <text x="118" y="103" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">listens · thinks · speaks</text>
+      <circle cx="279" cy="24" r="5" fill="#5f6f8c"/>
+    </g>
+
+    <!-- companion -->
+    <g transform="translate(348,64)">
+      <rect width="300" height="152" rx="12" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+      <text x="20" y="40" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="16" font-weight="650" fill="#e8edf7">The Companion</text>
+      <text x="20" y="66" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">talk or type — it acts on organs,</text>
+      <text x="20" y="85" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">asks the loom to build, or converses</text>
+      <text x="20" y="118" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#5f6f8c">prompt compiler: your words →</text>
+      <text x="20" y="135" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#5f6f8c">a perfect model-specific prompt</text>
+      <circle cx="279" cy="24" r="5" fill="#22d3ee"/>
+    </g>
+
+    <!-- loom -->
+    <g transform="translate(672,64)">
+      <rect width="308" height="152" rx="12" fill="#0d1424" stroke="rgba(34,211,238,.35)"/>
+      <text x="20" y="40" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="16" font-weight="650" fill="#e8edf7">The Loom</text>
+      <text x="20" y="66" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">writes · validates · repairs · commits</text>
+      <text x="20" y="92" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#22d3ee">sandboxed gate + repair loop</text>
+      <text x="20" y="118" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#5f6f8c">single-flight · review toggle</text>
+      <text x="20" y="135" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#5f6f8c">real-model selftest in the repo</text>
+      <circle cx="287" cy="24" r="5" fill="#4ade80"/>
+    </g>
+
+    <!-- organ host -->
+    <g transform="translate(24,240)">
+      <rect width="460" height="164" rx="12" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+      <text x="20" y="38" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="16" font-weight="650" fill="#e8edf7">Organ Host</text>
+      <text x="20" y="63" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">permission cards · per-organ error walls · hot-load</text>
+      <g transform="translate(20,80)" font-family="ui-monospace,Menlo,monospace" font-size="11.5">
+        <rect width="128" height="58" rx="8" fill="rgba(34,211,238,.07)" stroke="rgba(34,211,238,.25)"/>
+        <text x="12" y="24" fill="#e8edf7">water-tracker</text><text x="12" y="43" fill="#4ade80">storage · live</text>
+        <rect x="140" width="128" height="58" rx="8" fill="rgba(255,255,255,.03)" stroke="rgba(255,255,255,.1)"/>
+        <text x="152" y="24" fill="#e8edf7">run-log</text><text x="152" y="43" fill="#9fb0cc">awaiting approval</text>
+        <rect x="280" width="128" height="58" rx="8" fill="rgba(255,255,255,.02)" stroke="rgba(255,255,255,.07)" stroke-dasharray="4 4"/>
+        <text x="292" y="24" fill="#5f6f8c">whatever you</text><text x="292" y="43" fill="#5f6f8c">ask for next…</text>
+      </g>
+      <circle cx="439" cy="24" r="5" fill="#4ade80"/>
+    </g>
+
+    <!-- timeline + safeboot -->
+    <g transform="translate(508,240)">
+      <rect width="472" height="164" rx="12" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+      <text x="20" y="38" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="16" font-weight="650" fill="#e8edf7">Timeline + Safe-boot</text>
+      <text x="20" y="63" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">every self-change is a git commit · one-click rollback</text>
+      <g font-family="ui-monospace,Menlo,monospace" font-size="11.5">
+        <circle cx="30" cy="92" r="4" fill="#22d3ee"/><text x="44" y="96" fill="#9fb0cc">6151a3e  loom: build water-tracker</text>
+        <circle cx="30" cy="116" r="4" fill="#22d3ee"/><text x="44" y="120" fill="#9fb0cc">88ac2f1  grant: water-tracker</text>
+        <circle cx="30" cy="140" r="4" fill="#5f6f8c"/><text x="44" y="144" fill="#5f6f8c">a bad edit can never strand you</text>
+      </g>
+      <circle cx="451" cy="24" r="5" fill="#4ade80"/>
+    </g>
+  </g>
+
+  <!-- RUST CORE panel -->
+  <g transform="translate(1076,120)">
+    <rect width="516" height="428" rx="16" fill="#0b1226" stroke="rgba(255,255,255,.1)"/>
+    <text x="24" y="40" font-family="ui-monospace,Menlo,monospace" font-size="13" fill="#9fb0cc" letter-spacing="3">RUST CORE — native · offline</text>
+    <g font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5">
+      <g transform="translate(24,64)">
+        <rect width="468" height="88" rx="12" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+        <text x="18" y="30" fill="#e8edf7" font-weight="650">Fleet manager — three local models, resident</text>
+        <g font-family="ui-monospace,Menlo,monospace" font-size="11.5">
+          <rect x="18" y="42" width="150" height="30" rx="7" fill="rgba(34,211,238,.08)" stroke="rgba(34,211,238,.25)"/>
+          <text x="30" y="61" fill="#22d3ee">builder · 30B coder</text>
+          <rect x="176" y="42" width="140" height="30" rx="7" fill="rgba(255,255,255,.04)" stroke="rgba(255,255,255,.1)"/>
+          <text x="188" y="61" fill="#9fb0cc">companion · 20B</text>
+          <rect x="324" y="42" width="126" height="30" rx="7" fill="rgba(255,255,255,.04)" stroke="rgba(255,255,255,.1)"/>
+          <text x="336" y="61" fill="#9fb0cc">rewriter · 1.7B</text>
+        </g>
+        <circle cx="447" cy="22" r="5" fill="#4ade80"/>
+      </g>
+      <g transform="translate(24,168)">
+        <rect width="468" height="72" rx="12" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+        <text x="18" y="30" fill="#e8edf7" font-weight="650">git Timeline (git2)</text>
+        <text x="18" y="53" fill="#9fb0cc" font-size="12.5">commit · log · rollback · kernel-only permission grants</text>
+        <circle cx="447" cy="22" r="5" fill="#4ade80"/>
+      </g>
+      <g transform="translate(24,256)">
+        <rect width="468" height="72" rx="12" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+        <text x="18" y="30" fill="#e8edf7" font-weight="650">Organ store</text>
+        <text x="18" y="53" fill="#9fb0cc" font-size="12.5">id + filename whitelists in Rust — traversal impossible</text>
+        <circle cx="447" cy="22" r="5" fill="#4ade80"/>
+      </g>
+      <g transform="translate(24,344)">
+        <rect width="468" height="60" rx="12" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+        <text x="18" y="28" fill="#e8edf7" font-weight="650">Offline voice</text>
+        <text x="18" y="48" fill="#9fb0cc" font-size="12.5">whisper.cpp + piper · push-to-talk</text>
+        <circle cx="447" cy="22" r="5" fill="#22d3ee"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- bottom principle strip -->
+  <g transform="translate(48,580)">
+    <rect width="1544" height="132" rx="16" fill="rgba(34,211,238,.05)" stroke="rgba(34,211,238,.16)"/>
+    <g font-family="ui-sans-serif,Helvetica,sans-serif">
+      <text x="30" y="46" font-size="15.5" font-weight="650" fill="#e8edf7">Sovereign</text>
+      <text x="30" y="72" font-size="12.5" fill="#9fb0cc">no cloud · no subscription</text>
+      <text x="30" y="91" font-size="12.5" fill="#9fb0cc">no telemetry · off-grid forever</text>
+
+      <text x="420" y="46" font-size="15.5" font-weight="650" fill="#e8edf7">Self-verifying</text>
+      <text x="420" y="72" font-size="12.5" fill="#9fb0cc">syntax + sandbox + its own tests</text>
+      <text x="420" y="91" font-size="12.5" fill="#9fb0cc">a bad build is caught, not shipped</text>
+
+      <text x="810" y="46" font-size="15.5" font-weight="650" fill="#e8edf7">Un-strandable</text>
+      <text x="810" y="72" font-size="12.5" fill="#9fb0cc">every change is a git commit</text>
+      <text x="810" y="91" font-size="12.5" fill="#9fb0cc">recovery boot rolls back to green</text>
+
+      <text x="1200" y="46" font-size="15.5" font-weight="650" fill="#e8edf7">Yours</text>
+      <text x="1200" y="72" font-size="12.5" fill="#9fb0cc">it becomes what you need —</text>
+      <text x="1200" y="91" font-size="12.5" fill="#9fb0cc">not what an algorithm wants</text>
+    </g>
+  </g>
+</svg>

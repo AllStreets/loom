@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1640 560" width="1640" height="560" role="img" aria-label="How LOOM weaves an organ">
+  <defs>
+    <linearGradient id="bgg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#081021"/><stop offset="100%" stop-color="#04070f"/>
+    </linearGradient>
+    <linearGradient id="cy" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#7dd3fc"/>
+    </linearGradient>
+    <filter id="gl" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="6"/></filter>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrv" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <rect width="1640" height="560" rx="18" fill="url(#bgg)"/>
+  <rect x="1" y="1" width="1638" height="558" rx="18" fill="none" stroke="rgba(255,255,255,.07)"/>
+
+  <text x="48" y="64" font-family="ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="24" font-weight="700" fill="#e8edf7" letter-spacing="1">HOW LOOM WEAVES AN ORGAN</text>
+  <text x="48" y="92" font-family="ui-monospace,Menlo,monospace" font-size="13.5" fill="#5f6f8c">model output stays tiny · nothing un-green ever touches disk · nothing unapproved ever runs</text>
+
+  <!-- thread line -->
+  <path d="M60 250 C 300 250 1340 250 1580 250" stroke="rgba(34,211,238,.14)" stroke-width="2" fill="none"/>
+
+  <!-- Step 1: sentence -->
+  <g transform="translate(48,170)">
+    <rect width="212" height="160" rx="14" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+    <rect width="212" height="160" rx="14" fill="none" stroke="rgba(34,211,238,.28)"/>
+    <text x="18" y="34" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#22d3ee" letter-spacing="2">YOUR SENTENCE</text>
+    <text x="18" y="66" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="14.5" fill="#e8edf7">"Build an organ that</text>
+    <text x="18" y="88" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="14.5" fill="#e8edf7">tracks my water intake</text>
+    <text x="18" y="110" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="14.5" fill="#e8edf7">with a progress bar."</text>
+    <text x="18" y="140" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#5f6f8c">Enter to build</text>
+  </g>
+  <line x1="264" y1="250" x2="316" y2="250" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arr)"/>
+
+  <!-- Step 2: builder -->
+  <g transform="translate(322,170)">
+    <rect width="240" height="160" rx="14" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+    <text x="18" y="34" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#22d3ee" letter-spacing="2">THE BUILDER WRITES</text>
+    <text x="18" y="63" font-family="ui-monospace,Menlo,monospace" font-size="13.5" fill="#e8edf7">manifest.json</text>
+    <text x="18" y="87" font-family="ui-monospace,Menlo,monospace" font-size="13.5" fill="#e8edf7">organ.js</text>
+    <text x="18" y="111" font-family="ui-monospace,Menlo,monospace" font-size="13.5" fill="#e8edf7">test.js</text>
+    <text x="18" y="140" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#5f6f8c">qwen3-coder · local · offline</text>
+  </g>
+  <line x1="566" y1="250" x2="618" y2="250" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arr)"/>
+
+  <!-- Step 3: gate -->
+  <g transform="translate(624,140)">
+    <rect width="300" height="220" rx="14" fill="#0d1424" stroke="rgba(167,139,250,.35)"/>
+    <text x="18" y="34" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#a78bfa" letter-spacing="2">THE GATE</text>
+    <text x="18" y="64" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#e8edf7">1 · manifest guard — typed fields,</text>
+    <text x="34" y="83" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#9fb0cc">id rules, permission catalog</text>
+    <text x="18" y="112" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#e8edf7">2 · sandboxed iframe — the organ</text>
+    <text x="34" y="131" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#9fb0cc">really renders + its own tests run,</text>
+    <text x="34" y="150" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#9fb0cc">isolated, 5s kill switch</text>
+    <text x="18" y="179" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#e8edf7">3 · optional human review toggle</text>
+    <text x="18" y="205" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#5f6f8c">red = it never existed</text>
+  </g>
+
+  <!-- repair loop -->
+  <path d="M774 140 C 774 96 560 96 460 140" stroke="#a78bfa" stroke-width="2" fill="none" stroke-dasharray="5 5" marker-end="url(#arrv)"/>
+  <text x="530" y="88" font-family="ui-monospace,Menlo,monospace" font-size="12" fill="#a78bfa">repair loop — errors go back, the builder fixes its own code (2 rounds)</text>
+
+  <line x1="928" y1="250" x2="980" y2="250" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arr)"/>
+
+  <!-- Step 4: timeline -->
+  <g transform="translate(986,170)">
+    <rect width="230" height="160" rx="14" fill="#0d1424" stroke="rgba(255,255,255,.08)"/>
+    <text x="18" y="34" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#22d3ee" letter-spacing="2">THE TIMELINE</text>
+    <text x="18" y="64" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#e8edf7">every change is a</text>
+    <text x="18" y="83" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#e8edf7">git commit</text>
+    <text x="18" y="112" font-family="ui-monospace,Menlo,monospace" font-size="12" fill="#9fb0cc">6151a3e water-tracker</text>
+    <text x="18" y="140" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#5f6f8c">diff · rollback · forever</text>
+  </g>
+  <line x1="1220" y1="250" x2="1272" y2="250" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arr)"/>
+
+  <!-- Step 5: approval + live -->
+  <g transform="translate(1278,170)">
+    <rect width="314" height="160" rx="14" fill="#0d1424" stroke="rgba(74,222,128,.3)"/>
+    <text x="18" y="34" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#4ade80" letter-spacing="2">YOU APPROVE · IT LIVES</text>
+    <text x="18" y="64" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#e8edf7">permission card: "requests storage"</text>
+    <text x="18" y="90" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#9fb0cc">approve → hot-loads behind a</text>
+    <text x="18" y="109" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="13.5" fill="#9fb0cc">permission-gated loom api</text>
+    <text x="18" y="140" font-family="ui-monospace,Menlo,monospace" font-size="11" fill="#5f6f8c">ungranted capability = throws</text>
+  </g>
+
+  <!-- footer strip -->
+  <g transform="translate(48,420)">
+    <rect width="1544" height="92" rx="14" fill="rgba(34,211,238,.05)" stroke="rgba(34,211,238,.18)"/>
+    <circle cx="40" cy="46" r="17" fill="url(#cy)" opacity=".9" filter="url(#gl)"/>
+    <circle cx="40" cy="46" r="17" fill="none" stroke="#e8faff" stroke-width="1" opacity=".7"/>
+    <text x="76" y="40" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="15.5" font-weight="600" fill="#e8edf7">Every failure mode LOOM has ever hit becomes a self-test rep.</text>
+    <text x="76" y="66" font-family="ui-monospace,Menlo,monospace" font-size="13" fill="#9fb0cc">npm run selftest — the whole pipeline vs the real local model: 5/5 tasks, 12/12 reps, ~2 min</text>
+  </g>
+</svg>

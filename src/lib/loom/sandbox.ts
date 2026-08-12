@@ -22,7 +22,7 @@ addEventListener("unhandledrejection", (e) => fail("load", e.reason));
 const mockLoom = {
   storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },
   model: { chat: async () => "(model unavailable in sandbox)" },
-  ui: { tokens: { bg: "#060b18", panel: "#0d1424", t1: "#e8edf7", t2: "#9fb0cc", t3: "#5f6f8c", accent: "#f59e0b", go: "#4ade80", warn: "#fbbf24", danger: "#f87171" } },
+  ui: { tokens: { bg: "#060b18", panel: "#0d1424", t1: "#e8edf7", t2: "#9fb0cc", t3: "#5f6f8c", accent: "#22d3ee", go: "#4ade80", warn: "#fbbf24", danger: "#f87171" } },
   notify: () => {},
 };
 const decode = (b64) => decodeURIComponent(escape(atob(b64)));
