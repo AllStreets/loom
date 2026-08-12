@@ -23,6 +23,9 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
      }
    }
    Style with inline styles using loom.ui.tokens. No external imports, no network, no document.cookie, no window.top.
+   EVERY interactive element (buttons, inputs) MUST set a data-action attribute naming what it does, e.g.
+   button.dataset.action = "add"; input.dataset.action = "new-item"; deleteBtn.dataset.action = "remove".
+   These are the STABLE selectors the tests use — without them the tests cannot find your elements.
 
 3. test.js — an ES module that exports ONLY a tests array. IMPORTANT: test.js must contain NO import statements of any kind (imports cannot resolve in the test sandbox). The organ is provided to every test through its context:
    export const tests = [
@@ -33,6 +36,8 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
      } },
    ];
    Each fn gets { el, loom, assert, organ }: a fresh rendered el, a mock loom api, assert(cond, msg), and the organ object.
+   TEST ISOLATION: every test starts with a FRESH EMPTY storage and a fresh render of el — tests never see another test's data. To test behavior on existing data: loom.storage.set(...) first, then create your own element and await organ.render(myEl, loom), then assert on myEl.
+   SELECTORS: find interactive elements ONLY via their data-action attributes — el.querySelector('[data-action="add"]') — never by tag position, class, or text. Read state from loom.storage (source of truth), and prefer storage assertions over DOM-text assertions.
 
 Rules: complete files only, no placeholders or TODOs; small and focused; real functionality, never filler.`;
 
@@ -41,7 +46,7 @@ export function organSystemPrompt(kind: "manifest" | "code" | "tests" | "edit" |
   switch (kind) {
     case "manifest": return base + `\nNow output manifest.json only. Choose a short kebab-case id and the MINIMAL permissions the request needs.`;
     case "code": return base + `\nNow output organ.js only. It must match the manifest's id and only use APIs its permissions allow.`;
-    case "tests": return base + `\nNow output test.js only: 2-4 meaningful tests that verify the organ's real behavior (not trivial truths).\nABSOLUTE RULE: no import statements anywhere in test.js — use the organ provided in the test context ({ el, loom, assert, organ }). The organ is already rendered into el before each test runs.`;
+    case "tests": return base + `\nNow output test.js only: 2-4 meaningful tests that verify the organ's real behavior (not trivial truths).\nABSOLUTE RULES:\n- No import statements anywhere in test.js — use the organ provided in the test context ({ el, loom, assert, organ }). The organ is already rendered into el before each test runs.\n- Each test starts with FRESH empty storage — never assume another test's data exists.\n- Select interactive elements ONLY via [data-action="..."] attributes (they are guaranteed by the organ contract); never by tag order or text.\n- Prefer asserting on loom.storage state over DOM text.`;
     case "repair": return base + `\nYour previous file FAILED validation. You will be given the file and the exact errors. Output the COMPLETE corrected file in one fenced code block — fix the errors, keep the intended behavior, and follow every contract rule (especially: test.js must contain no import statements).`;
     case "edit": return base + `\nYou are EDITING one existing file. Output ONLY SEARCH/REPLACE edit blocks in this exact format (no prose, no full file):\n<<<<<<< SEARCH\n(lines copied exactly from the current file)\n=======\n(replacement lines)\n>>>>>>> REPLACE`;
   }

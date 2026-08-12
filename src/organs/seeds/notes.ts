@@ -22,6 +22,7 @@ const ORGAN_JS = `export default {
     row.style.marginBottom = "12px";
 
     const input = document.createElement("input");
+    input.dataset.action = "new-note";
     input.placeholder = "Jot a thought...";
     input.style.flex = "1";
     input.style.background = t.panel;
@@ -32,6 +33,7 @@ const ORGAN_JS = `export default {
     input.style.outline = "none";
 
     const btn = document.createElement("button");
+    btn.dataset.action = "add";
     btn.textContent = "Add";
     btn.style.background = t.accent;
     btn.style.color = t.bg;
@@ -76,6 +78,7 @@ const ORGAN_JS = `export default {
         text.textContent = item.text;
 
         const del = document.createElement("button");
+        del.dataset.action = "remove";
         del.textContent = "x";
         del.style.background = "transparent";
         del.style.color = t.danger;
@@ -119,10 +122,10 @@ const TEST_JS = `export const tests = [
   {
     name: "adds a note to storage",
     fn: async ({ el, loom, assert }) => {
-      const input = el.querySelector("input");
+      const input = el.querySelector('[data-action="new-note"]');
       assert(input !== null, "input exists");
       input.value = "hello world";
-      const btn = el.querySelector("button");
+      const btn = el.querySelector('[data-action="add"]');
       assert(btn !== null, "button exists");
       btn.click();
       const items = loom.storage.get("items", []);
