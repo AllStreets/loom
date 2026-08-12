@@ -37,7 +37,7 @@ pub struct RoleStatus { pub role: String, pub model: String, pub present: bool }
 
 const OLLAMA: &str = "http://localhost:11434";
 const KEEP_ALIVE: i64 = -1;         // pin resident
-const TIMEOUT_MS: u64 = 90_000;
+const TIMEOUT_MS: u64 = 45_000;
 
 #[tauri::command]
 pub async fn fleet_status() -> Result<Vec<RoleStatus>, LoomError> {
@@ -57,6 +57,7 @@ pub async fn fleet_chat(role: String, messages: Vec<Msg>) -> Result<String, Loom
         match o.chat(&primary, messages.clone(), KEEP_ALIVE, TIMEOUT_MS).await {
             Ok(s) => return Ok(s),
             Err(LoomError::NotFound(_)) => break,               // pulling won't help this call; fall back
+            Err(LoomError::Timeout) => break,                   // timeout = model stuck; go straight to fallback
             Err(_) if attempt == 0 => continue,                  // transient: retry once
             Err(_) => break,
         }
