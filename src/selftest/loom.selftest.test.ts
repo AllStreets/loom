@@ -3,6 +3,8 @@ import { describe, it, expect } from "vitest";
 import { organSystemPrompt, ctxFor } from "../lib/loom/prompts";
 import { extractCode, applyEditBlocks } from "../lib/loom/edits";
 import { manifestGuard } from "../lib/loom/validate";
+import { classifyByRules, classifyIntent } from "../lib/compiler/intent";
+import { files as noteFiles } from "../organs/seeds/notes";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -243,5 +245,117 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
       expect(containsRunLog, `rep ${rep}: result does not contain "Run Log"`).toBe(true);
     }
     console.info(`[edit-blocks] ${passed}/${REPS} passed`);
+  });
+
+  it("intent-compile: 6 canned utterances (no model)", () => {
+    // organIds available for these tests
+    const organIds = ["water-tracker", "notes"];
+
+    const cases: Array<{
+      utterance: string;
+      expectedIntent: string;
+      expectedOrganId?: string;
+    }> = [
+      { utterance: "add a delete button to the water tracker", expectedIntent: "edit_organ", expectedOrganId: "water-tracker" },
+      { utterance: "build me a habit tracker", expectedIntent: "build_organ" },
+      { utterance: "hello there", expectedIntent: "converse" },
+      { utterance: "notes", expectedIntent: "act_on_organ", expectedOrganId: "notes" },
+      { utterance: "make me a budget tool", expectedIntent: "build_organ" },
+      { utterance: "change the notes heading", expectedIntent: "edit_organ", expectedOrganId: "notes" },
+    ];
+
+    for (const { utterance, expectedIntent, expectedOrganId } of cases) {
+      const result = classifyByRules(utterance, organIds);
+      expect(result, `"${utterance}" → rules returned null`).not.toBeNull();
+      expect(result!.intent, `"${utterance}" → wrong intent`).toBe(expectedIntent);
+      if (expectedOrganId !== undefined) {
+        expect(result!.organId, `"${utterance}" → wrong organId`).toBe(expectedOrganId);
+      }
+      expect(result!.source, `"${utterance}" → wrong source`).toBe("rules");
+      console.info(
+        `[intent-compile] "${utterance}" → ${result!.intent}${result!.organId ? "/" + result!.organId : ""} (confidence=${result!.confidence})`
+      );
+    }
+  });
+
+  it("intent-compile: 1 rules-unsure utterance through real rewriter model", async () => {
+    // This utterance deliberately has no organ mention, no build phrase, no greeting —
+    // rules will return null and the real model must classify it.
+    const utterance = "hmm what about the thing from yesterday";
+
+    // Wire askModel to the real rewriter via Ollama /api/chat directly
+    async function askModel(prompt: string): Promise<string> {
+      const body = JSON.stringify({
+        model: "qwen3:1.7b",
+        messages: [{ role: "user", content: prompt }],
+        stream: false,
+        options: { temperature: 0.1, num_ctx: 2048 },
+      });
+      const res = await fetch("http://localhost:11434/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!res.ok) throw new Error(`Ollama /api/chat returned ${res.status}`);
+      const data = (await res.json()) as { message: { content: string } };
+      return data.message.content;
+    }
+
+    const t0 = Date.now();
+    const result = await classifyIntent(utterance, [], askModel);
+    const ms = Date.now() - t0;
+
+    const VALID_INTENTS = new Set(["build_organ", "edit_organ", "act_on_organ", "converse"]);
+
+    console.info(
+      `[intent-compile] model-path: "${utterance}" → ${result.intent} (source=${result.source}, confidence=${result.confidence}, ${ms}ms)`
+    );
+
+    expect(VALID_INTENTS.has(result.intent), `intent "${result.intent}" is not a valid Intent value`).toBe(true);
+    expect(["rules", "model"] as string[]).toContain(result.source);
+  });
+
+  it("edit-organ: 3 reps — notes seed organ.js heading change", async () => {
+    const m = model ?? (await pickBuilder());
+
+    // Pull organ.js content from the notes seed directly
+    const organJsFile = noteFiles.find((f) => f.name === "organ.js");
+    expect(organJsFile, "notes seed organ.js not found").toBeTruthy();
+    const notesOrganJs = organJsFile!.content;
+
+    const system = organSystemPrompt("edit");
+    const user = `Current file (organ.js):\n\`\`\`js\n${notesOrganJs}\n\`\`\`\n\nRequest: Change the heading text to 'My Notes'.`;
+
+    let passed = 0;
+    for (let rep = 1; rep <= REPS; rep++) {
+      const t0 = Date.now();
+      const raw = await chat(m, system, user);
+      const ms = Date.now() - t0;
+
+      let applied: string | null = null;
+      let applyErr = "";
+      try {
+        applied = applyEditBlocks(notesOrganJs, raw);
+      } catch (e) {
+        applyErr = String(e);
+      }
+
+      const containsMyNotes = applied != null && applied.includes("My Notes");
+
+      if (applied != null && containsMyNotes) {
+        passed++;
+        console.info(`[edit-organ] rep ${rep} PASS (${ms}ms)`);
+      } else {
+        console.info(
+          `[edit-organ] rep ${rep} FAIL (${ms}ms) applied=${applied != null} containsMyNotes=${containsMyNotes} err=${applyErr}`
+        );
+        console.info(`  raw:\n${raw.slice(0, 500)}`);
+      }
+
+      expect(applied, `rep ${rep}: applyEditBlocks returned null (err: ${applyErr})`).not.toBeNull();
+      expect(containsMyNotes, `rep ${rep}: result does not contain "My Notes"`).toBe(true);
+    }
+    console.info(`[edit-organ] ${passed}/${REPS} passed`);
   });
 });

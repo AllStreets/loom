@@ -80,6 +80,7 @@ function OrganCard({
   onMount: (el: HTMLDivElement) => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on organ id; onMount identity changes every parent render
   useEffect(() => {
@@ -89,14 +90,32 @@ function OrganCard({
     onMount(el);
   }, [state.entry.id]);
 
+  useEffect(() => {
+    function handleFocus(ev: Event) {
+      const detail = (ev as CustomEvent<{ id: string }>).detail;
+      if (detail?.id !== state.entry.id) return;
+      const card = cardRef.current;
+      if (!card) return;
+      card.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+      card.style.outline = "2px solid var(--accent)";
+      setTimeout(() => {
+        card.style.outline = "";
+      }, 2000);
+    }
+    window.addEventListener("organ-focus", handleFocus);
+    return () => window.removeEventListener("organ-focus", handleFocus);
+  }, [state.entry.id]);
+
   return (
     <div
+      ref={cardRef}
       style={{
         background: "var(--panel)",
         border: "1px solid rgba(255,255,255,0.06)",
         borderRadius: 8,
         padding: "16px 20px",
         marginBottom: 12,
+        transition: "outline 0.1s",
       }}
     >
       <div style={{ fontWeight: 600, color: "var(--t1)", marginBottom: 4 }}>
