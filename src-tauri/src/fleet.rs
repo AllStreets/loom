@@ -1,5 +1,5 @@
 use crate::error::LoomError;
-use crate::ollama::{Msg, Ollama};
+use crate::ollama::{ChatOpts, Msg, Ollama};
 use serde::Serialize;
 
 pub struct FleetConfig { pub builder: String, pub companion: String, pub rewriter: String }
@@ -22,7 +22,32 @@ pub fn role_model(c: &FleetConfig, r: &str) -> Option<String> {
     }
 }
 
-pub fn fallback_for(c: &FleetConfig, _r: &str) -> String { c.rewriter.clone() }
+pub fn best_coder(installed: &[String]) -> Option<String> {
+    fn params(tag: &str) -> f32 {
+        let lower = tag.to_lowercase();
+        let bytes = lower.as_bytes();
+        let mut best = 0.0f32;
+        for (i, _) in lower.match_indices('b') {
+            let mut j = i;
+            while j > 0 && (bytes[j - 1].is_ascii_digit() || bytes[j - 1] == b'.') { j -= 1; }
+            if j < i {
+                if let Ok(v) = lower[j..i].parse::<f32>() { if v > best { best = v; } }
+            }
+        }
+        best
+    }
+    installed.iter()
+        .filter(|m| m.to_lowercase().contains("coder"))
+        .max_by(|a, b| params(a).partial_cmp(&params(b)).unwrap_or(std::cmp::Ordering::Equal))
+        .cloned()
+}
+
+pub fn fallback_for(c: &FleetConfig, role: &str, installed: &[String]) -> String {
+    if role == "builder" {
+        if let Some(m) = best_coder(installed) { return m; }
+    }
+    c.rewriter.clone()
+}
 
 pub fn health(installed: &[String], c: &FleetConfig) -> Vec<(String, String, bool)> {
     ["builder", "companion", "rewriter"].iter().map(|role| {
@@ -48,13 +73,14 @@ pub async fn fleet_status() -> Result<Vec<RoleStatus>, LoomError> {
 }
 
 #[tauri::command]
-pub async fn fleet_chat(role: String, messages: Vec<Msg>) -> Result<String, LoomError> {
+pub async fn fleet_chat(role: String, messages: Vec<Msg>, opts: Option<ChatOpts>) -> Result<String, LoomError> {
     let cfg = FleetConfig::default();
+    let opts = opts.unwrap_or_default();
     let primary = role_model(&cfg, &role).ok_or(LoomError::NotFound(role.clone()))?;
     let o = Ollama::new(OLLAMA);
     // one retry on primary, then fall back
     for attempt in 0..2 {
-        match o.chat(&primary, messages.clone(), KEEP_ALIVE, TIMEOUT_MS).await {
+        match o.chat(&primary, messages.clone(), KEEP_ALIVE, TIMEOUT_MS, &opts).await {
             Ok(s) => return Ok(s),
             Err(LoomError::NotFound(_)) => break,               // pulling won't help this call; fall back
             Err(LoomError::Timeout) => break,                   // timeout = model stuck; go straight to fallback
@@ -62,8 +88,9 @@ pub async fn fleet_chat(role: String, messages: Vec<Msg>) -> Result<String, Loom
             Err(_) => break,
         }
     }
-    let fb = fallback_for(&cfg, &role);
-    o.chat(&fb, messages, KEEP_ALIVE, TIMEOUT_MS).await
+    let installed = o.tags().await.unwrap_or_default();
+    let fb = fallback_for(&cfg, &role, &installed);
+    o.chat(&fb, messages, KEEP_ALIVE, TIMEOUT_MS, &opts).await
 }
 
 #[cfg(test)]
@@ -80,8 +107,27 @@ mod tests {
     #[test]
     fn falls_back_to_rewriter() {
         let c = FleetConfig::default();
-        assert_eq!(fallback_for(&c, "builder"), "qwen3:1.7b");
-        assert_eq!(fallback_for(&c, "companion"), "qwen3:1.7b");
+        assert_eq!(fallback_for(&c, "builder", &[]), "qwen3:1.7b");
+        assert_eq!(fallback_for(&c, "companion", &[]), "qwen3:1.7b");
+    }
+    #[test]
+    fn best_coder_prefers_largest_coder() {
+        let installed = vec![
+            "llama3.1:8b".to_string(),
+            "qwen2.5-coder:7b".to_string(),
+            "qwen3-coder:30b-a3b-q4_K_M".to_string(),
+        ];
+        assert_eq!(best_coder(&installed).unwrap(), "qwen3-coder:30b-a3b-q4_K_M");
+        assert_eq!(best_coder(&["llama3.1:8b".to_string()]), None);
+    }
+    #[test]
+    fn builder_falls_back_to_installed_coder_then_rewriter() {
+        let c = FleetConfig::default();
+        let with_coder = vec!["qwen2.5-coder:7b".to_string()];
+        assert_eq!(fallback_for(&c, "builder", &with_coder), "qwen2.5-coder:7b");
+        let none: Vec<String> = vec![];
+        assert_eq!(fallback_for(&c, "builder", &none), "qwen3:1.7b");
+        assert_eq!(fallback_for(&c, "companion", &with_coder), "qwen3:1.7b");
     }
     #[test]
     fn health_flags_present_models() {
