@@ -636,9 +636,7 @@ export default function Companion() {
   return (
     <section
       style={{
-        ...panelBase,
-        marginTop: 20,
-        maxWidth: 720,
+        padding: "16px 20px",
         display: "flex",
         flexDirection: "column",
         gap: 0,
