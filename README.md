@@ -110,7 +110,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **1 · Foundation** | Tauri shell · Rust core · resident model fleet · git Timeline · CI | shipped |
 | **2 · The Loom** | self-building engine: sandboxed validation · self-repair loop · permission-gated organs · review toggle · real-model selftest | **shipped** |
 | **3 · Companion** | prompt compiler · the presence (text) · organ editing by sentence · seed organs | **shipped** |
-| **4 · The orb + living UI** | react-three-fiber oracle-light orb · breathing motion · the living dashboard | next |
+| **4 · The orb + living UI** | react-three-fiber oracle-light orb · breathing motion · the living dashboard | **shipped** |
 | **5 · Voice** | offline whisper.cpp + piper · push-to-talk · a voice loop that never half-works | next |
 | **later** | the OS-like windowed desktop · full self-modification, kernel included | vision |
 

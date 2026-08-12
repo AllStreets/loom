@@ -1,6 +1,6 @@
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { BuildResult } from "../lib/loom/build";
 import type { CompanionTurn } from "../lib/companion/runtime";
 
@@ -227,5 +227,203 @@ describe("Companion", () => {
       (msg) => msg.content === statusString
     );
     expect(historyContainsStatus).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mood tests — pure helper unit tests (moods.ts)
+// ---------------------------------------------------------------------------
+
+import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
+
+describe("orb mood helpers", () => {
+  let dispatchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    dispatchSpy = vi.spyOn(window, "dispatchEvent");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    dispatchSpy.mockRestore();
+  });
+
+  function moodEvents() {
+    return dispatchSpy.mock.calls
+      .map((c) => c[0] as CustomEvent<{ mood: string }>)
+      .filter((e) => e.type === "loom-mood")
+      .map((e) => e.detail.mood);
+  }
+
+  it("turnStartMood dispatches thinking", () => {
+    turnStartMood();
+    expect(moodEvents()).toEqual(["thinking"]);
+  });
+
+  it("firstEventMood dispatches building the first time and returns true, skips subsequent calls", () => {
+    const first = firstEventMood(false);
+    expect(first).toBe(true);
+    expect(moodEvents()).toEqual(["building"]);
+
+    dispatchSpy.mockClear();
+    const second = firstEventMood(true);
+    expect(second).toBe(false);
+    expect(moodEvents()).toEqual([]);
+  });
+
+  it("settleMood dispatches speaking immediately then idle after 2500ms", () => {
+    const timer = settleMood();
+    expect(moodEvents()).toEqual(["speaking"]);
+
+    vi.advanceTimersByTime(2499);
+    expect(moodEvents()).toEqual(["speaking"]);
+
+    vi.advanceTimersByTime(1);
+    expect(moodEvents()).toEqual(["speaking", "idle"]);
+
+    clearTimeout(timer);
+  });
+
+  it("dispatchMood emits loom-mood with the given mood string", () => {
+    dispatchMood("offline");
+    expect(moodEvents()).toEqual(["offline"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mood integration tests — Companion lifecycle
+// ---------------------------------------------------------------------------
+
+describe("Companion mood lifecycle", () => {
+  let dispatchSpy: ReturnType<typeof vi.spyOn>;
+
+  // Use real timers for typing; we only switch to fake timers for the
+  // sections that need to advance the 2500ms idle delay.
+  beforeEach(() => {
+    mockHandle.mockReset();
+    vi.clearAllMocks();
+    localStorage.clear();
+    dispatchSpy = vi.spyOn(window, "dispatchEvent");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    dispatchSpy.mockRestore();
+  });
+
+  function moodEvents() {
+    return dispatchSpy.mock.calls
+      .map((c) => c[0] as CustomEvent<{ mood: string }>)
+      .filter((e) => e.type === "loom-mood")
+      .map((e) => e.detail.mood);
+  }
+
+  it("submitting an utterance dispatches thinking before handle resolves", async () => {
+    let resolveHandle!: (turn: CompanionTurn) => void;
+    mockHandle.mockReturnValue(
+      new Promise<CompanionTurn>((res) => {
+        resolveHandle = res;
+      })
+    );
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+
+    await userEvent.type(textarea, "hello");
+    await userEvent.keyboard("{Enter}");
+
+    // handle has not resolved yet — thinking should already be dispatched
+    await waitFor(() => {
+      expect(moodEvents()).toContain("thinking");
+    });
+    expect(moodEvents()).not.toContain("speaking");
+
+    // clean up — resolve and switch to fake timers to skip idle delay
+    vi.useFakeTimers();
+    await act(async () => {
+      resolveHandle({ kind: "reply", text: "hi" });
+    });
+    vi.runAllTimers();
+  });
+
+  it("a reply turn dispatches thinking then speaking then (after 2500ms) idle", async () => {
+    // Spy on setTimeout to capture the idle timer id so we can inspect
+    // whether it fires, without needing fake timers to also control async.
+    const originalSetTimeout = globalThis.setTimeout;
+    const timerIds: ReturnType<typeof setTimeout>[] = [];
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((fn: TimerHandler, delay?: number, ...args: unknown[]) => {
+        // Only intercept the 2500ms idle timer; let everything else through
+        if (delay === 2500) {
+          const id = originalSetTimeout(fn as (...a: unknown[]) => void, delay, ...args);
+          timerIds.push(id);
+          return id;
+        }
+        return originalSetTimeout(fn as (...a: unknown[]) => void, delay, ...args);
+      });
+
+    mockHandle.mockResolvedValue({ kind: "reply", text: "hello from loom" });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+
+    await userEvent.type(textarea, "greet me");
+    await userEvent.keyboard("{Enter}");
+
+    // Wait for speaking to be dispatched (handle resolved)
+    await waitFor(() => {
+      expect(moodEvents()).toContain("speaking");
+    });
+
+    // thinking must have been dispatched before speaking
+    expect(moodEvents()).toContain("thinking");
+    // idle not yet emitted
+    expect(moodEvents()).not.toContain("idle");
+
+    // Wait for the real 2500ms idle timer to fire
+    await act(async () => {
+      await new Promise<void>((resolve) => originalSetTimeout(resolve, 2600));
+    });
+
+    expect(moodEvents()).toContain("idle");
+
+    setTimeoutSpy.mockRestore();
+  });
+
+  it("unmounting during the speaking window dispatches idle and no timer fires after", async () => {
+    mockHandle.mockResolvedValue({ kind: "reply", text: "bye" });
+
+    const { unmount } = render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+
+    await userEvent.type(textarea, "go");
+    await userEvent.keyboard("{Enter}");
+
+    // Wait for handle to settle and speaking mood to fire
+    await waitFor(() => {
+      expect(moodEvents()).toContain("speaking");
+    });
+    // idle not yet dispatched
+    expect(moodEvents().filter((m) => m === "idle")).toHaveLength(0);
+
+    // Switch to fake timers before unmounting so the pending timer is tracked
+    vi.useFakeTimers();
+
+    // Unmount before the 2500ms timer fires
+    act(() => {
+      unmount();
+    });
+
+    // unmount should have dispatched idle synchronously via the cleanup
+    expect(moodEvents()).toContain("idle");
+
+    // Advance past 2500ms — no additional idle should appear (timer was cancelled)
+    const idleCountAfterUnmount = moodEvents().filter((m) => m === "idle").length;
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(moodEvents().filter((m) => m === "idle").length).toBe(idleCountAfterUnmount);
   });
 });

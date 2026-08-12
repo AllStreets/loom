@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { fleetChat, organWrite, organRead, organList, type OrganFile, type Msg } from "../lib/core";
 import { gate } from "../lib/loom/validate";
-import { buildOrgan, type BuildEvent, type BuildResult } from "../lib/loom/build";
+import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
 import { handle, type CompanionTurn } from "../lib/companion/runtime";
+import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -371,6 +372,12 @@ export default function Companion() {
   // History as Msg[] for the runtime (user + assistant only)
   const history = useRef<Msg[]>([]);
 
+  // Mood lifecycle refs
+  // Tracks whether the "building" mood has been dispatched for the current turn
+  const hasBuildingMood = useRef(false);
+  // Stores the pending "idle" timeout so it can be cancelled on new turn or unmount
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   function scrollToBottom() {
@@ -412,6 +419,13 @@ export default function Companion() {
     });
   }
 
+  function clearIdleTimer() {
+    if (idleTimer.current !== null) {
+      clearTimeout(idleTimer.current);
+      idleTimer.current = null;
+    }
+  }
+
   function settleReview(id: string, approved: boolean) {
     const resolve = reviewResolvers.current.get(id);
     if (resolve) {
@@ -427,6 +441,11 @@ export default function Companion() {
     const text = utterance.trim();
     setBusy(true);
 
+    // Mood: cancel any in-flight idle timer and start thinking
+    clearIdleTimer();
+    hasBuildingMood.current = false;
+    turnStartMood();
+
     // Push user bubble
     appendItem({ kind: "bubble", role: "user", text, id: nextId() });
     history.current.push({ role: "user", content: text });
@@ -436,6 +455,15 @@ export default function Companion() {
     activeLogId.current = logId;
     appendItem({ kind: "event-log", events: [], id: logId });
 
+    // Wraps appendEvent so the first build/edit event also triggers the
+    // "building" mood (only once per turn).
+    function appendEventWithMood(e: BuildEvent) {
+      if (firstEventMood(hasBuildingMood.current)) {
+        hasBuildingMood.current = true;
+      }
+      appendEvent(e);
+    }
+
     const deps = {
       chat: fleetChat,
       build: (req: string) =>
@@ -443,7 +471,7 @@ export default function Companion() {
           chat: fleetChat,
           write: organWrite,
           gate,
-          onEvent: appendEvent,
+          onEvent: appendEventWithMood,
           ...(reviewOn ? { review: requestReview } : {}),
         }),
       edit: (id: string, req: string) =>
@@ -452,7 +480,7 @@ export default function Companion() {
           read: organRead,
           write: organWrite,
           gate,
-          onEvent: appendEvent,
+          onEvent: appendEventWithMood,
           ...(reviewOn ? { review: requestReview } : {}),
         }),
       organIds: async () => {
@@ -487,6 +515,8 @@ export default function Companion() {
         utterance: text,
         id: nextId(),
       });
+      // Mood: turn ended with error
+      idleTimer.current = settleMood();
       setBusy(false);
       return;
     }
@@ -561,6 +591,9 @@ export default function Companion() {
       // Do NOT push status string to history
     }
 
+    // Mood: turn settled — speak, then go idle after 2500ms
+    idleTimer.current = settleMood();
+
     setBusy(false);
   }
 
@@ -581,12 +614,14 @@ export default function Companion() {
     scrollToBottom();
   }, [items]);
 
-  // Cleanup: settle all pending reviews on unmount
+  // Cleanup: settle all pending reviews on unmount, cancel idle timer, dispatch idle
   useEffect(() => {
     const resolvers = reviewResolvers.current;
     return () => {
       resolvers.forEach((resolve) => resolve(false));
       resolvers.clear();
+      clearIdleTimer();
+      dispatchMood("idle");
     };
   }, []);
 
@@ -601,9 +636,7 @@ export default function Companion() {
   return (
     <section
       style={{
-        ...panelBase,
-        marginTop: 20,
-        maxWidth: 720,
+        padding: "16px 20px",
         display: "flex",
         flexDirection: "column",
         gap: 0,

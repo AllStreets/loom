@@ -8,5 +8,10 @@ export default defineConfig({
       ...(process.env.SELFTEST ? [] : ["src/selftest/**"]),
       "**/node_modules/**",
     ],
+    server: {
+      deps: {
+        inline: ["three", "@react-three/fiber", "@react-three/postprocessing"],
+      },
+    },
   },
 });

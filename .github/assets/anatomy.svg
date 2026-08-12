@@ -35,7 +35,7 @@
       <text x="118" y="60" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="16" font-weight="650" fill="#e8edf7">The Orb</text>
       <text x="118" y="84" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">breathing, oracle-light presence</text>
       <text x="118" y="103" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">listens · thinks · speaks</text>
-      <circle cx="279" cy="24" r="5" fill="#5f6f8c"/>
+      <circle cx="279" cy="24" r="5" fill="#4ade80"/>
     </g>
 
     <!-- companion -->
@@ -46,7 +46,7 @@
       <text x="20" y="85" font-family="ui-sans-serif,Helvetica,sans-serif" font-size="12.5" fill="#9fb0cc">asks the loom to build, or converses</text>
       <text x="20" y="118" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#5f6f8c">prompt compiler: your words →</text>
       <text x="20" y="135" font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#5f6f8c">a perfect model-specific prompt</text>
-      <circle cx="279" cy="24" r="5" fill="#22d3ee"/>
+      <circle cx="279" cy="24" r="5" fill="#4ade80"/>
     </g>
 
     <!-- loom -->
