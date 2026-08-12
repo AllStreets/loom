@@ -1,0 +1,161 @@
+import { render, screen, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import "@testing-library/jest-dom";
+
+// ---------------------------------------------------------------------------
+// matchMedia mock (jsdom lacks it)
+// ---------------------------------------------------------------------------
+
+function mockMatchMedia(prefersReducedMotion: boolean) {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    configurable: true,
+    value: (query: string) => ({
+      matches: prefersReducedMotion && query.includes("reduced-motion"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }),
+  });
+}
+
+// Default: no reduced motion
+mockMatchMedia(false);
+
+// ---------------------------------------------------------------------------
+// Tauri invoke mock — returns fleet status and organ list
+// ---------------------------------------------------------------------------
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async (cmd: string) => {
+    if (cmd === "fleet_status") {
+      return [
+        { role: "builder", model: "claude-3-5-sonnet", present: true },
+        { role: "rewriter", model: "claude-3-5-haiku", present: true },
+        { role: "judge", model: "claude-3-5-sonnet", present: true },
+      ];
+    }
+    if (cmd === "organ_list") return [];
+    if (cmd === "timeline_init") return null;
+    if (cmd === "timeline_log") return [];
+    return [];
+  }),
+}));
+
+// Mock framer-motion to control reducedMotion for specific tests
+// We use a mutable ref to toggle between normal and reduced motion.
+let _reducedMotion = false;
+
+vi.mock("framer-motion", async (importActual) => {
+  const actual = await importActual<typeof import("framer-motion")>();
+  return {
+    ...actual,
+    useReducedMotion: () => _reducedMotion,
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Force flat tier so jsdom never tries WebGL
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  localStorage.setItem("loom.orb", "flat");
+  _reducedMotion = false;
+  mockMatchMedia(false);
+});
+
+afterEach(() => {
+  localStorage.clear();
+  vi.clearAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Import under test (after mocks)
+// ---------------------------------------------------------------------------
+
+import Shell from "./Shell";
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("Shell layout", () => {
+  it("renders orb, Companion input, organs region, and Timeline details", async () => {
+    render(<Shell />);
+
+    // Orb present
+    expect(screen.getByTestId("orb")).toBeInTheDocument();
+
+    // Companion input
+    expect(
+      screen.getByPlaceholderText(/Talk to LOOM/i)
+    ).toBeInTheDocument();
+
+    // Organs region
+    expect(screen.getByTestId("organs-region")).toBeInTheDocument();
+
+    // Timeline collapsible
+    expect(screen.getByText(/Timeline/i)).toBeInTheDocument();
+  });
+});
+
+describe("Shell mood: loom-mood event", () => {
+  it("dispatching loom-mood thinking changes orb-2d background to thinking color #a78bfa", async () => {
+    render(<Shell />);
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("loom-mood", { detail: { mood: "thinking" } })
+      );
+    });
+
+    const orb2d = screen.getByTestId("orb-2d");
+    const style = orb2d.getAttribute("style") ?? "";
+    // Flexible assertion: style contains the thinking hex color
+    expect(style).toMatch(/#a78bfa/i);
+  });
+});
+
+describe("Shell reducedMotion: no spotlight", () => {
+  it("does not render data-testid=spotlight when prefers-reduced-motion is set", async () => {
+    _reducedMotion = true;
+
+    render(<Shell />);
+
+    expect(screen.queryByTestId("spotlight")).not.toBeInTheDocument();
+  });
+});
+
+describe("Shell fleet-offline path", () => {
+  it("sets orb to offline color when all fleet roles are absent", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+      if (cmd === "fleet_status") {
+        return [
+          { role: "builder", model: "", present: false },
+          { role: "rewriter", model: "", present: false },
+          { role: "judge", model: "", present: false },
+        ];
+      }
+      if (cmd === "timeline_init") return null;
+      if (cmd === "timeline_log") return [];
+      return [];
+    });
+
+    render(<Shell />);
+
+    // Wait for the fleet poll effect to run
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    const orb2d = screen.getByTestId("orb-2d");
+    const style = orb2d.getAttribute("style") ?? "";
+    // Flexible assertion: offline color #5f6f8c
+    expect(style).toMatch(/#5f6f8c/i);
+  });
+});
