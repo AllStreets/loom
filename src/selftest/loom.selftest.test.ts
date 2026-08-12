@@ -20,8 +20,12 @@ async function pickBuilder(): Promise<string> {
   // pick the one whose name contains the largest integer before the letter 'b'
   // e.g. "qwen3-coder:30b-a3b-q4_K_M" → 30, "qwen2.5-coder:7b" → 7
   function bestNum(name: string): number {
-    const m = name.match(/(\d+(?:\.\d+)?)b/i);
-    return m ? parseFloat(m[1]) : 0;
+    let best = 0;
+    for (const m of name.toLowerCase().matchAll(/(\d+(?:\.\d+)?)b/g)) {
+      const v = parseFloat(m[1]);
+      if (v > best) best = v;
+    }
+    return best;
   }
   coders.sort((a, b) => bestNum(b) - bestNum(a));
   return coders[0];
