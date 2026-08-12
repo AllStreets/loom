@@ -34,7 +34,8 @@ export function makeLoomApi(
       get(k, fallback) {
         need("storage");
         const raw = localStorage.getItem(key(k));
-        return raw == null ? fallback : JSON.parse(raw);
+        if (raw == null) return fallback;
+        try { return JSON.parse(raw); } catch { return fallback; }
       },
       set(k, v) {
         need("storage");

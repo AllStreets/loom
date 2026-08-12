@@ -15,6 +15,9 @@ export function manifestGuard(manifestRaw: string, expectedId?: string):
   }
   if (typeof man.id !== "string" || !ID_RE.test(man.id)) return { ok: false, error: `invalid organ id: ${String(man.id)}` };
   if (expectedId && man.id !== expectedId) return { ok: false, error: `manifest id "${man.id}" does not match expected "${expectedId}"` };
+  if (typeof man.name !== "string") return { ok: false, error: 'manifest field "name" has the wrong type' };
+  if (typeof man.description !== "string") return { ok: false, error: 'manifest field "description" has the wrong type' };
+  if (typeof man.version !== "number") return { ok: false, error: 'manifest field "version" has the wrong type' };
   if (!Array.isArray(man.permissions)) return { ok: false, error: "permissions must be an array" };
   for (const p of man.permissions) {
     if (!(PERMISSIONS as readonly string[]).includes(p)) return { ok: false, error: `unknown permission: ${String(p)}` };

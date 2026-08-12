@@ -81,9 +81,13 @@ function OrganCard({
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on organ id; onMount identity changes every parent render
   useEffect(() => {
-    if (ref.current) onMount(ref.current);
-  }, [onMount]);
+    const el = ref.current;
+    if (!el) return;
+    el.replaceChildren();
+    onMount(el);
+  }, [state.entry.id]);
 
   return (
     <div

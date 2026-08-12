@@ -24,6 +24,11 @@ describe("makeLoomApi", () => {
     await expect(api.model.chat([{ role: "user", content: "x" }])).resolves.toBe("hello");
     expect(chat).toHaveBeenCalledWith("companion", [{ role: "user", content: "x" }]);
   });
+  it("returns fallback for corrupt JSON in storage.get", () => {
+    const api = makeLoomApi("runs", ["storage"]);
+    localStorage.setItem("organ.runs.bad", "{not json");
+    expect(api.storage.get("bad", 42)).toBe(42);
+  });
 });
 
 describe("OrganHost", () => {

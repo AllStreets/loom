@@ -18,6 +18,12 @@ describe("manifestGuard", () => {
   it("rejects missing required fields", () => {
     expect(manifestGuard(JSON.stringify({ id: "ok", permissions: [] })).ok).toBe(false);
   });
+  it("rejects version as a string", () => {
+    expect(manifestGuard(JSON.stringify({ id: "ok", name: "x", description: "d", version: "1", permissions: [] })).ok).toBe(false);
+  });
+  it("rejects name as a number", () => {
+    expect(manifestGuard(JSON.stringify({ id: "ok", name: 123, description: "d", version: 1, permissions: [] })).ok).toBe(false);
+  });
 });
 
 describe("buildHarnessSrc", () => {
