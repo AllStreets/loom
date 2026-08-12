@@ -1,9 +1,9 @@
 use crate::error::LoomError;
 use git2::{Repository, Signature, ResetType};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::path::Path;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Commit { pub sha: String, pub message: String }
 
 fn sig() -> Result<Signature<'static>, LoomError> {
