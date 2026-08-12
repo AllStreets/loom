@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fleetChat, organWrite, organRead, organList, type OrganFile, type Msg } from "../lib/core";
 import { gate } from "../lib/loom/validate";
-import { buildOrgan, type BuildEvent, type BuildResult } from "../lib/loom/build";
+import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
 import { handle, type CompanionTurn } from "../lib/companion/runtime";
 
