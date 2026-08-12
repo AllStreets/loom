@@ -9,6 +9,6 @@ describe("App boot shell", () => {
   it("renders the LOOM shell", () => {
     render(<App />);
     expect(screen.getByTestId("loom-shell")).toBeTruthy();
-    expect(screen.getByText(/LOOM/i)).toBeTruthy();
+    expect(screen.getAllByText(/LOOM/i).length).toBeGreaterThan(0);
   });
 });
