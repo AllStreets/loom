@@ -3,6 +3,8 @@ import { extractCode } from "./edits";
 import { manifestGuard } from "./validate";
 import type { gate } from "./validate";
 import type { organWrite, Msg, OrganFile, ChatOpts } from "../core";
+import { isBusy as _isBusy, withFlight } from "./flight";
+import { runGateWithRepair } from "./gateRepair";
 
 export type BuildEvent = { ts: number; phase: string; detail: string };
 export type BuildResult = { ok: boolean; organId?: string; sha?: string; error?: string; stage?: string; log: BuildEvent[] };
@@ -16,26 +18,21 @@ export type BuildDeps = {
   review?: (files: OrganFile[]) => Promise<boolean>;
 };
 
-let busy = false;
-
+// Re-export isBusy from flight for backward compat with LoomConsole/Companion imports
 export function isBusy(): boolean {
-  return busy;
+  return _isBusy();
 }
 
 export async function buildOrgan(request: string, deps: BuildDeps): Promise<BuildResult> {
-  if (busy) {
-    return { ok: false, error: "a build is already running", log: [] };
-  }
-  busy = true;
-  const log: BuildEvent[] = [];
+  const result = await withFlight(async () => {
+    const log: BuildEvent[] = [];
 
-  function emit(phase: string, detail: string): void {
-    const e: BuildEvent = { ts: Date.now(), phase, detail };
-    log.push(e);
-    deps.onEvent?.(e);
-  }
+    function emit(phase: string, detail: string): void {
+      const e: BuildEvent = { ts: Date.now(), phase, detail };
+      log.push(e);
+      deps.onEvent?.(e);
+    }
 
-  try {
     // Phase 1: manifest
     emit("manifest", "generating manifest...");
     const manifestSystem = organSystemPrompt("manifest");
@@ -87,51 +84,16 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     const testsContent = extractCode(testsRaw);
     emit("tests", "ok");
 
-    // Phase 4: gate — with TWO bounded repair rounds. A real coding agent does not
-    // stop at the first red test: it reads the error and fixes its code.
-    // Strategy: tests are treated as the SPEC. A tests-stage failure usually means
-    // the CODE is wrong (e.g. "should not add empty movie" = missing input guard),
-    // so round 1 repairs organ.js. Only if that doesn't help does round 2 consider
-    // the tests themselves unreasonable and repair test.js. Load/render failures
-    // are always the code's fault.
-    let code = codeContent;
-    let tests = testsContent;
-    emit("gate", "validating...");
-    let gateResult = await deps.gate({ manifest: manifestCode, code, tests }, organId);
-    let round = 0;
-    while (!gateResult.ok && round < 2) {
-      round++;
-      const stage = gateResult.verdict?.stage ?? "gate";
-      const errors = gateResult.verdict?.errors?.join("; ") ?? gateResult.error ?? "gate failed";
-      emit("gate", `failed at ${stage}: ${errors}`);
-
-      const target = stage === "tests" && round === 2 ? "test.js" : "organ.js";
-      const broken = target === "test.js" ? tests : code;
-      emit("repair", `round ${round}: asking the builder to fix ${target}...`);
-      const repairSystem = organSystemPrompt("repair");
-      const repairUser =
-        `FILE: ${target}\n\nCURRENT (FAILED) CONTENT:\n${broken}\n\n` +
-        `VALIDATION ERRORS (stage: ${stage}):\n${errors}\n\n` +
-        (target === "test.js"
-          ? `The organ.js under test is:\n${code}\n\nThe tests may be too strict or query elements that do not exist — make them robust and faithful to the organ's real behavior.\n\n`
-          : `The manifest is:\n${manifestCode}\n\nThe failing tests describe the intended behavior — fix organ.js so it satisfies them:\n${tests}\n\n`) +
-        `Output the complete corrected ${target}.`;
-      const repairRaw = await deps.chat("builder", [
-        { role: "system", content: repairSystem },
-        { role: "user", content: repairUser },
-      ], { numCtx: ctxFor(repairSystem.length + repairUser.length), temperature: 0.2 });
-      const repaired = extractCode(repairRaw);
-      if (target === "test.js") tests = repaired; else code = repaired;
-      emit("repair", `${target} rewritten — revalidating...`);
-      gateResult = await deps.gate({ manifest: manifestCode, code, tests }, organId);
-    }
+    // Phase 4: gate — delegated to shared runGateWithRepair
+    const gateResult = await runGateWithRepair(
+      { manifest: manifestCode, code: codeContent, tests: testsContent },
+      organId,
+      { chat: deps.chat, gate: deps.gate, emit },
+    );
     if (!gateResult.ok) {
-      const stage = gateResult.verdict?.stage ?? "gate";
-      const errors = gateResult.verdict?.errors?.join("; ") ?? gateResult.error ?? "gate failed";
-      emit("gate", `failed after ${round} repair round${round === 1 ? "" : "s"} at ${stage}: ${errors}`);
-      return { ok: false, error: errors, stage, log };
+      return { ok: false, error: gateResult.errors, stage: gateResult.stage, log };
     }
-    emit("gate", "passed");
+    const { code, tests } = gateResult;
 
     // Phase 4.5: optional human review before anything touches disk
     const reviewFiles: OrganFile[] = [
@@ -156,11 +118,10 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     emit("write", "committed " + sha);
 
     return { ok: true, organId, sha, log };
-  } catch (err) {
-    const error = String(err);
-    emit("error", error);
-    return { ok: false, error, log };
-  } finally {
-    busy = false;
+  });
+
+  if (result && typeof result === "object" && "busy" in result) {
+    return { ok: false, error: "a build is already running", log: [] };
   }
+  return result as BuildResult;
 }
