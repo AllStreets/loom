@@ -189,4 +189,43 @@ describe("Companion", () => {
       expect(screen.getByText("retried ok")).toBeTruthy();
     });
   });
+
+  it("build success turn renders status string in UI but does NOT push it to model history", async () => {
+    mockHandle.mockResolvedValue({ kind: "build", result: okBuild });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+
+    await userEvent.type(textarea, "build a tracker");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockHandle).toHaveBeenCalledTimes(1);
+    });
+
+    // Status string should be visible in UI
+    await waitFor(() => {
+      expect(screen.getByText(/water-tracker is ready/i)).toBeTruthy();
+    });
+
+    // Now submit a second utterance
+    mockHandle.mockResolvedValue({ kind: "reply", text: "second response" });
+    await userEvent.type(textarea, "what now");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockHandle).toHaveBeenCalledTimes(2);
+    });
+
+    // Check the second call's history: should only contain first user utterance and second user utterance
+    const [, secondHistory] = mockHandle.mock.calls[1];
+    expect(Array.isArray(secondHistory)).toBe(true);
+    // The history should be: [user: "build a tracker", user: "what now"]
+    // It should NOT contain the status string "water-tracker is ready — approve it below."
+    const statusString = "water-tracker is ready — approve it below.";
+    const historyContainsStatus = (secondHistory as Array<{ role: string; content: string }>).some(
+      (msg) => msg.content === statusString
+    );
+    expect(historyContainsStatus).toBe(false);
+  });
 });

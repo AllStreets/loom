@@ -475,6 +475,9 @@ export default function Companion() {
     try {
       turn = await handle(text, history.current, deps);
     } catch (err) {
+      // Settle and clear any pending review resolvers
+      reviewResolvers.current.forEach((resolve) => resolve(false));
+      reviewResolvers.current.clear();
       // Remove log card
       activeLogId.current = null;
       setItems((prev) => prev.filter((item) => item.id !== logId));
@@ -516,7 +519,7 @@ export default function Companion() {
         window.dispatchEvent(new CustomEvent("organs-changed"));
         const oneliner = `${result.organId} is ready — approve it below.`;
         appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
-        history.current.push({ role: "assistant", content: oneliner });
+        // Do NOT push status string to history
       } else {
         appendItem({
           kind: "failure",
@@ -539,7 +542,7 @@ export default function Companion() {
         window.dispatchEvent(new CustomEvent("organs-changed"));
         const oneliner = `${result.organId} updated.`;
         appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
-        history.current.push({ role: "assistant", content: oneliner });
+        // Do NOT push status string to history
       } else {
         appendItem({
           kind: "failure",
@@ -555,7 +558,7 @@ export default function Companion() {
       );
       const oneliner = `Opening ${turn.organId} below.`;
       appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
-      history.current.push({ role: "assistant", content: oneliner });
+      // Do NOT push status string to history
     }
 
     setBusy(false);
@@ -577,6 +580,15 @@ export default function Companion() {
   useEffect(() => {
     scrollToBottom();
   }, [items]);
+
+  // Cleanup: settle all pending reviews on unmount
+  useEffect(() => {
+    const resolvers = reviewResolvers.current;
+    return () => {
+      resolvers.forEach((resolve) => resolve(false));
+      resolvers.clear();
+    };
+  }, []);
 
   const eyebrowStyle: React.CSSProperties = {
     fontFamily: "var(--f-mono)",
