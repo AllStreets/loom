@@ -25,21 +25,31 @@ const mockLoom = {
   ui: { tokens: { bg: "#060b18", panel: "#0d1424", t1: "#e8edf7", t2: "#9fb0cc", t3: "#5f6f8c", accent: "#f59e0b", go: "#4ade80", warn: "#fbbf24", danger: "#f87171" } },
   notify: () => {},
 };
-const modUrl = (b64) => URL.createObjectURL(new Blob([decodeURIComponent(escape(atob(b64)))], { type: "text/javascript" }));
+const decode = (b64) => decodeURIComponent(escape(atob(b64)));
+const mkUrl = (src) => URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
 try {
-  const organ = (await import(modUrl("${codeB64}"))).default;
+  const organUrl = mkUrl(decode("${codeB64}"));
+  const organ = (await import(organUrl)).default;
   if (!organ || typeof organ.render !== "function") { fail("load", "organ.js has no default export with a render() function"); }
   else {
     const el = document.createElement("div");
     try { await organ.render(el, mockLoom); } catch (e) { fail("render", e && e.message || e); throw e; }
     let tests = [];
-    try { tests = (await import(modUrl("${testsB64}"))).tests || []; } catch (e) { fail("tests", "test.js failed to load: " + (e && e.message || e)); throw e; }
+    // Relative imports cannot resolve from a blob URL — rewrite any organ.js
+    // specifier in the tests to the actual organ blob URL so they still work.
+    let testsSrc = decode("${testsB64}");
+    testsSrc = testsSrc
+      .split("'./organ.js'").join("'" + organUrl + "'")
+      .split('"./organ.js"').join('"' + organUrl + '"')
+      .split("'organ.js'").join("'" + organUrl + "'")
+      .split('"organ.js"').join('"' + organUrl + '"');
+    try { tests = (await import(mkUrl(testsSrc))).tests || []; } catch (e) { fail("tests", "test.js failed to load: " + (e && e.message || e)); throw e; }
     const results = [];
     for (const t of tests) {
       const tEl = document.createElement("div");
       try { await organ.render(tEl, mockLoom); } catch { /* render already verified */ }
       const assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
-      try { await t.fn({ el: tEl, loom: mockLoom, assert }); results.push({ name: t.name, ok: true }); }
+      try { await t.fn({ el: tEl, loom: mockLoom, assert, organ }); results.push({ name: t.name, ok: true }); }
       catch (e) { results.push({ name: t.name, ok: false, error: String(e && e.message || e) }); }
     }
     const allOk = results.every((r) => r.ok);

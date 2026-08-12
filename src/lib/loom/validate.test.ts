@@ -34,4 +34,12 @@ describe("buildHarnessSrc", () => {
     expect(src).toContain("Blob");
     expect(src).toContain("unhandledrejection");
   });
+  it("rewrites relative organ.js imports in tests and passes organ into the test context", () => {
+    const src = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce");
+    // the harness rewrites './organ.js' specifiers to the real organ blob URL
+    expect(src).toContain("organUrl");
+    expect(src).toContain("./organ.js");
+    // and every test fn receives the organ object in its context
+    expect(src).toContain("assert, organ");
+  });
 });

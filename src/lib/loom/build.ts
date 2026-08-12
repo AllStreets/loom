@@ -5,7 +5,7 @@ import type { gate } from "./validate";
 import type { organWrite, Msg, OrganFile, ChatOpts } from "../core";
 
 export type BuildEvent = { ts: number; phase: string; detail: string };
-export type BuildResult = { ok: boolean; organId?: string; sha?: string; error?: string; log: BuildEvent[] };
+export type BuildResult = { ok: boolean; organId?: string; sha?: string; error?: string; stage?: string; log: BuildEvent[] };
 export type BuildDeps = {
   chat: (role: string, messages: Msg[], opts?: ChatOpts) => Promise<string>;
   write: typeof organWrite;
@@ -84,16 +84,42 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     const testsContent = extractCode(testsRaw);
     emit("tests", "ok");
 
-    // Phase 4: gate
+    // Phase 4: gate — with ONE bounded repair round. A real coding agent does not
+    // stop at the first red test: it reads the error and fixes its code.
+    let code = codeContent;
+    let tests = testsContent;
     emit("gate", "validating...");
-    const gateResult = await deps.gate(
-      { manifest: manifestCode, code: codeContent, tests: testsContent },
-      organId,
-    );
+    let gateResult = await deps.gate({ manifest: manifestCode, code, tests }, organId);
     if (!gateResult.ok) {
+      const stage = gateResult.verdict?.stage ?? "gate";
       const errors = gateResult.verdict?.errors?.join("; ") ?? gateResult.error ?? "gate failed";
-      emit("gate", "failed: " + errors);
-      return { ok: false, error: errors, log };
+      emit("gate", `failed at ${stage}: ${errors}`);
+
+      // Decide which file broke: test-stage failures → repair test.js; load/render/timeout → repair organ.js.
+      const target = stage === "tests" ? "test.js" : "organ.js";
+      const broken = target === "test.js" ? tests : code;
+      emit("repair", `asking the builder to fix ${target}...`);
+      const repairSystem = organSystemPrompt("repair");
+      const repairUser =
+        `FILE: ${target}\n\nCURRENT (FAILED) CONTENT:\n${broken}\n\n` +
+        `VALIDATION ERRORS (stage: ${stage}):\n${errors}\n\n` +
+        (target === "test.js" ? `The organ.js under test is:\n${code}\n\n` : `The manifest is:\n${manifestCode}\n\n`) +
+        `Output the complete corrected ${target}.`;
+      const repairRaw = await deps.chat("builder", [
+        { role: "system", content: repairSystem },
+        { role: "user", content: repairUser },
+      ], { numCtx: ctxFor(repairSystem.length + repairUser.length), temperature: 0.2 });
+      const repaired = extractCode(repairRaw);
+      if (target === "test.js") tests = repaired; else code = repaired;
+      emit("repair", `${target} rewritten — revalidating...`);
+
+      gateResult = await deps.gate({ manifest: manifestCode, code, tests }, organId);
+      if (!gateResult.ok) {
+        const stage2 = gateResult.verdict?.stage ?? "gate";
+        const errors2 = gateResult.verdict?.errors?.join("; ") ?? gateResult.error ?? "gate failed";
+        emit("gate", `failed again at ${stage2}: ${errors2}`);
+        return { ok: false, error: errors2, stage: stage2, log };
+      }
     }
     emit("gate", "passed");
 
@@ -101,8 +127,8 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     emit("write", "committing...");
     const files: OrganFile[] = [
       { name: "manifest.json", content: manifestCode },
-      { name: "organ.js", content: codeContent },
-      { name: "test.js", content: testsContent },
+      { name: "organ.js", content: code },
+      { name: "test.js", content: tests },
     ];
     const commitMsg = `loom: build ${organId} — ${request.slice(0, 60)}`;
     const sha = await deps.write(organId, files, commitMsg);

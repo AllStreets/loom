@@ -25,12 +25,34 @@ describe("buildOrgan", () => {
       expect.arrayContaining([expect.objectContaining({ name: "manifest.json" })]),
       expect.stringContaining("runs"));
   });
-  it("never writes when the gate fails, and surfaces the errors", async () => {
+  it("attempts ONE repair on gate failure, then fails without writing if still red", async () => {
     const deps = mkDeps({ gate: vi.fn().mockResolvedValue({ ok: false, verdict: { ok: false, stage: "render", errors: ["boom"], testResults: [] } }) });
+    // 4th chat call = the repair round
+    deps.chat.mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='fixed'; } }\n```");
     const r = await buildOrgan("x", deps);
     expect(r.ok).toBe(false);
+    expect(r.stage).toBe("render");
+    expect(deps.chat).toHaveBeenCalledTimes(4);      // manifest, code, tests, repair
+    expect(deps.gate).toHaveBeenCalledTimes(2);      // initial + revalidation
     expect(deps.write).not.toHaveBeenCalled();
     expect(r.error).toContain("boom");
+    // the repair prompt carried the error and the broken file
+    const repairCall = deps.chat.mock.calls[3];
+    expect(repairCall[1][1].content).toContain("boom");
+    expect(repairCall[1][1].content).toContain("organ.js");
+  });
+  it("repairs test.js when the tests stage fails, then writes on green", async () => {
+    const gate = vi.fn()
+      .mockResolvedValueOnce({ ok: false, verdict: { ok: false, stage: "tests", errors: ["adds water: fails"], testResults: [] } })
+      .mockResolvedValueOnce({ ok: true, manifest: JSON.parse(MANIFEST), verdict: { ok: true, stage: "pass", errors: [], testResults: [] } });
+    const deps = mkDeps({ gate });
+    deps.chat.mockResolvedValueOnce("```js\nexport const tests = [{ name: 'fixed', fn: async ({assert}) => assert(true) }];\n```");
+    const r = await buildOrgan("track water", deps);
+    expect(r.ok).toBe(true);
+    expect(deps.chat).toHaveBeenCalledTimes(4);
+    // the REPAIRED tests content is what gets written
+    const written = deps.write.mock.calls[0][1].find((f: { name: string }) => f.name === "test.js");
+    expect(written.content).toContain("fixed");
   });
   it("never writes when the manifest is invalid", async () => {
     const deps = mkDeps({ chat: vi.fn().mockResolvedValue("not json at all") });

@@ -179,6 +179,35 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     console.info(`[build-organ-code] ${passed}/${REPS} passed`);
   });
 
+  it("build-tests: 3 reps — test.js must be import-free and use the organ context", async () => {
+    const m = model ?? (await pickBuilder());
+    const system = organSystemPrompt("tests");
+    const user = `Manifest:\n${FIXED_MANIFEST}\n\nCode:\n${SAMPLE_ORGAN}\n\nWrite test.js for this organ.`;
+
+    let passed = 0;
+    for (let rep = 1; rep <= REPS; rep++) {
+      const t0 = Date.now();
+      const raw = await chat(m, system, user);
+      const code = extractCode(raw);
+      const ms = Date.now() - t0;
+
+      const hasTests = code.includes("export const tests");
+      // the failure mode seen live: `import ... from './organ.js'` cannot resolve in the sandbox
+      const hasImport = /^\s*import\b/m.test(code) || code.includes("./organ.js");
+
+      if (hasTests && !hasImport) {
+        passed++;
+        console.info(`[build-tests] rep ${rep} PASS (${ms}ms)`);
+      } else {
+        console.info(`[build-tests] rep ${rep} FAIL (${ms}ms) hasTests=${hasTests} hasImport=${hasImport}`);
+        console.info(`  code snippet:\n${code.slice(0, 400)}`);
+      }
+      expect(hasTests, `rep ${rep}: missing 'export const tests'`).toBe(true);
+      expect(hasImport, `rep ${rep}: test.js contains an import (sandbox cannot resolve imports)`).toBe(false);
+    }
+    console.info(`[build-tests] ${passed}/${REPS} passed`);
+  });
+
   it("edit-blocks: 3 reps", async () => {
     const m = model ?? (await pickBuilder());
     const system = organSystemPrompt("edit");

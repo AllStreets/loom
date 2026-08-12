@@ -24,20 +24,25 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
    }
    Style with inline styles using loom.ui.tokens. No external imports, no network, no document.cookie, no window.top.
 
-3. test.js — an ES module:
+3. test.js — an ES module that exports ONLY a tests array. IMPORTANT: test.js must contain NO import statements of any kind (imports cannot resolve in the test sandbox). The organ is provided to every test through its context:
    export const tests = [
-     { name: "renders without crashing", fn: async ({ el, loom, assert }) => { /* ... */ } },
+     { name: "renders a heading", fn: async ({ el, loom, assert, organ }) => {
+       // el: a fresh element with the organ ALREADY rendered into it
+       // organ: organ.js's default export (already imported for you — never import it yourself)
+       assert(el.textContent.length > 0, "renders content");
+     } },
    ];
-   Each fn gets a fresh el (organ already rendered into it), a mock loom api, and assert(cond, msg).
+   Each fn gets { el, loom, assert, organ }: a fresh rendered el, a mock loom api, assert(cond, msg), and the organ object.
 
 Rules: complete files only, no placeholders or TODOs; small and focused; real functionality, never filler.`;
 
-export function organSystemPrompt(kind: "manifest" | "code" | "tests" | "edit"): string {
+export function organSystemPrompt(kind: "manifest" | "code" | "tests" | "edit" | "repair"): string {
   const base = `You are the Loom, the build engine inside LOOM, a sovereign offline computer. You write organs.\n\n${ORGAN_CONTRACT}\n\nOutput ONLY the requested file content in a single fenced code block. No prose before or after.`;
   switch (kind) {
     case "manifest": return base + `\nNow output manifest.json only. Choose a short kebab-case id and the MINIMAL permissions the request needs.`;
     case "code": return base + `\nNow output organ.js only. It must match the manifest's id and only use APIs its permissions allow.`;
-    case "tests": return base + `\nNow output test.js only: 2-4 meaningful tests that verify the organ's real behavior (not trivial truths).`;
+    case "tests": return base + `\nNow output test.js only: 2-4 meaningful tests that verify the organ's real behavior (not trivial truths).\nABSOLUTE RULE: no import statements anywhere in test.js — use the organ provided in the test context ({ el, loom, assert, organ }). The organ is already rendered into el before each test runs.`;
+    case "repair": return base + `\nYour previous file FAILED validation. You will be given the file and the exact errors. Output the COMPLETE corrected file in one fenced code block — fix the errors, keep the intended behavior, and follow every contract rule (especially: test.js must contain no import statements).`;
     case "edit": return base + `\nYou are EDITING one existing file. Output ONLY SEARCH/REPLACE edit blocks in this exact format (no prose, no full file):\n<<<<<<< SEARCH\n(lines copied exactly from the current file)\n=======\n(replacement lines)\n>>>>>>> REPLACE`;
   }
 }

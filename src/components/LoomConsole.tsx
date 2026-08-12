@@ -168,7 +168,7 @@ export default function LoomConsole() {
           }}
         >
           <div style={{ color: "var(--danger)", fontWeight: 600, marginBottom: 6 }}>
-            Build failed
+            Build failed{result.stage ? ` — stage: ${result.stage}` : ""}
           </div>
           <div
             style={{
