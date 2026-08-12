@@ -1,0 +1,14 @@
+:root{
+  --bg:#060b18;
+  --panel:#0d1424;
+  --panel-2:#111a2e;
+  --line:rgba(255,255,255,.06);
+  --t1:#e8edf7; --t2:#9fb0cc; --t3:#5f6f8c;
+  --accent:#f59e0b;
+  --go:#4ade80; --warn:#fbbf24; --danger:#f87171;
+  --state-listen:#0a84ff; --state-think:#f59e0b; --state-speak:#10b981;
+  --f-sans:ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --f-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+html,body,#root{height:100%;margin:0}
+body{background:var(--bg);color:var(--t1);font-family:var(--f-sans)}
