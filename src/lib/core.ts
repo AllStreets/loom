@@ -17,3 +17,14 @@ export const timelineInit = () => invoke<void>("timeline_init");
 export const timelineCommit = (message: string) => invoke<string>("timeline_commit", { message });
 export const timelineLog = (limit = 20) => invoke<Commit[]>("timeline_log", { limit });
 export const timelineRollback = (sha: string) => invoke<void>("timeline_rollback", { sha });
+
+export type OrganFile = { name: string; content: string };
+export type OrganEntry = { id: string; manifest: string; granted: string | null };
+
+export const organWrite = (id: string, files: OrganFile[], message: string) =>
+  invoke<string>("organ_write", { id, files, message });
+export const organList = () => invoke<OrganEntry[]>("organ_list");
+export const organRead = (id: string, name: string) => invoke<string>("organ_read", { id, name });
+export const organGrant = (id: string, grantedJson: string) =>
+  invoke<string>("organ_grant", { id, grantedJson });
+export const organDelete = (id: string) => invoke<string>("organ_delete", { id });
