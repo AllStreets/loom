@@ -45,6 +45,7 @@ export default function LoomConsole() {
   function handleRetry() {
     setResult(null);
     setEvents([]);
+    handleBuild();
   }
 
   const panelStyle: React.CSSProperties = {
