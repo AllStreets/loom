@@ -27,9 +27,10 @@ export async function handle(
 
   switch (c.intent) {
     case "converse": {
+      const windowed = windowMessages(history.filter((m) => m.role !== "system"));
       const messages: Msg[] = [
         { role: "system", content: COMPANION_SYSTEM },
-        ...windowMessages(history),
+        ...windowed,
         { role: "user", content: c.request },
       ];
       const text = await deps.chat("companion", messages);
@@ -56,8 +57,16 @@ export async function handle(
     }
 
     case "act_on_organ": {
-      // Rules always set organId for act; cast is safe per contract.
-      return { kind: "act", organId: c.organId! };
+      if (!c.organId) {
+        // Cannot resolve which organ — ask the user, no model call.
+        const listPart =
+          ids.length > 0
+            ? ` Available organs: ${ids.join(", ")}.`
+            : "";
+        const text = `Which organ would you like to act on?${listPart}`;
+        return { kind: "reply", text };
+      }
+      return { kind: "act", organId: c.organId };
     }
   }
 }

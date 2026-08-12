@@ -130,6 +130,28 @@ describe("handle — converse", () => {
     expect(turn.kind).toBe("reply");
     if (turn.kind === "reply") expect(turn.text).toBe("LOOM here.");
   });
+
+  it("ensures exactly one system message at index 0 when history has system messages", async () => {
+    const deps = makeDeps({
+      organIds: vi.fn().mockResolvedValue([]),
+    });
+    const history: Msg[] = [
+      { role: "system", content: "old system message" },
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hey there" },
+    ];
+    const turn = await handle("hi", history, deps);
+
+    expect(turn.kind).toBe("reply");
+    const [, messages] = (deps.chat as ReturnType<typeof vi.fn>).mock.calls[0];
+    // Exactly one system message
+    const systemMessages = messages.filter((m: Msg) => m.role === "system");
+    expect(systemMessages).toHaveLength(1);
+    // It must be at index 0
+    expect(messages[0].role).toBe("system");
+    // It must be COMPANION_SYSTEM
+    expect(messages[0].content).toBe(COMPANION_SYSTEM);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -227,6 +249,26 @@ describe("handle — act", () => {
     expect(turn.kind).toBe("act");
     if (turn.kind === "act") {
       expect(turn.organId).toBe("water-tracker");
+    }
+  });
+
+  it("returns kind 'reply' when organId is missing, and does NOT call deps.chat", async () => {
+    // askModel forces act_on_organ with null organId
+    const askModel = vi.fn().mockResolvedValue('{"intent":"act_on_organ","organId":null}');
+    const chatSpy = vi.fn().mockResolvedValue("should not be called");
+    const deps = makeDeps({
+      organIds: vi.fn().mockResolvedValue(["water-tracker"]),
+      askModel,
+      chat: chatSpy,
+    });
+
+    const turn = await handle("activate the thing", [], deps);
+
+    expect(turn.kind).toBe("reply");
+    // deps.chat must NOT have been called
+    expect(chatSpy).not.toHaveBeenCalled();
+    if (turn.kind === "reply") {
+      expect(turn.text).toMatch(/organ/i);
     }
   });
 });
