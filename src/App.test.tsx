@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
 
 // matchMedia mock (jsdom lacks it)
 Object.defineProperty(window, "matchMedia", {
@@ -15,6 +15,10 @@ Object.defineProperty(window, "matchMedia", {
     removeEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
   }),
+});
+
+afterAll(() => {
+  delete (window as unknown as Record<string, unknown>).matchMedia;
 });
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue([]) }));

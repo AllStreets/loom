@@ -54,7 +54,6 @@ export default function Shell() {
   useEffect(() => {
     async function poll() {
       try {
-        await timelineInit();
         const r = await fleetStatus();
         setRoles(r);
 
@@ -79,6 +78,9 @@ export default function Shell() {
       }
     }
 
+    timelineInit().catch(() => {
+      // error tolerance as-is
+    });
     poll();
     const id = setInterval(poll, 30_000);
     return () => clearInterval(id);
@@ -116,7 +118,8 @@ export default function Shell() {
 
   // ----- ambient glow color -----
   const moodColor = MOOD_TARGETS[mood].color;
-  const ambientBg = `radial-gradient(900px at 50% 220px, ${moodColor}1e, transparent 70%)`;
+  // 0x12 ≈ 7% alpha — the room shifts with the orb's mood, subtly
+  const ambientBg = `radial-gradient(900px at 50% 220px, ${moodColor}12, transparent 70%)`;
 
   // ----- panel animation props -----
   const motionProps = reducedMotion
