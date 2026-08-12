@@ -93,6 +93,23 @@ describe("buildOrgan", () => {
     expect(r.ok).toBe(false);
     expect(deps.write).not.toHaveBeenCalled();
   });
+  it("returns ok:false with stage 'error' when chat throws", async () => {
+    const write = vi.fn();
+    const deps = mkDeps({
+      chat: vi.fn().mockRejectedValue(new Error("network down")),
+      write,
+    });
+    const result = await buildOrgan("track my runs", deps);
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("error");
+    expect(result.error).toContain("network down");
+    expect(write).not.toHaveBeenCalled();
+    // flight must be cleared — a subsequent build should not be busy-blocked
+    const deps2 = mkDeps();
+    const result2 = await buildOrgan("second build", deps2);
+    expect(result2.ok).toBe(true);
+  });
+
   it("rejects a concurrent build", async () => {
     const slowGate = vi.fn().mockImplementation(() => new Promise((res) => setTimeout(() => res({ ok: false, verdict: { ok: false, stage: "load", errors: ["x"], testResults: [] } }), 50)));
     const deps = mkDeps({ gate: slowGate });

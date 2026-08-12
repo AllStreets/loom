@@ -29,6 +29,8 @@ export async function editOrgan(
       deps.onEvent?.(e);
     }
 
+    try {
+
     // Phase 1: read existing organ files
     emit("read", `reading ${organId}...`);
     const [manifest, code, tests] = await Promise.all([
@@ -138,6 +140,11 @@ export async function editOrgan(
     emit("write", "committed " + sha);
 
     return { ok: true, organId, sha, log };
+
+    } catch (err) {
+      emit("error", String(err));
+      return { ok: false, error: String(err), stage: "error", log };
+    }
   });
 
   if (result && typeof result === "object" && "busy" in result) {

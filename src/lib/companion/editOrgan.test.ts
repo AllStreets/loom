@@ -105,6 +105,23 @@ describe("editOrgan", () => {
     expect(deps.write).not.toHaveBeenCalled();
   });
 
+  it("returns ok:false with stage 'error' when read rejects", async () => {
+    const write = vi.fn();
+    const deps = mkDeps({
+      read: vi.fn().mockRejectedValue(new Error("disk failure")),
+      write,
+    });
+    const result = await editOrgan("counter", "change text to 1", deps);
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("error");
+    expect(result.error).toContain("disk failure");
+    expect(write).not.toHaveBeenCalled();
+    // flight must be cleared — a subsequent edit should not be busy-blocked
+    const deps2 = mkDeps();
+    const result2 = await editOrgan("counter", "second edit", deps2);
+    expect(result2.ok).toBe(true);
+  });
+
   it("busy: second concurrent call returns busy error", async () => {
     // Use a slow gate so first call doesn't finish before second starts
     const slowGate = vi.fn().mockImplementation(

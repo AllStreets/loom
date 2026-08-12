@@ -33,6 +33,8 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
       deps.onEvent?.(e);
     }
 
+    try {
+
     // Phase 1: manifest
     emit("manifest", "generating manifest...");
     const manifestSystem = organSystemPrompt("manifest");
@@ -118,6 +120,11 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     emit("write", "committed " + sha);
 
     return { ok: true, organId, sha, log };
+
+    } catch (err) {
+      emit("error", String(err));
+      return { ok: false, error: String(err), stage: "error", log };
+    }
   });
 
   if (result && typeof result === "object" && "busy" in result) {
