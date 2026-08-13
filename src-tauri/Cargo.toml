@@ -22,9 +22,12 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
 git2 = "0.19"
+futures-util = "0.3"
+whisper-rs = { version = "0.16", features = ["metal"] }
+sherpa-rs = { version = "0.6", default-features = false, features = ["tts", "download-binaries"] }
 
 [dev-dependencies]
 tempfile = "3"

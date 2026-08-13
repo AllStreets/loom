@@ -1,0 +1,609 @@
+/// voice.rs — offline STT (whisper-rs, Metal) + TTS (sherpa-rs vits/piper .onnx)
+///
+/// Engine choice: whisper-rs 0.16 (whisper.cpp bindings, Metal feature enabled) for STT.
+/// TTS: piper-rs 0.2 failed to build — espeak-rs-sys requires system eSpeak-NG libraries
+/// not present on a plain macOS + Xcode CLT setup. Fallback: sherpa-rs 0.6 (sherpa-onnx)
+/// with default TTS feature, which supports piper/vits .onnx voices directly.
+/// Both built cleanly after `brew install cmake` (cmake was absent; documented in report).
+
+use crate::error::LoomError;
+use crate::timeline::loom_dir;
+use futures_util::StreamExt;
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter};
+
+// ── Registry ──────────────────────────────────────────────────────────────────
+
+pub struct VoiceDef {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// (filename, url) pairs — .onnx + .onnx.json for each voice
+    pub files: &'static [(&'static str, &'static str)],
+}
+
+pub const VOICES: [VoiceDef; 3] = [
+    VoiceDef {
+        id: "en_US-lessac-medium",
+        label: "Lessac (US, medium)",
+        files: &[
+            (
+                "en_US-lessac-medium.onnx",
+                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+            ),
+            (
+                "en_US-lessac-medium.onnx.json",
+                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
+            ),
+        ],
+    },
+    VoiceDef {
+        id: "en_GB-alba-medium",
+        label: "Alba (GB, medium)",
+        files: &[
+            (
+                "en_GB-alba-medium.onnx",
+                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx",
+            ),
+            (
+                "en_GB-alba-medium.onnx.json",
+                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json",
+            ),
+        ],
+    },
+    VoiceDef {
+        id: "en_US-libritts-high",
+        label: "LibriTTS (US, high)",
+        files: &[
+            (
+                "en_US-libritts-high.onnx",
+                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx",
+            ),
+            (
+                "en_US-libritts-high.onnx.json",
+                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json",
+            ),
+        ],
+    },
+];
+
+pub const WHISPER: (&str, &str) = (
+    "ggml-base.en.bin",
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+);
+
+/// Default voice id
+pub const DEFAULT_VOICE_ID: &str = "en_US-lessac-medium";
+
+// ── Paths ─────────────────────────────────────────────────────────────────────
+
+pub fn voice_dir(app: &AppHandle) -> Result<PathBuf, LoomError> {
+    let dir = loom_dir(app)?.join("voice");
+    std::fs::create_dir_all(&dir).map_err(|e| LoomError::Git(e.to_string()))?;
+    Ok(dir)
+}
+
+// ── Pure helpers ──────────────────────────────────────────────────────────────
+
+/// Returns (filename, url) pairs for any file in the registry that is absent from `dir`.
+pub fn missing_files(dir: &Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let (wname, wurl) = WHISPER;
+    if !dir.join(wname).exists() {
+        out.push((wname.to_string(), wurl.to_string()));
+    }
+    for voice in &VOICES {
+        for (fname, url) in voice.files {
+            if !dir.join(fname).exists() {
+                out.push((fname.to_string(), url.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Cap input to 30 seconds at 16kHz mono (480_000 samples).
+pub fn clamp_samples(samples: Vec<f32>) -> Vec<f32> {
+    const CAP: usize = 480_000;
+    if samples.len() > CAP {
+        samples.into_iter().take(CAP).collect()
+    } else {
+        samples
+    }
+}
+
+/// Build a RIFF/WAV container around raw 16-bit PCM samples.
+/// mono, `rate` Hz, 16-bit little-endian. Returns the full WAV bytes.
+pub fn wav_from_pcm16(rate: u32, samples: &[i16]) -> Vec<u8> {
+    let num_samples = samples.len() as u32;
+    let byte_rate = rate * 2; // 1 channel * 2 bytes/sample
+    let data_size = num_samples * 2;
+    let chunk_size = 36 + data_size; // 4 (WAVE) + 24 (fmt) + 8 (data hdr) + data_size
+
+    let mut buf = Vec::with_capacity(44 + data_size as usize);
+
+    // RIFF chunk descriptor
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&chunk_size.to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+
+    // fmt sub-chunk
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes()); // sub-chunk size = 16 for PCM
+    buf.extend_from_slice(&1u16.to_le_bytes()); // AudioFormat = PCM
+    buf.extend_from_slice(&1u16.to_le_bytes()); // NumChannels = 1
+    buf.extend_from_slice(&rate.to_le_bytes()); // SampleRate
+    buf.extend_from_slice(&byte_rate.to_le_bytes()); // ByteRate
+    buf.extend_from_slice(&2u16.to_le_bytes()); // BlockAlign = 2
+    buf.extend_from_slice(&16u16.to_le_bytes()); // BitsPerSample = 16
+
+    // data sub-chunk
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_size.to_le_bytes());
+    for s in samples {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+
+    buf
+}
+
+// ── Tauri commands ────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct VoicePresence {
+    pub id: String,
+    pub label: String,
+    pub present: bool,
+}
+
+#[derive(Serialize)]
+pub struct VoiceStatus {
+    pub ready: bool,
+    pub whisper: bool,
+    pub voices: Vec<VoicePresence>,
+    pub missing_bytes_hint: Option<String>,
+}
+
+#[tauri::command]
+pub async fn voice_status(app: AppHandle) -> Result<VoiceStatus, LoomError> {
+    let dir = voice_dir(&app)?;
+    let (wname, _) = WHISPER;
+    let whisper_present = dir.join(wname).exists();
+
+    let mut voices = Vec::new();
+    let mut all_voices_present = true;
+    for v in &VOICES {
+        let present = v.files.iter().all(|(f, _)| dir.join(f).exists());
+        if !present {
+            all_voices_present = false;
+        }
+        voices.push(VoicePresence {
+            id: v.id.to_string(),
+            label: v.label.to_string(),
+            present,
+        });
+    }
+
+    let ready = whisper_present && all_voices_present;
+    let missing = missing_files(&dir);
+    let missing_bytes_hint = if missing.is_empty() {
+        None
+    } else {
+        Some(format!("{} file(s) not downloaded", missing.len()))
+    };
+
+    Ok(VoiceStatus {
+        ready,
+        whisper: whisper_present,
+        voices,
+        missing_bytes_hint,
+    })
+}
+
+#[tauri::command]
+pub async fn voice_setup(app: AppHandle, window: tauri::Window) -> Result<(), LoomError> {
+    let dir = voice_dir(&app)?;
+    let missing = missing_files(&dir);
+    if missing.is_empty() {
+        return Ok(()); // idempotent
+    }
+
+    let client = reqwest::Client::new();
+
+    for (fname, url) in &missing {
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| LoomError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(LoomError::Http(format!(
+                "download {} failed: {}",
+                fname,
+                resp.status()
+            )));
+        }
+
+        let total = resp.content_length().unwrap_or(0);
+        let tmp_path = dir.join(format!("{fname}.tmp"));
+        let final_path = dir.join(fname);
+
+        {
+            use tokio::io::AsyncWriteExt;
+            let mut file = tokio::fs::File::create(&tmp_path)
+                .await
+                .map_err(|e| LoomError::Http(e.to_string()))?;
+
+            let mut stream = resp.bytes_stream();
+            let mut downloaded: u64 = 0;
+            let mut last_pct: i64 = -1;
+
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| LoomError::Http(e.to_string()))?;
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| LoomError::Http(e.to_string()))?;
+                downloaded += chunk.len() as u64;
+
+                let pct = if total > 0 {
+                    (downloaded * 100 / total) as i64
+                } else {
+                    -1
+                };
+                if pct != last_pct {
+                    last_pct = pct;
+                    let _ = window.emit(
+                        "voice-setup-progress",
+                        serde_json::json!({ "file": fname, "pct": pct }),
+                    );
+                }
+            }
+            file.flush()
+                .await
+                .map_err(|e| LoomError::Http(e.to_string()))?;
+        }
+
+        tokio::fs::rename(&tmp_path, &final_path)
+            .await
+            .map_err(|e| LoomError::Http(e.to_string()))?;
+
+        let _ = window.emit(
+            "voice-setup-progress",
+            serde_json::json!({ "file": fname, "pct": 100 }),
+        );
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stt_transcribe(
+    app: AppHandle,
+    samples: Vec<f32>,
+) -> Result<String, LoomError> {
+    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+    let dir = voice_dir(&app)?;
+    let (wname, _) = WHISPER;
+    let model_path = dir.join(wname);
+    if !model_path.exists() {
+        return Err(LoomError::NotFound("voice not set up".into()));
+    }
+
+    let samples = clamp_samples(samples);
+
+    // whisper_rs operations are synchronous/CPU-bound; run on blocking thread
+    let model_path_str = model_path.to_string_lossy().to_string();
+    let text = tokio::task::spawn_blocking(move || -> Result<String, LoomError> {
+        let ctx = WhisperContext::new_with_params(
+            &model_path_str,
+            WhisperContextParameters::default(),
+        )
+        .map_err(|e| LoomError::Parse(e.to_string()))?;
+
+        let mut state = ctx.create_state().map_err(|e| LoomError::Parse(e.to_string()))?;
+
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some("en"));
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_special(false);
+        params.set_print_timestamps(false);
+
+        state
+            .full(params, &samples)
+            .map_err(|e| LoomError::Parse(e.to_string()))?;
+
+        let n = state.full_n_segments();
+        let mut out = String::new();
+        for i in 0..n {
+            if let Some(seg) = state.get_segment(i) {
+                if let Ok(text) = seg.to_str_lossy() {
+                    out.push_str(&text);
+                }
+            }
+        }
+        Ok(out.trim().to_string())
+    })
+    .await
+    .map_err(|e| LoomError::Parse(e.to_string()))??;
+
+    Ok(text)
+}
+
+#[tauri::command]
+pub async fn tts_speak(
+    app: AppHandle,
+    text: String,
+    voice_id: String,
+) -> Result<Vec<u8>, LoomError> {
+    use sherpa_rs::tts::{CommonTtsConfig, VitsTts, VitsTtsConfig};
+    use sherpa_rs::OnnxConfig;
+
+    let voice_def = VOICES
+        .iter()
+        .find(|v| v.id == voice_id)
+        .ok_or_else(|| LoomError::NotFound(format!("unknown voice: {voice_id}")))?;
+
+    let dir = voice_dir(&app)?;
+
+    // Verify all files present
+    for (fname, _) in voice_def.files {
+        if !dir.join(fname).exists() {
+            return Err(LoomError::NotFound(format!(
+                "voice model files not downloaded: {fname}"
+            )));
+        }
+    }
+
+    let onnx_path = dir
+        .join(
+            voice_def
+                .files
+                .iter()
+                .find(|(f, _)| f.ends_with(".onnx") && !f.ends_with(".onnx.json"))
+                .map(|(f, _)| *f)
+                .ok_or_else(|| LoomError::Parse("no .onnx file in registry".into()))?,
+        )
+        .to_string_lossy()
+        .to_string();
+
+    let json_path = dir
+        .join(
+            voice_def
+                .files
+                .iter()
+                .find(|(f, _)| f.ends_with(".onnx.json"))
+                .map(|(f, _)| *f)
+                .ok_or_else(|| LoomError::Parse("no .onnx.json file in registry".into()))?,
+        )
+        .to_string_lossy()
+        .to_string();
+
+    let (pcm, sample_rate) = tokio::task::spawn_blocking(move || -> Result<(Vec<i16>, u32), LoomError> {
+        let mut tts = VitsTts::new(VitsTtsConfig {
+            model: onnx_path,
+            tokens: json_path,
+            length_scale: 1.0,
+            noise_scale: 0.667,
+            noise_scale_w: 0.8,
+            onnx_config: OnnxConfig {
+                provider: "cpu".to_string(),
+                num_threads: 2,
+                debug: false,
+            },
+            tts_config: CommonTtsConfig {
+                max_num_sentences: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let audio = tts
+            .create(&text, 0, 1.0)
+            .map_err(|e| LoomError::Parse(e.to_string()))?;
+
+        let rate = audio.sample_rate;
+        // Convert f32 samples → i16
+        let samples_i16: Vec<i16> = audio
+            .samples
+            .iter()
+            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect();
+        Ok((samples_i16, rate))
+    })
+    .await
+    .map_err(|e| LoomError::Parse(e.to_string()))??;
+
+    let wav = wav_from_pcm16(sample_rate, &pcm);
+    Ok(wav)
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    // Registry integrity
+    #[test]
+    fn registry_has_three_voices() {
+        assert_eq!(VOICES.len(), 3);
+    }
+
+    #[test]
+    fn default_voice_id_present() {
+        assert!(
+            VOICES.iter().any(|v| v.id == DEFAULT_VOICE_ID),
+            "DEFAULT_VOICE_ID '{DEFAULT_VOICE_ID}' not in VOICES"
+        );
+    }
+
+    #[test]
+    fn all_voice_ids_unique() {
+        let ids: Vec<_> = VOICES.iter().map(|v| v.id).collect();
+        let mut deduped = ids.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(ids.len(), deduped.len(), "duplicate voice id");
+    }
+
+    #[test]
+    fn all_urls_https_and_huggingface() {
+        for v in &VOICES {
+            for (_, url) in v.files {
+                assert!(
+                    url.starts_with("https://"),
+                    "voice url not https: {url}"
+                );
+                assert!(
+                    url.contains("huggingface.co"),
+                    "voice url not on huggingface: {url}"
+                );
+            }
+        }
+        let (_, wurl) = WHISPER;
+        assert!(wurl.starts_with("https://"), "whisper url not https");
+        assert!(
+            wurl.contains("huggingface.co"),
+            "whisper url not on huggingface"
+        );
+    }
+
+    #[test]
+    fn each_voice_has_onnx_and_json() {
+        for v in &VOICES {
+            let has_onnx = v
+                .files
+                .iter()
+                .any(|(f, _)| f.ends_with(".onnx") && !f.ends_with(".onnx.json"));
+            let has_json = v.files.iter().any(|(f, _)| f.ends_with(".onnx.json"));
+            assert!(has_onnx, "voice {} missing .onnx file", v.id);
+            assert!(has_json, "voice {} missing .onnx.json file", v.id);
+        }
+    }
+
+    // missing_files
+    #[test]
+    fn missing_files_empty_dir_returns_all() {
+        let dir = tempdir().unwrap();
+        let missing = missing_files(dir.path());
+        // 1 whisper + 3*2 voice files = 7
+        assert_eq!(missing.len(), 7, "expected 7 missing files, got {}", missing.len());
+    }
+
+    #[test]
+    fn missing_files_with_all_present_returns_empty() {
+        let dir = tempdir().unwrap();
+        // touch whisper
+        let (wname, _) = WHISPER;
+        fs::write(dir.path().join(wname), b"").unwrap();
+        // touch all voice files
+        for v in &VOICES {
+            for (fname, _) in v.files {
+                fs::write(dir.path().join(fname), b"").unwrap();
+            }
+        }
+        let missing = missing_files(dir.path());
+        assert!(missing.is_empty(), "expected no missing files");
+    }
+
+    #[test]
+    fn missing_files_partial() {
+        let dir = tempdir().unwrap();
+        // touch only whisper
+        let (wname, _) = WHISPER;
+        fs::write(dir.path().join(wname), b"").unwrap();
+        let missing = missing_files(dir.path());
+        assert_eq!(missing.len(), 6, "expected 6 missing (all voice files)");
+        // whisper must not appear
+        assert!(!missing.iter().any(|(f, _)| f == wname));
+    }
+
+    // wav_from_pcm16 header bytes
+    #[test]
+    fn wav_header_riff_wave_markers() {
+        let wav = wav_from_pcm16(16000, &[]);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        assert_eq!(&wav[36..40], b"data");
+    }
+
+    #[test]
+    fn wav_header_sizes_empty() {
+        let wav = wav_from_pcm16(16000, &[]);
+        assert_eq!(wav.len(), 44);
+        // chunk_size = 36 + 0 = 36
+        let chunk_size = u32::from_le_bytes(wav[4..8].try_into().unwrap());
+        assert_eq!(chunk_size, 36);
+        // data_size = 0
+        let data_size = u32::from_le_bytes(wav[40..44].try_into().unwrap());
+        assert_eq!(data_size, 0);
+    }
+
+    #[test]
+    fn wav_header_sizes_with_samples() {
+        let samples = vec![0i16; 100];
+        let wav = wav_from_pcm16(22050, &samples);
+        assert_eq!(wav.len(), 44 + 200);
+        let chunk_size = u32::from_le_bytes(wav[4..8].try_into().unwrap());
+        assert_eq!(chunk_size, 36 + 200);
+        let data_size = u32::from_le_bytes(wav[40..44].try_into().unwrap());
+        assert_eq!(data_size, 200);
+    }
+
+    #[test]
+    fn wav_header_sample_rate() {
+        let wav = wav_from_pcm16(44100, &[]);
+        let rate = u32::from_le_bytes(wav[24..28].try_into().unwrap());
+        assert_eq!(rate, 44100);
+        let byte_rate = u32::from_le_bytes(wav[28..32].try_into().unwrap());
+        assert_eq!(byte_rate, 44100 * 2); // 1 ch * 2 bytes
+    }
+
+    #[test]
+    fn wav_header_format_fields() {
+        let wav = wav_from_pcm16(16000, &[]);
+        // sub-chunk1 size = 16
+        let sc1 = u32::from_le_bytes(wav[16..20].try_into().unwrap());
+        assert_eq!(sc1, 16);
+        // AudioFormat = 1 (PCM)
+        let fmt = u16::from_le_bytes(wav[20..22].try_into().unwrap());
+        assert_eq!(fmt, 1);
+        // NumChannels = 1
+        let ch = u16::from_le_bytes(wav[22..24].try_into().unwrap());
+        assert_eq!(ch, 1);
+        // BitsPerSample = 16
+        let bits = u16::from_le_bytes(wav[34..36].try_into().unwrap());
+        assert_eq!(bits, 16);
+        // BlockAlign = 2
+        let align = u16::from_le_bytes(wav[32..34].try_into().unwrap());
+        assert_eq!(align, 2);
+    }
+
+    // clamp_samples
+    #[test]
+    fn clamp_samples_under_cap_unchanged() {
+        let s = vec![0.5f32; 100];
+        let out = clamp_samples(s.clone());
+        assert_eq!(out.len(), 100);
+    }
+
+    #[test]
+    fn clamp_samples_at_cap_unchanged() {
+        let s = vec![0.0f32; 480_000];
+        let out = clamp_samples(s);
+        assert_eq!(out.len(), 480_000);
+    }
+
+    #[test]
+    fn clamp_samples_over_cap_truncated() {
+        let s = vec![1.0f32; 500_000];
+        let out = clamp_samples(s);
+        assert_eq!(out.len(), 480_000);
+    }
+}
