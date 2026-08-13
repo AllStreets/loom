@@ -47,6 +47,11 @@ function loadPos(id: string, initial: { x: number; y: number; w: number; h: numb
 export default function OrganWindow({ state, focused, onFocus, onMinimize, initial }: Props) {
   const id = state.entry.id;
   const [pos, setPos] = useState<WinPos>(() => loadPos(id, initial));
+  // Keep a ref always in sync with the latest pos so drag/resize onUp closures
+  // read the live value rather than the stale capture from pointerdown.
+  const posRef = useRef(pos);
+  posRef.current = pos;
+
   const mountRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(false);
 
@@ -71,27 +76,51 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     e.preventDefault();
     const startX = e.clientX;
     const startY = e.clientY;
-    const origX = pos.x;
-    const origY = pos.y;
+    const origX = posRef.current.x;
+    const origY = posRef.current.y;
     e.currentTarget.setPointerCapture?.(e.pointerId);
+
+    // Capture parent bounds at pointerdown for clamping.
+    // offsetWidth/offsetHeight return 0 in jsdom (no layout engine) — treat 0 as "unavailable"
+    // so we fall back to only >= 0 clamping, preserving full drag freedom in tests.
+    const parentEl = (e.currentTarget as HTMLElement).closest("[data-desktop-plane]") as HTMLElement | null;
+    const rawParentW = parentEl?.offsetWidth ?? 0;
+    const rawParentH = parentEl?.offsetHeight ?? 0;
+    const parentW = rawParentW > 0 ? rawParentW : null;
+    const parentH = rawParentH > 0 ? rawParentH : null;
+
+    function clampX(x: number, w: number): number {
+      const lo = 0;
+      if (parentW === null) return Math.max(lo, x);
+      const hi = Math.max(lo, parentW - w);
+      return Math.max(lo, Math.min(x, hi));
+    }
+
+    function clampY(y: number, h: number): number {
+      const lo = 0;
+      if (parentH === null) return Math.max(lo, y);
+      const hi = Math.max(lo, parentH - h);
+      return Math.max(lo, Math.min(y, hi));
+    }
 
     function onMove(ev: PointerEvent) {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
       setPos((p) => ({
         ...p,
-        x: Math.max(0, origX + dx),
-        y: Math.max(0, origY + dy),
+        x: clampX(origX + dx, p.w),
+        y: clampY(origY + dy, p.h),
       }));
     }
 
     function onUp(ev: PointerEvent) {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
-      const newPos = {
-        ...pos,
-        x: Math.max(0, origX + dx),
-        y: Math.max(0, origY + dy),
+      const live = posRef.current;
+      const newPos: WinPos = {
+        ...live,
+        x: clampX(origX + dx, live.w),
+        y: clampY(origY + dy, live.h),
       };
       setPos(newPos);
       persistPos(id, newPos);
@@ -109,8 +138,8 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     e.stopPropagation();
     const startX = e.clientX;
     const startY = e.clientY;
-    const origW = pos.w;
-    const origH = pos.h;
+    const origW = posRef.current.w;
+    const origH = posRef.current.h;
     (e.currentTarget as HTMLDivElement).setPointerCapture?.(e.pointerId);
 
     function onMove(ev: PointerEvent) {
@@ -126,8 +155,9 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     function onUp(ev: PointerEvent) {
       const dw = ev.clientX - startX;
       const dh = ev.clientY - startY;
-      const newPos = {
-        ...pos,
+      const live = posRef.current;
+      const newPos: WinPos = {
+        ...live,
         w: Math.max(260, origW + dw),
         h: Math.max(180, origH + dh),
       };

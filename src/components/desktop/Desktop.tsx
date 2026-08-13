@@ -138,7 +138,7 @@ export default function Desktop() {
   const approvedOrgans = organs.filter((o) => o.approved);
 
   return (
-    <div style={{ position: "relative", minHeight: "60vh", width: "100%" }}>
+    <div data-desktop-plane="" style={{ position: "relative", minHeight: "60vh", width: "100%" }}>
       {approvedOrgans.map((organ, i) => {
         const id = organ.entry.id;
         const ws = windowStates[id] ?? { minimized: false, focused: false };

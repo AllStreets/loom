@@ -37,7 +37,7 @@ export default function Dock({ organs, windowStates, onTileClick }: Props) {
         const ws = windowStates[id];
         const isMinimized = ws?.minimized ?? false;
         const isFocused = ws?.focused ?? false;
-        const isActive = !isMinimized && (true || isFocused);
+        const isOpen = !isMinimized;
 
         const tileStyle: React.CSSProperties = {
           position: "relative",
@@ -51,12 +51,13 @@ export default function Dock({ organs, windowStates, onTileClick }: Props) {
           fontSize: 11,
           fontWeight: 700,
           flexShrink: 0,
-          background: isActive
+          background: isOpen
             ? "var(--accent-soft)"
             : "rgba(255,255,255,.06)",
-          color: isActive ? "var(--accent)" : "var(--t3)",
+          color: isOpen ? "var(--accent)" : "var(--t3)",
           border: "none",
           userSelect: "none",
+          boxShadow: isFocused ? "0 0 0 1px var(--accent)" : undefined,
         };
 
         return (
