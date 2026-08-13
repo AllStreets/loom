@@ -1,7 +1,12 @@
 {
   "name": "loom",
-  "private": true,
+  "description": "A sovereign, self-evolving computer — describe a capability, LOOM builds it offline.",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AllStreets/loom.git"
+  },
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
