@@ -16,6 +16,7 @@ const ORGAN_JS = `export default {
 
     // hero moment: note count + 7-day spark
     var heroEl = ui.hero(0, "notes captured");
+    heroEl.setAttribute("data-role", "hero-count");
     var sparkEl = ui.spark([], { width: 72, height: 20 });
     var heroRow = ui.row(heroEl, sparkEl);
     heroRow.style.justifyContent = "space-between";
@@ -136,8 +137,11 @@ const TEST_JS = `export const tests = [
       var btn = el.querySelector('[data-action="add"]');
       input.value = "first";
       btn.click();
-      var items = loom.storage.get("items", []);
-      assert(items.length === 1, "storage has 1 item after add");
+      var heroEl = el.querySelector('[data-role="hero-count"]');
+      assert(heroEl !== null, "hero element exists");
+      var heroValue = heroEl.firstChild;
+      assert(heroValue !== null, "hero value node exists");
+      assert(heroValue.textContent === "1", "hero displays count of 1");
     },
   },
 ];`;

@@ -15,6 +15,12 @@ export const KIT_TOKENS = {
 
 export const UIKIT_SRC: string = `
 function makeUi(tokens) {
+  // --- Helpers ---
+  function rgba(hex, a) {
+    var h = hex.replace('#', '');
+    return 'rgba(' + parseInt(h.substr(0, 2), 16) + ',' + parseInt(h.substr(2, 2), 16) + ',' + parseInt(h.substr(4, 2), 16) + ',' + a + ')';
+  }
+
   // --- Style injection (once per document) ---
   function injectStyles() {
     if (document.getElementById('lui-style')) return;
@@ -303,7 +309,7 @@ function makeUi(tokens) {
         fontWeight:'700',
         color:tokens.accent,
         lineHeight:'1.15',
-        textShadow:'0 0 18px rgba(34,211,238,.45)',
+        textShadow:'0 0 18px ' + rgba(tokens.accent, '.45'),
       });
       val.textContent = String(value);
       var lbl = el('div', {

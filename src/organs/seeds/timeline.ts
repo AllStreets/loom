@@ -14,7 +14,7 @@ const ORGAN_JS = `export default {
     var ui = loom.ui;
     var { root, body } = ui.card({ title: "Timeline" });
 
-    var heading = ui.heading("LOOM remembers everything.", "Every change is a commit — nothing is ever lost.");
+    var heading = ui.heading("LOOM remembers everything.", "Every change is a commit - nothing is ever lost.");
     body.appendChild(heading);
 
     // How it works section
