@@ -199,6 +199,42 @@ describe("useVoice state machine", () => {
     expect(recordFn).toHaveBeenCalledTimes(1);
   });
 
+  // ── I2: 30s auto-stop wiring ────────────────────────────────────────────────
+
+  it("I2: auto-stop fires stop() flow — transcribes and ends idle", async () => {
+    const bigSamples = new Float32Array(16000); // 1s
+    let registeredAutoStop: (() => void) | undefined;
+
+    const fakeHandle = {
+      stop: () => bigSamples,
+      cancel: vi.fn(),
+      onAutoStop: (cb: () => void) => { registeredAutoStop = cb; },
+    };
+
+    const utteranceSpy = vi.fn();
+    window.addEventListener("loom-utterance", utteranceSpy);
+
+    const { result } = renderHook(() => useVoice({
+      status: async () => ({ ready: true }),
+      record: async () => fakeHandle,
+      transcribe: async () => "auto stopped text",
+    }));
+
+    await act(async () => { await result.current.start(); });
+    expect(result.current.state).toBe("listening");
+    expect(registeredAutoStop).toBeDefined();
+
+    // Simulate recorder firing the 30s cap
+    await act(async () => { registeredAutoStop!(); });
+
+    expect(result.current.state).toBe("idle");
+    expect(utteranceSpy).toHaveBeenCalledTimes(1);
+    const detail = (utteranceSpy.mock.calls[0][0] as CustomEvent<{ text: string }>).detail;
+    expect(detail.text).toBe("auto stopped text");
+
+    window.removeEventListener("loom-utterance", utteranceSpy);
+  });
+
   // ── I1: cancelled results must not fire loom-utterance ─────────────────────
 
   it("I1: cancel() while transcribing suppresses loom-utterance", async () => {

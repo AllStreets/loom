@@ -46,4 +46,4 @@ export const voiceSetup = () => invoke<void>("voice_setup");
 export const sttTranscribe = (samples: number[]) =>
   invoke<string>("stt_transcribe", { samples });
 export const ttsSpeak = (text: string, voiceId: string) =>
-  invoke<number[]>("tts_speak", { text, voice_id: voiceId });
+  invoke<number[]>("tts_speak", { text, voiceId });

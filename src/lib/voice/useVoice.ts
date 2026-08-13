@@ -142,6 +142,13 @@ export function useVoice(deps?: VoiceDeps): UseVoiceResult {
       }
 
       handleRef.current = handle;
+
+      // I2: wire the 30s cap auto-stop so the handle fires our stop() flow
+      handle.onAutoStop?.(() => {
+        setError("30s limit reached — transcribing.");
+        void stop();
+      });
+
       dispatchMood("listening");
       syncState("listening");
     } finally {
@@ -167,13 +174,21 @@ export function useVoice(deps?: VoiceDeps): UseVoiceResult {
     syncState("transcribing");
     dispatchMood("thinking");
 
-    // C1: race transcribe against a 20s timeout
+    // C1: race transcribe against a 20s timeout (M2: always clear the timer)
     let text: string;
+    let transcribeTimeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Transcription timed out.")), TRANSCRIBE_TIMEOUT_MS)
-      );
-      text = await Promise.race([getTranscribe(Array.from(samples)), timeoutPromise]);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        transcribeTimeoutId = setTimeout(
+          () => reject(new Error("Transcription timed out.")),
+          TRANSCRIBE_TIMEOUT_MS
+        );
+      });
+      try {
+        text = await Promise.race([getTranscribe(Array.from(samples)), timeoutPromise]);
+      } finally {
+        clearTimeout(transcribeTimeoutId);
+      }
     } catch (err) {
       // I1: if cancelled while transcribing, discard silently
       if (cancelledRef.current) {

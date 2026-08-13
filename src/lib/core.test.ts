@@ -54,12 +54,12 @@ describe("voice wrappers", () => {
     expect(text).toBe("hello world");
   });
 
-  it("ttsSpeak passes text and voice_id (snake_case) to tts_speak", async () => {
+  it("ttsSpeak passes text and voiceId (camelCase) to tts_speak", async () => {
     invoke.mockResolvedValue([1, 2, 3]);
     const bytes = await ttsSpeak("Hello", "en_US-lessac-medium");
     expect(invoke).toHaveBeenCalledWith("tts_speak", {
       text: "Hello",
-      voice_id: "en_US-lessac-medium",
+      voiceId: "en_US-lessac-medium",
     });
     expect(bytes).toEqual([1, 2, 3]);
   });

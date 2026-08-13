@@ -340,7 +340,8 @@ export default function Shell() {
         {voice.state === "transcribing" && "transcribing..."}
         {voice.state === "speaking" && "speaking..."}
         {voice.state === "unavailable" && `${voice.error ?? "Voice unavailable"} — open Settings`}
-        {voice.state === "idle" && voiceReady && "hold the orb or Space to talk"}
+        {voice.state === "idle" && voice.error && voice.error}
+        {voice.state === "idle" && !voice.error && voiceReady && "hold the orb or Space to talk"}
       </div>
 
       {/* Main column */}
