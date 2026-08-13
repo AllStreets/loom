@@ -11,33 +11,54 @@ const MANIFEST = JSON.stringify({
 const ORGAN_JS = `export default {
   id: "notes",
   render(el, loom) {
-    const ui = loom.ui;
-    const { root, body } = ui.card({ title: "Notes" });
+    var ui = loom.ui;
+    var { root, body } = ui.card({ title: "Notes" });
 
-    const heading = ui.heading("Quick Capture", "Jot a thought, keep it forever.");
-    const input = ui.input({ placeholder: "New note...", action: "new-note", onEnter: addNote });
-    const addBtn = ui.button("Add", { variant: "primary", action: "add" });
-    const inputRow = ui.row(input, addBtn);
+    // hero moment: note count + 7-day spark
+    var heroEl = ui.hero(0, "notes captured");
+    var sparkEl = ui.spark([], { width: 72, height: 20 });
+    var heroRow = ui.row(heroEl, sparkEl);
+    heroRow.style.justifyContent = "space-between";
+    heroRow.style.alignItems = "flex-end";
+
+    var heading = ui.heading("Quick Capture", "Jot a thought, keep it forever.");
+    var input = ui.input({ placeholder: "New note...", action: "new-note", onEnter: addNote });
+    var addBtn = ui.button("Add", { variant: "primary", action: "add" });
+    var inputRow = ui.row(input, addBtn);
     input.style.flex = "1";
 
-    const noteList = ui.list();
-    const countStat = ui.stat("notes", 0);
+    var noteList = ui.list();
 
+    body.appendChild(heroRow);
     body.appendChild(heading);
     body.appendChild(inputRow);
     body.appendChild(noteList.root);
-    body.appendChild(countStat);
     el.appendChild(root);
 
+    function last7DayCounts(items) {
+      var now = Date.now();
+      var DAY = 86400000;
+      var counts = [];
+      for (var d = 6; d >= 0; d--) {
+        var dayStart = now - (d + 1) * DAY;
+        var dayEnd = now - d * DAY;
+        var count = 0;
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].t >= dayStart && items[i].t < dayEnd) count++;
+        }
+        counts.push(count);
+      }
+      return counts;
+    }
+
     function refresh() {
-      const items = loom.storage.get("items", []);
+      var items = loom.storage.get("items", []);
       noteList.clear();
-      const sorted = items.slice().sort(function(a, b) { return b.t - a.t; });
+      var sorted = items.slice().sort(function(a, b) { return b.t - a.t; });
       if (sorted.length === 0) {
         noteList.add(ui.empty("No notes yet."));
       } else {
         for (var i = 0; i < sorted.length; i++) {
-          var item = sorted[i];
           (function(it) {
             var row = ui.listRow(it.text, {
               onRemove: function() {
@@ -48,10 +69,11 @@ const ORGAN_JS = `export default {
               removeAction: "remove",
             });
             noteList.add(row);
-          })(item);
+          })(sorted[i]);
         }
       }
-      ui.setStat(countStat, items.length);
+      heroEl._valNode.textContent = String(items.length);
+      sparkEl.update(last7DayCounts(items));
     }
 
     function addNote() {
@@ -74,13 +96,13 @@ const TEST_JS = `export const tests = [
   {
     name: "adds a note to storage",
     fn: async ({ el, loom, assert }) => {
-      const input = el.querySelector('[data-action="new-note"]');
+      var input = el.querySelector('[data-action="new-note"]');
       assert(input !== null, "input exists");
       input.value = "hello world";
-      const btn = el.querySelector('[data-action="add"]');
+      var btn = el.querySelector('[data-action="add"]');
       assert(btn !== null, "button exists");
       btn.click();
-      const items = loom.storage.get("items", []);
+      var items = loom.storage.get("items", []);
       assert(items.length === 1, "storage has 1 item");
       assert(items[0].text === "hello world", "item text matches");
     },
@@ -89,7 +111,7 @@ const TEST_JS = `export const tests = [
     name: "renders existing notes",
     fn: async ({ loom, organ, assert }) => {
       loom.storage.set("items", [{ t: 1700000000000, text: "existing note" }]);
-      const freshEl = document.createElement("div");
+      var freshEl = document.createElement("div");
       organ.render(freshEl, loom);
       assert(freshEl.textContent.includes("existing note"), "existing note is rendered");
     },
@@ -98,13 +120,24 @@ const TEST_JS = `export const tests = [
     name: "removes a note",
     fn: async ({ loom, organ, assert }) => {
       loom.storage.set("items", [{ t: 1700000000000, text: "note to remove" }]);
-      const freshEl = document.createElement("div");
+      var freshEl = document.createElement("div");
       organ.render(freshEl, loom);
-      const removeBtn = freshEl.querySelector('[data-action="remove"]');
+      var removeBtn = freshEl.querySelector('[data-action="remove"]');
       assert(removeBtn !== null, "remove button exists");
       removeBtn.click();
-      const items = loom.storage.get("items", []);
+      var items = loom.storage.get("items", []);
       assert(items.length === 0, "storage has 0 items");
+    },
+  },
+  {
+    name: "hero count updates after add",
+    fn: async ({ el, loom, assert }) => {
+      var input = el.querySelector('[data-action="new-note"]');
+      var btn = el.querySelector('[data-action="add"]');
+      input.value = "first";
+      btn.click();
+      var items = loom.storage.get("items", []);
+      assert(items.length === 1, "storage has 1 item after add");
     },
   },
 ];`;

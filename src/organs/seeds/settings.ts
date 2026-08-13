@@ -24,15 +24,16 @@ const ORGAN_JS = `export default {
     var voiceCard = ui.card({ title: "Voice" });
     var voiceBody = voiceCard.body;
 
-    var heading = ui.heading("Voice", "Choose a voice, audition it, and set when LOOM speaks.");
-    voiceBody.appendChild(heading);
+    voiceBody.appendChild(ui.heading("Voice", "Choose a voice, audition it, and set when LOOM speaks."));
 
-    // Status line + download
-    var statusLine = document.createElement("div");
-    statusLine.style.fontSize = "13px";
-    statusLine.style.color = ui.tokens.t2;
-    statusLine.textContent = "Checking voice status...";
-    voiceBody.appendChild(statusLine);
+    // Status row with dot
+    var voiceStatusDot = ui.dot("warn");
+    var statusText = document.createElement("span");
+    statusText.style.fontSize = "13px";
+    statusText.style.color = ui.tokens.t2;
+    statusText.textContent = "Checking voice status...";
+    var statusRow = ui.row(voiceStatusDot, statusText);
+    voiceBody.appendChild(statusRow);
 
     var downloadRow = document.createElement("div");
     downloadRow.style.display = "none";
@@ -58,11 +59,14 @@ const ORGAN_JS = `export default {
       }).catch(function(err) {
         downloadBtn.textContent = "Download failed — retry";
         downloadBtn.disabled = false;
-        statusLine.textContent = String(err);
+        statusText.textContent = String(err);
       });
     });
 
-    // Voice list
+    // Voices section
+    var voicesSection = ui.section("Voices");
+    voiceBody.appendChild(voicesSection);
+
     var voiceList = ui.list();
     voiceBody.appendChild(voiceList.root);
 
@@ -71,11 +75,12 @@ const ORGAN_JS = `export default {
       for (var i = 0; i < voices.length; i++) {
         (function(v) {
           var isDefault = v.id === currentDefault;
-          var label = document.createElement("div");
-          label.style.fontSize = "14px";
-          label.style.color = ui.tokens.t1;
-          label.style.flex = "1";
-          label.textContent = v.label + (v.present ? "" : " (not downloaded)");
+          var presenceDot = ui.dot(v.present ? "go" : "muted");
+          var labelEl = document.createElement("span");
+          labelEl.style.fontSize = "14px";
+          labelEl.style.color = ui.tokens.t1;
+          labelEl.style.flex = "1";
+          labelEl.textContent = v.label;
 
           var auditionBtn = ui.button("Audition", { variant: "ghost", action: "audition-" + v.id });
           auditionBtn.addEventListener("click", function() {
@@ -103,26 +108,16 @@ const ORGAN_JS = `export default {
             });
           }
 
-          var row = document.createElement("div");
-          row.style.display = "flex";
-          row.style.alignItems = "center";
+          var row = ui.row(presenceDot, labelEl, auditionBtn, useBtn);
           row.style.flexWrap = "wrap";
-          row.style.gap = "8px";
-          row.appendChild(label);
-          row.appendChild(auditionBtn);
-          row.appendChild(useBtn);
           voiceList.add(row);
         })(voices[i]);
       }
     }
 
-    // Speak-replies segmented control
-    var speakLabel = document.createElement("div");
-    speakLabel.style.fontSize = "12.5px";
-    speakLabel.style.color = ui.tokens.t2;
-    speakLabel.style.marginTop = "4px";
-    speakLabel.textContent = "Speak replies";
-    voiceBody.appendChild(speakLabel);
+    // Speak-replies section
+    var speakSection = ui.section("Speak replies");
+    voiceBody.appendChild(speakSection);
 
     var speakOptions = [
       { label: "Always", value: "always", action: "speak-always" },
@@ -173,12 +168,14 @@ const ORGAN_JS = `export default {
     }
     voiceBody.appendChild(speakRow);
 
-    // Mic test
+    // Mic test section
+    var micSection = ui.section("Microphone");
+    voiceBody.appendChild(micSection);
+
     var micTestBtn = ui.button("Test microphone", { variant: "ghost", action: "mic-test" });
-    var micResult = document.createElement("div");
+    var micResult = document.createElement("span");
     micResult.style.fontSize = "12.5px";
     micResult.style.color = ui.tokens.t3;
-    micResult.style.minHeight = "16px";
     micTestBtn.addEventListener("click", function() {
       micTestBtn.disabled = true;
       micTestBtn.textContent = "Recording 2s...";
@@ -305,14 +302,20 @@ const ORGAN_JS = `export default {
     function refreshStatus() {
       settings.voiceStatus().then(function(status) {
         if (status.ready) {
-          statusLine.textContent = "Voice models ready.";
+          statusText.textContent = "Voice models ready.";
+          voiceStatusDot.style.background = ui.tokens.go;
+          voiceStatusDot.style.boxShadow = "0 0 6px " + ui.tokens.go;
           downloadRow.style.display = "none";
         } else {
-          statusLine.textContent = "Models not downloaded." + (status.missing_bytes_hint ? " (~" + status.missing_bytes_hint + ")" : "");
+          statusText.textContent = "Models not downloaded." + (status.missing_bytes_hint ? " (~" + status.missing_bytes_hint + ")" : "");
+          voiceStatusDot.style.background = ui.tokens.warn;
+          voiceStatusDot.style.boxShadow = "0 0 6px " + ui.tokens.warn;
           downloadRow.style.display = "block";
         }
       }).catch(function() {
-        statusLine.textContent = "Voice not available.";
+        statusText.textContent = "Voice not available.";
+        voiceStatusDot.style.background = ui.tokens.danger;
+        voiceStatusDot.style.boxShadow = "0 0 6px " + ui.tokens.danger;
       });
     }
 

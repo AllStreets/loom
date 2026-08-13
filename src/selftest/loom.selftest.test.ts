@@ -454,6 +454,67 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     console.info(`[tests-grounded-in-dom] ${passed}/${REPS} passed`);
   });
 
+  it("build-dashboardy-organ: 3 reps — model reaches for hero pattern", async () => {
+    const m = model ?? (await pickBuilder());
+    const system = organSystemPrompt("code");
+    const DASH_MANIFEST = JSON.stringify({
+      id: "step-counter",
+      name: "Step Counter",
+      description: "Daily step count with a goal.",
+      version: 1,
+      permissions: ["storage"],
+    });
+    const user = `Manifest:\n${DASH_MANIFEST}\n\nBuild an organ showing my daily step count with a goal.`;
+
+    let passed = 0;
+    for (let rep = 1; rep <= REPS; rep++) {
+      const t0 = Date.now();
+      const raw = await chat(m, system, user);
+      const code = extractCode(raw);
+      const ms = Date.now() - t0;
+
+      const hasExportDefault = code.includes("export default");
+      const hasRender = code.includes("render");
+      // Hero pattern: model must reach for ui.hero, ui.progress, or ui.stat
+      const hasHeroPattern =
+        code.includes("ui.hero") ||
+        code.includes("ui.progress") ||
+        code.includes("ui.stat") ||
+        code.includes("loom.ui.hero") ||
+        code.includes("loom.ui.progress") ||
+        code.includes("loom.ui.stat");
+
+      const stripped = code
+        .replace(/^export\s+default\s+/, "const __organ = ")
+        .replace(/\bimport\b[^;]*;?\s*/g, "");
+      let fnOk = false;
+      let fnErr = "";
+      try {
+        new Function(stripped);
+        fnOk = true;
+      } catch (e) {
+        fnErr = String(e);
+      }
+
+      const ok = hasExportDefault && hasRender && fnOk && hasHeroPattern;
+      if (ok) {
+        passed++;
+        console.info(`[build-dashboardy-organ] rep ${rep} PASS (${ms}ms) heroPattern=${hasHeroPattern}`);
+      } else {
+        console.info(
+          `[build-dashboardy-organ] rep ${rep} FAIL (${ms}ms) exportDefault=${hasExportDefault} render=${hasRender} fnOk=${fnOk} heroPattern=${hasHeroPattern} fnErr=${fnErr}`
+        );
+        console.info(`  code snippet:\n${code.slice(0, 400)}`);
+      }
+
+      expect(hasExportDefault, `rep ${rep}: missing 'export default'`).toBe(true);
+      expect(hasRender, `rep ${rep}: missing 'render'`).toBe(true);
+      expect(fnOk, `rep ${rep}: new Function threw: ${fnErr}`).toBe(true);
+      expect(hasHeroPattern, `rep ${rep}: organ does not use a hero pattern (ui.hero / ui.progress / ui.stat)`).toBe(true);
+    }
+    console.info(`[build-dashboardy-organ] ${passed}/${REPS} passed`);
+  });
+
   it("edit-organ: 3 reps — notes seed organ.js heading change", async () => {
     const m = model ?? (await pickBuilder());
 
