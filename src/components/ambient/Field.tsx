@@ -6,7 +6,7 @@
  * Zero allocation in tick — particle array preallocated.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { subscribe } from "../../lib/ambient/ambientLoop";
 
 const MAX_PARTICLES = 90;
@@ -57,9 +57,20 @@ function createColorStrings(particles: Particle[]): string[] {
 
 export default function Field() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const reducedMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const [reducedMotion, setReducedMotion] = useState<boolean>(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false
+  );
+
+  // Keep reducedMotion in sync with OS-level changes dynamically
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    function onChange(e: MediaQueryListEvent) { setReducedMotion(e.matches); }
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
 
   const count = reducedMotion ? REDUCED_PARTICLES : MAX_PARTICLES;
   // Preallocate once, stable across renders

@@ -7,7 +7,7 @@
  * Skips redraw when document.hidden.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { subscribe } from "../../lib/ambient/ambientLoop";
 import { windowRegistry } from "../../lib/ambient/windowRegistry";
 
@@ -66,9 +66,20 @@ export default function Threads() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const threadStateRef = useRef<Map<string, ThreadState>>(new Map());
 
-  const reducedMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const [reducedMotion, setReducedMotion] = useState<boolean>(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false
+  );
+
+  // Keep reducedMotion in sync with OS-level changes dynamically
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    function onChange(e: MediaQueryListEvent) { setReducedMotion(e.matches); }
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
 
   useEffect(() => {
     // Listen for organ-focus events to brighten the corresponding thread

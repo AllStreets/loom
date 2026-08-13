@@ -390,42 +390,70 @@ describe("Desktop", () => {
   });
 
   it("window spawn y is clamped when plane has a measurable height", async () => {
-    // We test the clamping logic: if planeH is small, windows at high index won't exceed planeH - 72.
-    // In jsdom, offsetHeight is 0 by default, so we mock it.
-    // We place a large index (i=20) organ and verify spawn y is bounded.
-    // Build 21 organs to trigger a high-cascade spawn offset
-    const organs = Array.from({ length: 3 }, (_, i) => ({
-      id: `organ-${i}`,
-      manifest: JSON.stringify({
+    // Mock offsetHeight on the prototype BEFORE rendering so Desktop's clamp logic sees a real height.
+    // With PLANE_H=200, DOCK_CLEARANCE=72, maxY = 200 - 72 - 28 = 100.
+    // organ index 5 would normally spawn at rawY = 40 + 5*36 = 220, which exceeds 100, so it gets clamped.
+    const PLANE_H = 200;
+    const DOCK_CLEARANCE = 72;
+    const TITLE_BAR_H = 28;
+    const maxAllowedY = PLANE_H - DOCK_CLEARANCE - TITLE_BAR_H; // 100
+
+    const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetHeight"
+    );
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get() { return PLANE_H; },
+    });
+
+    try {
+      // 6 organs: index 5 spawns at rawY = 40 + 5*36 = 220, well above 100
+      const organs = Array.from({ length: 6 }, (_, i) => ({
         id: `organ-${i}`,
-        name: `Organ ${i}`,
-        description: "Test",
-        version: 1,
-        permissions: [],
-      }),
-      granted: JSON.stringify([]),
-    }));
+        manifest: JSON.stringify({
+          id: `organ-${i}`,
+          name: `Organ ${i}`,
+          description: "Test",
+          version: 1,
+          permissions: [],
+        }),
+        granted: JSON.stringify([]),
+      }));
 
-    invoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "organ_list") return organs;
-      if (cmd === "organ_read")
-        return `export default { id: 'test', render(el){ el.textContent = 'ok'; } }`;
-      return null;
-    });
+      invoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "organ_list") return organs;
+        if (cmd === "organ_read")
+          return `export default { id: 'test', render(el){ el.textContent = 'ok'; } }`;
+        return null;
+      });
 
-    render(<Desktop />);
+      render(<Desktop />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("title-bar-organ-0")).toBeInTheDocument();
-    });
+      await waitFor(() => {
+        expect(screen.getByTestId("title-bar-organ-5")).toBeInTheDocument();
+      });
 
-    // Mock plane offsetHeight so clamping activates
-    const plane = screen.getByTestId("desktop-plane");
-    Object.defineProperty(plane, "offsetHeight", { value: 300, configurable: true });
+      // The last organ window's .glass element should have top <= maxAllowedY (clamped)
+      const titleBar5 = screen.getByTestId("title-bar-organ-5");
+      const windowRoot = titleBar5.closest(".glass") as HTMLElement | null;
+      expect(windowRoot).not.toBeNull();
 
-    // Verify the plane renders; the clamping logic is defensive (skips when 0 in jsdom).
-    // This test validates that the desktop renders multiple windows without crashing.
-    expect(screen.getByTestId("title-bar-organ-2")).toBeInTheDocument();
+      const topStyle = windowRoot!.style.top;
+      if (topStyle) {
+        const actualY = parseFloat(topStyle);
+        expect(actualY).toBeLessThanOrEqual(maxAllowedY);
+      }
+      // If top is not set as inline style (jsdom limitation), the presence of the window is sufficient
+    } finally {
+      // Restore the original descriptor to avoid polluting other tests
+      if (offsetHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetHeight;
+      }
+    }
   });
 
   it("organ-focus event restores and focuses the window", async () => {

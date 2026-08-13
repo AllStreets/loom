@@ -406,7 +406,7 @@ function makeUi(tokens) {
 
     // --- section(title) --- titled group with mono uppercase label + hairline
     section: function(title) {
-      var wrap = el('div', { display:'flex', flexDirection:'column', gap:'8px', marginTop:'8px' });
+      var wrap = el('div', { marginTop:'8px' });
       var header = el('div', { display:'flex', alignItems:'center', gap:'8px' });
       var label = el('span', {
         fontSize:'10px',

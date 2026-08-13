@@ -65,3 +65,21 @@ describe("buildHarnessSrc", () => {
     expect(src).toContain("false");
   });
 });
+
+describe("renderProbe", () => {
+  it("returns {ok:false} when manifestGuard fails (bad manifest)", async () => {
+    const { renderProbe } = await import("./validate");
+    const files = { manifest: "{not json}", code: "export default {render(){}}", tests: "" };
+    const result = await renderProbe(files);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeDefined();
+  });
+
+  it("returns {ok:false} when manifestGuard fails (unknown permission)", async () => {
+    const { renderProbe } = await import("./validate");
+    const badManifest = JSON.stringify({ id: "x", name: "X", description: "d", version: 1, permissions: ["filesystem"] });
+    const result = await renderProbe({ manifest: badManifest, code: "", tests: "" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("unknown permission");
+  });
+});

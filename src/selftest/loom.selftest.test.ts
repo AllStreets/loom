@@ -405,9 +405,25 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
       return (src.match(/\.value\s*=/g) ?? []).length;
     }
     function countAddClicks(src: string): number {
-      // matches .click() on add buttons or querySelector('[data-action="add"]').click()
-      const addPattern = /\[data-action="add"\][^;]*\.click\(\)/g;
-      return (src.match(addPattern) ?? []).length;
+      // Form 1: chained querySelector('[data-action="add"]').click()
+      const chainedPattern = /\[data-action="add"\][^;]*\.click\(\)/g;
+      const chainedCount = (src.match(chainedPattern) ?? []).length;
+
+      // Form 2: separated variable — const b = el.querySelector('[data-action="add"]'); b.click()
+      // Find variable names assigned from add-selector queries
+      const addVarPattern = /(?:const|let|var)\s+(\w+)\s*=\s*[^;]*\[data-action="add"\]/g;
+      const addVarNames: string[] = [];
+      for (const m of src.matchAll(addVarPattern)) {
+        addVarNames.push(m[1]);
+      }
+      let separatedCount = 0;
+      for (const varName of addVarNames) {
+        // count how many times varName.click() appears
+        const varClickPattern = new RegExp("\\b" + varName + "\\s*\\.click\\(\\)", "g");
+        separatedCount += (src.match(varClickPattern) ?? []).length;
+      }
+
+      return chainedCount + separatedCount;
     }
 
     const domActions = extractDomActions(MOVIE_DOM);
