@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { type OrganState, mountOrgan } from "../../lib/organs/host";
+import { windowRegistry } from "../../lib/ambient/windowRegistry";
 
 type WinPos = {
   x: number;
@@ -83,6 +84,19 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // Register window position in ambient registry on mount/pos change
+  useEffect(() => {
+    windowRegistry.set(id, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
+  });
+
+  // Clean up registry on unmount
+  useEffect(() => {
+    return () => {
+      windowRegistry.delete(id);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   // Drag logic
   function handleTitlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if ((e.target as HTMLElement).closest("[data-action]")) return;
@@ -119,11 +133,15 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     function onMove(ev: PointerEvent) {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
-      setPos((p) => ({
-        ...p,
-        x: clampX(origX + dx, p.w),
-        y: clampY(origY + dy, p.h),
-      }));
+      setPos((p) => {
+        const next = {
+          ...p,
+          x: clampX(origX + dx, p.w),
+          y: clampY(origY + dy, p.h),
+        };
+        windowRegistry.set(id, { x: next.x, y: next.y, w: next.w, h: next.h });
+        return next;
+      });
     }
 
     function onUp(ev: PointerEvent) {

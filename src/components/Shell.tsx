@@ -3,6 +3,8 @@ import { motion, useReducedMotion } from "framer-motion";
 import { Orb } from "./orb/Orb";
 import Companion from "./Companion";
 import Desktop from "./desktop/Desktop";
+import Field from "./ambient/Field";
+import Threads from "./ambient/Threads";
 import { fleetStatus, timelineInit, timelineLog, voiceStatus, type RoleStatus, type Commit } from "../lib/core";
 import { MOOD_TARGETS, type OrbMood } from "../lib/orb/state";
 import { organList, organWrite } from "../lib/core";
@@ -20,12 +22,27 @@ const ACTIVE_MOODS: ReadonlySet<OrbMood> = new Set([
 
 const SPRING = { type: "spring" as const, stiffness: 260, damping: 24 };
 
+const IGNITION_KEY = "loom.ignited";
+
+type IgnitionPhase = "igniting" | "done";
+
 export default function Shell() {
   const [mood, setMood] = useState<OrbMood>("idle");
   const [roles, setRoles] = useState<RoleStatus[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [voiceReady, setVoiceReady] = useState(false);
   const reducedMotion = useReducedMotion() ?? false;
+
+  // ----- Ignition sequence state -----
+  const alreadyIgnited = typeof localStorage !== "undefined"
+    ? !!localStorage.getItem(IGNITION_KEY)
+    : true;
+  const [ignitionPhase, setIgnitionPhase] = useState<IgnitionPhase>(
+    alreadyIgnited ? "done" : "igniting"
+  );
+  const [ignitionOpacity, setIgnitionOpacity] = useState(0);
+  const [orbScale, setOrbScale] = useState(alreadyIgnited ? 1 : 0.6);
+  const ignitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Voice state machine
   const voice = useVoice();
@@ -184,6 +201,44 @@ export default function Shell() {
     };
   }, [voice]);
 
+  // ----- Ignition sequence -----
+  useEffect(() => {
+    if (ignitionPhase === "done") {
+      setIgnitionOpacity(1);
+      return;
+    }
+
+    // First boot: 1.8s bloom sequence
+    // Phase 1: Fade in shell (opacity 0→1) + orb blooms (scale 0.6→1)
+    const t1 = setTimeout(() => {
+      setIgnitionOpacity(1);
+      setOrbScale(1);
+    }, 50); // next tick so CSS transition fires
+
+    // Phase 2: After 1.8s, mark ignition done
+    const t2 = setTimeout(() => {
+      setIgnitionPhase("done");
+      try { localStorage.setItem(IGNITION_KEY, "1"); } catch { /* ignore */ }
+    }, 1800);
+
+    ignitionTimerRef.current = t2;
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function skipIgnition() {
+    if (ignitionPhase === "done") return;
+    if (ignitionTimerRef.current) clearTimeout(ignitionTimerRef.current);
+    setIgnitionOpacity(1);
+    setOrbScale(1);
+    setIgnitionPhase("done");
+    try { localStorage.setItem(IGNITION_KEY, "1"); } catch { /* ignore */ }
+  }
+
   // ----- ambient glow color -----
   const moodColor = MOOD_TARGETS[mood].color;
   // 0x12 ≈ 7% alpha — the room shifts with the orb's mood, subtly
@@ -200,10 +255,17 @@ export default function Shell() {
 
   const PanelTag = reducedMotion ? "div" : motion.div;
 
+  // Ignition animation timing
+  const ignitionDuration = reducedMotion ? "0.3s" : alreadyIgnited ? "0.6s" : "1.8s";
+  const orbTransition = reducedMotion
+    ? "opacity 0.3s ease"
+    : `opacity ${ignitionDuration} ease, transform 1.8s cubic-bezier(0.34,1.56,0.64,1)`;
+
   return (
     <div
       ref={shellRef}
       data-testid="loom-shell"
+      onClick={ignitionPhase === "igniting" ? skipIgnition : undefined}
       style={{
         height: "100vh",
         overflow: "hidden",
@@ -212,8 +274,13 @@ export default function Shell() {
         position: "relative",
         "--mx": "50%",
         "--my": "30%",
+        opacity: ignitionOpacity,
+        transition: `opacity ${ignitionDuration} ease`,
       } as React.CSSProperties}
     >
+      {/* Ambient particle field — behind everything, zIndex:1 */}
+      <Field />
+
       {/* Ambient mood glow — behind everything */}
       <div
         aria-hidden
@@ -313,6 +380,8 @@ export default function Shell() {
             margin: "12px 0 24px",
             position: "relative",
             cursor: "pointer",
+            transform: `scale(${orbScale})`,
+            transition: orbTransition,
           }}
         >
           <Orb mood={mood} size={180} />
@@ -368,6 +437,8 @@ export default function Shell() {
           zIndex: 10,
         }}
       >
+        {/* Ambient Threads — above desktop plane, below windows */}
+        <Threads />
         {/* Main column */}
         <div
           style={{
