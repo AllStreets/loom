@@ -9,7 +9,10 @@ import type { CompanionTurn } from "../lib/companion/runtime";
 // ---------------------------------------------------------------------------
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue([]),
+  invoke: vi.fn().mockImplementation((cmd: string) => {
+    if (cmd === "tts_speak") return Promise.resolve([1, 2, 3]);
+    return Promise.resolve([]);
+  }),
 }));
 
 const mockHandle = vi.fn<
@@ -18,6 +21,11 @@ const mockHandle = vi.fn<
 
 vi.mock("../lib/companion/runtime", () => ({
   handle: (...args: Parameters<typeof mockHandle>) => mockHandle(...args),
+}));
+
+vi.mock("../lib/voice/player", () => ({
+  playWav: vi.fn().mockResolvedValue(undefined),
+  stopPlayback: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -425,5 +433,106 @@ describe("Companion mood lifecycle", () => {
       vi.advanceTimersByTime(3000);
     });
     expect(moodEvents().filter((m) => m === "idle").length).toBe(idleCountAfterUnmount);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loom-utterance integration tests
+// ---------------------------------------------------------------------------
+
+describe("Companion: loom-utterance -> submits via runTurn", () => {
+  beforeEach(() => {
+    mockHandle.mockReset();
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it("dispatching loom-utterance calls handle with the spoken text", async () => {
+    mockHandle.mockResolvedValue({ kind: "reply", text: "I heard you" });
+
+    render(<Companion />);
+
+    // Wait for useEffect (loom-utterance listener) to mount
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("loom-utterance", { detail: { text: "hello from voice", spoken: true } })
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    await waitFor(() => {
+      expect(mockHandle).toHaveBeenCalledTimes(1);
+    }, { timeout: 2000 });
+    expect(mockHandle.mock.calls[0][0]).toBe("hello from voice");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spoken replies tests
+// ---------------------------------------------------------------------------
+
+describe("Companion: speaks reply when setting demands", () => {
+  let dispatchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockHandle.mockReset();
+    vi.clearAllMocks();
+    localStorage.clear();
+    dispatchSpy = vi.spyOn(window, "dispatchEvent");
+  });
+
+  afterEach(() => {
+    dispatchSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  function moodEvents() {
+    return dispatchSpy.mock.calls
+      .map((c) => c[0] as CustomEvent)
+      .filter((e) => e.type === "loom-mood")
+      .map((e) => (e as CustomEvent<{ mood: string }>).detail.mood);
+  }
+
+  it("with speakReplies=never, uses normal settleMood path (speaking dispatched)", async () => {
+    localStorage.setItem("voice.speakReplies", "never");
+    mockHandle.mockResolvedValue({ kind: "reply", text: "hello from loom" });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+
+    await userEvent.type(textarea, "greet");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(mockHandle).toHaveBeenCalled());
+    // With "never", settleMood should be called -> speaking dispatched immediately
+    await waitFor(() => expect(moodEvents()).toContain("speaking"));
+  });
+
+  it("with speakReplies=always and spoken turn, speaking mood dispatched without 2.5s timer", async () => {
+    localStorage.setItem("voice.speakReplies", "always");
+    mockHandle.mockResolvedValue({ kind: "reply", text: "always speak this" });
+
+    render(<Companion />);
+
+    // Wait for effects to mount (loom-utterance listener registers in useEffect)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // Dispatch a spoken utterance to set spokenTurnRef = true and trigger runTurn
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("loom-utterance", { detail: { text: "hello", spoken: true } })
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    await waitFor(() => expect(mockHandle).toHaveBeenCalled(), { timeout: 2000 });
+    // speaking mood should be dispatched (from ttsSpeak path)
+    await waitFor(() => expect(moodEvents()).toContain("speaking"), { timeout: 2000 });
   });
 });

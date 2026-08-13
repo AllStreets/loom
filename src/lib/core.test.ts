@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak } from "./core";
 
 beforeEach(() => invoke.mockReset());
 
@@ -30,5 +30,37 @@ describe("core wrappers", () => {
     const sha = await organWrite("runs", files, "organ: runs");
     expect(invoke).toHaveBeenCalledWith("organ_write", { id: "runs", files, message: "organ: runs" });
     expect(sha).toBe("abc123");
+  });
+});
+
+describe("voice wrappers", () => {
+  it("voiceStatus calls voice_status with no args", async () => {
+    invoke.mockResolvedValue({ ready: false, whisper: false, voices: [], missing_bytes_hint: null });
+    const status = await voiceStatus();
+    expect(invoke).toHaveBeenCalledWith("voice_status");
+    expect(status.ready).toBe(false);
+  });
+
+  it("voiceSetup calls voice_setup with no args", async () => {
+    invoke.mockResolvedValue(undefined);
+    await voiceSetup();
+    expect(invoke).toHaveBeenCalledWith("voice_setup");
+  });
+
+  it("sttTranscribe passes samples array under the key 'samples'", async () => {
+    invoke.mockResolvedValue("hello world");
+    const text = await sttTranscribe([0.1, 0.2, 0.3]);
+    expect(invoke).toHaveBeenCalledWith("stt_transcribe", { samples: [0.1, 0.2, 0.3] });
+    expect(text).toBe("hello world");
+  });
+
+  it("ttsSpeak passes text and voiceId (camelCase) to tts_speak", async () => {
+    invoke.mockResolvedValue([1, 2, 3]);
+    const bytes = await ttsSpeak("Hello", "en_US-lessac-medium");
+    expect(invoke).toHaveBeenCalledWith("tts_speak", {
+      text: "Hello",
+      voiceId: "en_US-lessac-medium",
+    });
+    expect(bytes).toEqual([1, 2, 3]);
   });
 });

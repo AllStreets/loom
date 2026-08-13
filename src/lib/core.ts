@@ -1,5 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 
+// ── Voice types ────────────────────────────────────────────────────────────────
+
+export type VoicePresence = { id: string; label: string; present: boolean };
+export type VoiceStatus = {
+  ready: boolean;
+  whisper: boolean;
+  voices: VoicePresence[];
+  missing_bytes_hint: string | null;
+};
+
 export type RoleStatus = { role: string; model: string; present: boolean };
 export type Msg = { role: "system" | "user" | "assistant"; content: string };
 export type Commit = { sha: string; message: string };
@@ -28,3 +38,12 @@ export const organRead = (id: string, name: string) => invoke<string>("organ_rea
 export const organGrant = (id: string, grantedJson: string) =>
   invoke<string>("organ_grant", { id, grantedJson });
 export const organDelete = (id: string) => invoke<string>("organ_delete", { id });
+
+// ── Voice wrappers ─────────────────────────────────────────────────────────────
+
+export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
+export const voiceSetup = () => invoke<void>("voice_setup");
+export const sttTranscribe = (samples: number[]) =>
+  invoke<string>("stt_transcribe", { samples });
+export const ttsSpeak = (text: string, voiceId: string) =>
+  invoke<number[]>("tts_speak", { text, voiceId });
