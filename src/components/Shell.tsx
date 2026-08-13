@@ -7,7 +7,7 @@ import { fleetStatus, timelineInit, timelineLog, voiceStatus, type RoleStatus, t
 import { MOOD_TARGETS, type OrbMood } from "../lib/orb/state";
 import { organList, organWrite } from "../lib/core";
 import { installSeeds } from "../organs/seeds/install";
-import { useVoice } from "../lib/voice/useVoice";
+import { useVoice, makeSpacePttHandlers } from "../lib/voice/useVoice";
 import { audioLevel } from "../lib/orb/audioLevel";
 
 // Active turn moods — fleet-offline cannot override these
@@ -175,22 +175,7 @@ export default function Shell() {
 
   // ----- Space PTT keyboard handler -----
   useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.code !== "Space" || e.repeat) return;
-      const target = e.target as HTMLElement;
-      if (
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable ||
-        target.contentEditable === "true"
-      ) return;
-      e.preventDefault();
-      void voice.start();
-    }
-    function onKeyUp(e: KeyboardEvent) {
-      if (e.code !== "Space") return;
-      void voice.stop();
-    }
+    const { onKeyDown, onKeyUp } = makeSpacePttHandlers(voice);
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     return () => {
@@ -307,9 +292,8 @@ export default function Shell() {
       {/* Orb hero */}
       <div
         data-testid="orb-hero"
-        onPointerDown={() => { void voice.start(); }}
+        onPointerDown={(e) => { (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId); void voice.start(); }}
         onPointerUp={() => { void voice.stop(); }}
-        onPointerLeave={() => { void voice.stop(); }}
         onPointerCancel={() => { void voice.stop(); }}
         style={{
           display: "flex",
@@ -354,6 +338,7 @@ export default function Shell() {
       >
         {voice.state === "listening" && "listening..."}
         {voice.state === "transcribing" && "transcribing..."}
+        {voice.state === "speaking" && "speaking..."}
         {voice.state === "unavailable" && `${voice.error ?? "Voice unavailable"} — open Settings`}
         {voice.state === "idle" && voiceReady && "hold the orb or Space to talk"}
       </div>

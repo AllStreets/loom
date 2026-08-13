@@ -1,5 +1,5 @@
 import { renderHook, act } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import { useVoice } from "./useVoice";
 
 describe("useVoice state machine", () => {
@@ -145,5 +145,90 @@ describe("useVoice state machine", () => {
     expect(result.current.state).toBe("idle");
     expect(cancelFn).toHaveBeenCalled();
     expect(moodEvents()).toContain("idle");
+  });
+
+  // ── C1: transcription timeout ───────────────────────────────────────────────
+
+  it("C1: transcribe timeout (20s): stop() -> idle with timeout error", async () => {
+    vi.useFakeTimers();
+    const bigSamples = new Float32Array(16000);
+    let resolveTranscribe!: (v: string) => void;
+    const neverResolves = new Promise<string>((res) => { resolveTranscribe = res; });
+
+    const { result } = renderHook(() => useVoice({
+      status: async () => ({ ready: true }),
+      record: async () => ({ stop: () => bigSamples, cancel: vi.fn() }),
+      transcribe: () => neverResolves,
+    }));
+
+    await act(async () => { await result.current.start(); });
+    expect(result.current.state).toBe("listening");
+
+    // Begin stop (starts transcribing, which will time out)
+    let stopDone = false;
+    act(() => { void result.current.stop().then(() => { stopDone = true; }); });
+
+    // Advance past 20s timeout
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_001); });
+
+    expect(stopDone).toBe(true);
+    expect(result.current.state).toBe("idle");
+    expect(result.current.error).toMatch(/timed out/i);
+
+    // Clean up the dangling promise
+    resolveTranscribe("");
+    vi.useRealTimers();
+  });
+
+  // ── C2: double-start guard ──────────────────────────────────────────────────
+
+  it("C2: double start() while listening is a no-op — record called once", async () => {
+    const recordFn = vi.fn().mockResolvedValue({ stop: () => new Float32Array(16000), cancel: vi.fn() });
+
+    const { result } = renderHook(() => useVoice({
+      status: async () => ({ ready: true }),
+      record: recordFn,
+      transcribe: async () => "x",
+    }));
+
+    await act(async () => {
+      await Promise.all([result.current.start(), result.current.start()]);
+    });
+
+    expect(result.current.state).toBe("listening");
+    expect(recordFn).toHaveBeenCalledTimes(1);
+  });
+
+  // ── I1: cancelled results must not fire loom-utterance ─────────────────────
+
+  it("I1: cancel() while transcribing suppresses loom-utterance", async () => {
+    const bigSamples = new Float32Array(16000);
+    const utteranceSpy = vi.fn();
+    window.addEventListener("loom-utterance", utteranceSpy);
+
+    let resolveTranscribe!: (v: string) => void;
+    const transcribePromise = new Promise<string>((res) => { resolveTranscribe = res; });
+
+    const { result } = renderHook(() => useVoice({
+      status: async () => ({ ready: true }),
+      record: async () => ({ stop: () => bigSamples, cancel: vi.fn() }),
+      transcribe: () => transcribePromise,
+    }));
+
+    await act(async () => { await result.current.start(); });
+
+    // Start stop (will await transcribe)
+    act(() => { void result.current.stop(); });
+
+    // Cancel while transcription is in flight
+    act(() => { result.current.cancel(); });
+
+    // Resolve transcription after cancel
+    await act(async () => { resolveTranscribe("hello"); });
+
+    expect(utteranceSpy).not.toHaveBeenCalled();
+    expect(result.current.state).toBe("idle");
+
+    window.removeEventListener("loom-utterance", utteranceSpy);
   });
 });
