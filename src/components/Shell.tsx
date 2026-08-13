@@ -42,6 +42,10 @@ export default function Shell() {
   );
   const [ignitionOpacity, setIgnitionOpacity] = useState(0);
   const [orbScale, setOrbScale] = useState(alreadyIgnited ? 1 : 0.6);
+  // First-boot stagger: top bar + content spring in after orb bloom starts (~0.3s delay)
+  const [staggerVisible, setStaggerVisible] = useState(alreadyIgnited);
+  // First-boot glow surge: orb hero gets a transient glow peak as scale reaches 1
+  const [glowSurge, setGlowSurge] = useState(false);
   const ignitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Voice state machine
@@ -209,11 +213,23 @@ export default function Shell() {
     }
 
     // First boot: 1.8s bloom sequence
-    // Phase 1: Fade in shell (opacity 0→1) + orb blooms (scale 0.6→1)
+    // Phase 1 (50ms): Fade in shell + orb begins blooming (scale 0.6→1)
     const t1 = setTimeout(() => {
       setIgnitionOpacity(1);
       setOrbScale(1);
-    }, 50); // next tick so CSS transition fires
+      // Trigger glow surge as orb starts blooming
+      if (!reducedMotion) setGlowSurge(true);
+    }, 50);
+
+    // Phase 1b (350ms): Stagger — top bar + content spring in with ~0.3s delay after orb bloom starts
+    const t1b = setTimeout(() => {
+      setStaggerVisible(true);
+    }, 350);
+
+    // Phase 1c (900ms): Glow surge decays — remove the peak filter
+    const t1c = setTimeout(() => {
+      setGlowSurge(false);
+    }, 900);
 
     // Phase 2: After 1.8s, mark ignition done
     const t2 = setTimeout(() => {
@@ -225,6 +241,8 @@ export default function Shell() {
 
     return () => {
       clearTimeout(t1);
+      clearTimeout(t1b);
+      clearTimeout(t1c);
       clearTimeout(t2);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -235,6 +253,8 @@ export default function Shell() {
     if (ignitionTimerRef.current) clearTimeout(ignitionTimerRef.current);
     setIgnitionOpacity(1);
     setOrbScale(1);
+    setStaggerVisible(true);
+    setGlowSurge(false);
     setIgnitionPhase("done");
     try { localStorage.setItem(IGNITION_KEY, "1"); } catch { /* ignore */ }
   }
@@ -256,10 +276,15 @@ export default function Shell() {
   const PanelTag = reducedMotion ? "div" : motion.div;
 
   // Ignition animation timing
-  const ignitionDuration = reducedMotion ? "0.3s" : alreadyIgnited ? "0.6s" : "1.8s";
-  const orbTransition = reducedMotion
-    ? "opacity 0.3s ease"
-    : `opacity ${ignitionDuration} ease, transform 1.8s cubic-bezier(0.34,1.56,0.64,1)`;
+  const ignitionDuration = reducedMotion ? "0.3s" : alreadyIgnited ? "0.9s" : "1.8s";
+  // First-boot stagger entrance: top bar and content region spring in after orb bloom
+  const staggerStyle = (!reducedMotion && !alreadyIgnited)
+    ? {
+        opacity: staggerVisible ? 1 : 0,
+        transform: staggerVisible ? "translateY(0)" : "translateY(10px)",
+        transition: "opacity 0.5s ease, transform 0.5s cubic-bezier(0.34,1.56,0.64,1)",
+      }
+    : {};
 
   return (
     <div
@@ -326,6 +351,7 @@ export default function Shell() {
           padding: "20px 24px 16px",
           position: "relative",
           zIndex: 10,
+          ...staggerStyle,
         }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
@@ -381,7 +407,12 @@ export default function Shell() {
             position: "relative",
             cursor: "pointer",
             transform: `scale(${orbScale})`,
-            transition: orbTransition,
+            transition: reducedMotion
+              ? "opacity 0.3s ease"
+              : `opacity ${ignitionDuration} ease, transform 1.8s cubic-bezier(0.34,1.56,0.64,1), filter 0.85s ease`,
+            filter: (!reducedMotion && glowSurge)
+              ? "drop-shadow(0 0 32px #22d3ee) drop-shadow(0 0 64px rgba(34,211,238,0.4))"
+              : "drop-shadow(0 0 0px transparent)",
           }}
         >
           <Orb mood={mood} size={180} />
@@ -435,6 +466,13 @@ export default function Shell() {
           padding: "0 24px 40px",
           position: "relative",
           zIndex: 10,
+          ...(!reducedMotion && !alreadyIgnited
+            ? {
+                opacity: staggerVisible ? 1 : 0,
+                transform: staggerVisible ? "translateY(0)" : "translateY(10px)",
+                transition: "opacity 0.5s ease 0.15s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.15s",
+              }
+            : {}),
         }}
       >
         {/* Ambient Threads — above desktop plane, below windows */}

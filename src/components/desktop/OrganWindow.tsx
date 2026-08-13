@@ -87,7 +87,7 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
   // Register window position in ambient registry on mount/pos change
   useEffect(() => {
     windowRegistry.set(id, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
-  });
+  }, [id, pos.x, pos.y, pos.w, pos.h]);
 
   // Clean up registry on unmount
   useEffect(() => {

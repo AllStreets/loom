@@ -2,6 +2,8 @@
  * ambientLoop.ts
  * Single shared rAF loop with subscriber pattern.
  * All ambient animation subscribes here — one rAF, no per-subscriber loops.
+ * When document.hidden the loop is fully stopped (no idle rAF spin).
+ * It restarts automatically on visibilitychange→visible if subscribers exist.
  */
 
 type TickFn = (t: number, dt: number) => void;
@@ -9,15 +11,8 @@ type TickFn = (t: number, dt: number) => void;
 const subscribers = new Set<TickFn>();
 let rafId: number | null = null;
 let lastTime: number | null = null;
-let paused = false;
 
 function tick(now: number) {
-  if (paused || document.hidden) {
-    lastTime = null;
-    rafId = requestAnimationFrame(tick);
-    return;
-  }
-
   const dt = lastTime !== null ? Math.min((now - lastTime) / 1000, 0.1) : 0;
   lastTime = now;
 
@@ -31,7 +26,7 @@ function tick(now: number) {
 }
 
 function start() {
-  if (rafId === null && subscribers.size > 0) {
+  if (rafId === null && subscribers.size > 0 && !document.hidden) {
     lastTime = null;
     rafId = requestAnimationFrame(tick);
   }
@@ -47,10 +42,11 @@ function stop() {
 
 function onVisibilityChange() {
   if (document.hidden) {
-    paused = true;
+    // Fully stop — no idle rAF spin while hidden
+    stop();
   } else {
-    paused = false;
-    lastTime = null;
+    // Restart if there are active subscribers
+    start();
   }
 }
 

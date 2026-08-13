@@ -96,33 +96,47 @@ describe("ambientLoop", () => {
     expect(fn3).toHaveBeenCalledTimes(1);
   });
 
-  it("loop skips subscriber calls when document.hidden", async () => {
+  it("rAF is NOT re-armed while document.hidden and resumes on visible", async () => {
     const { subscribe } = await import("./ambientLoop");
     const fn = vi.fn();
 
     subscribe(fn);
 
-    // First tick (visible)
+    // First tick (visible) — loop arms a new rAF after ticking
     flushRaf(1000);
     expect(fn).toHaveBeenCalledTimes(1);
+    // A new rAF should be pending (loop re-armed itself)
+    expect(rafCallbacks.size).toBeGreaterThan(0);
 
-    // Hide document
+    // Hide document — visibilitychange fires stop(), loop should cancel rAF
     Object.defineProperty(document, "hidden", {
       configurable: true,
       get: () => true,
     });
+    document.dispatchEvent(new Event("visibilitychange"));
 
-    // Tick while hidden — fn should not be called
-    flushRaf(1016);
-    expect(fn).toHaveBeenCalledTimes(1); // still 1
+    // After hide: no rAF should be pending
+    expect(rafCallbacks.size).toBe(0);
 
-    // Restore visibility
+    // Flushing any stale callbacks (there shouldn't be any) must NOT re-arm rAF
+    const rafCountBeforeFlush = rafCallbacks.size;
+    if (rafCountBeforeFlush > 0) flushRaf(1016);
+    expect(rafCallbacks.size).toBe(0);
+
+    // fn must not have been called while hidden
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    // Restore visibility — visibilitychange fires start(), loop should resume
     Object.defineProperty(document, "hidden", {
       configurable: true,
       get: () => false,
     });
+    document.dispatchEvent(new Event("visibilitychange"));
 
-    // Next tick should call fn again
+    // A new rAF should now be pending
+    expect(rafCallbacks.size).toBeGreaterThan(0);
+
+    // Tick — fn should be called again
     flushRaf(1032);
     expect(fn).toHaveBeenCalledTimes(2);
   });

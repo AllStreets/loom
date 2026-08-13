@@ -11,21 +11,32 @@ import { useEffect, useRef } from "react";
 import { subscribe } from "../../lib/ambient/ambientLoop";
 import { windowRegistry } from "../../lib/ambient/windowRegistry";
 
+export interface ThreadPathOut {
+  cp1x: number;
+  cp1y: number;
+  cp2x: number;
+  cp2y: number;
+}
+
 /**
  * Compute bezier control points for a thread with sine-based undulation.
  * Undulation is bounded: max ±60px from the straight midpoint.
+ * Writes result into `out` — zero heap allocation per call.
  */
 export function threadPath(
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  t: number
-): { cp1: { x: number; y: number }; cp2: { x: number; y: number } } {
-  const midX = (from.x + to.x) / 2;
-  const midY = (from.y + to.y) / 2;
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  t: number,
+  out: ThreadPathOut
+): void {
+  const midX = (fromX + toX) / 2;
+  const midY = (fromY + toY) / 2;
 
   // Direction perpendicular to the thread
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
+  const dx = toX - fromX;
+  const dy = toY - fromY;
   const len = Math.sqrt(dx * dx + dy * dy) || 1;
   const nx = -dy / len;
   const ny = dx / len;
@@ -35,16 +46,10 @@ export function threadPath(
   const amp1 = Math.sin(t * 0.4 + 0.0) * MAX_UNDULATION;
   const amp2 = Math.sin(t * 0.3 + Math.PI * 0.7) * MAX_UNDULATION;
 
-  return {
-    cp1: {
-      x: midX * 0.5 + from.x * 0.5 + nx * amp1,
-      y: midY * 0.5 + from.y * 0.5 + ny * amp1,
-    },
-    cp2: {
-      x: midX * 0.5 + to.x * 0.5 + nx * amp2,
-      y: midY * 0.5 + to.y * 0.5 + ny * amp2,
-    },
-  };
+  out.cp1x = midX * 0.5 + fromX * 0.5 + nx * amp1;
+  out.cp1y = midY * 0.5 + fromY * 0.5 + ny * amp1;
+  out.cp2x = midX * 0.5 + toX * 0.5 + nx * amp2;
+  out.cp2y = midY * 0.5 + toY * 0.5 + ny * amp2;
 }
 
 const THREAD_ALPHA_IDLE = 0.12;
@@ -106,27 +111,35 @@ export default function Threads() {
 
     const ctx = canvas.getContext("2d");
 
-    function getOrbAnchor(): { x: number; y: number } | null {
-      if (!container) return null;
+    // Persistent scratch objects — allocated once, reused every frame (zero per-frame alloc)
+    const orbAnchor = { x: 0, y: 0 };
+    const winAnchor = { x: 0, y: 0 };
+    const cpOut: ThreadPathOut = { cp1x: 0, cp1y: 0, cp2x: 0, cp2y: 0 };
+
+    /** Returns false if orb element not found; writes result into `orbAnchor`. */
+    function getOrbAnchor(): boolean {
+      if (!container) return false;
       const orbEl = document.querySelector('[data-testid="orb-hero"]');
-      if (!orbEl) return null;
+      if (!orbEl) return false;
       const orbRect = orbEl.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
-      return {
-        x: (orbRect.left + orbRect.width / 2 - containerRect.left) * dpr,
-        y: (orbRect.top + orbRect.height / 2 - containerRect.top) * dpr,
-      };
+      orbAnchor.x = (orbRect.left + orbRect.width / 2 - containerRect.left) * dpr;
+      orbAnchor.y = (orbRect.top + orbRect.height / 2 - containerRect.top) * dpr;
+      return true;
     }
 
-    function getWindowTitleBarAnchor(rect: { x: number; y: number; w: number; h: number }): { x: number; y: number } {
-      if (!container) return { x: 0, y: 0 };
+    /** Writes window title bar anchor into `winAnchor`. */
+    function getWindowTitleBarAnchor(rect: { x: number; y: number; w: number; h: number }): void {
+      if (!container) {
+        winAnchor.x = 0;
+        winAnchor.y = 0;
+        return;
+      }
       const containerRect = container.getBoundingClientRect();
       // The rect from windowRegistry is in page/plane coordinates (absolute within plane),
       // but we need canvas coordinates relative to the container
-      return {
-        x: (rect.x + rect.w / 2 - containerRect.left) * dpr,
-        y: (rect.y + 14 - containerRect.top) * dpr, // 14 = half title bar height
-      };
+      winAnchor.x = (rect.x + rect.w / 2 - containerRect.left) * dpr;
+      winAnchor.y = (rect.y + 14 - containerRect.top) * dpr; // 14 = half title bar height
     }
 
     // Static render for reduced motion
@@ -134,16 +147,15 @@ export default function Threads() {
       function drawStatic() {
         if (!canvas || !ctx) return;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const orb = getOrbAnchor();
-        if (!orb) return;
+        if (!getOrbAnchor()) return;
         const wins = windowRegistry.getAll();
         ctx.strokeStyle = `rgba(34,211,238,${THREAD_ALPHA_IDLE})`;
         ctx.lineWidth = 1 * dpr;
         for (const rect of wins.values()) {
-          const to = getWindowTitleBarAnchor(rect);
+          getWindowTitleBarAnchor(rect);
           ctx.beginPath();
-          ctx.moveTo(orb.x, orb.y);
-          ctx.lineTo(to.x, to.y);
+          ctx.moveTo(orbAnchor.x, orbAnchor.y);
+          ctx.lineTo(winAnchor.x, winAnchor.y);
           ctx.stroke();
         }
       }
@@ -162,8 +174,7 @@ export default function Threads() {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const orb = getOrbAnchor();
-      if (!orb) return;
+      if (!getOrbAnchor()) return;
 
       const wins = windowRegistry.getAll();
       const threadStates = threadStateRef.current;
@@ -190,12 +201,8 @@ export default function Threads() {
           );
         }
 
-        const to = getWindowTitleBarAnchor(rect);
-        const { cp1, cp2 } = threadPath(
-          { x: orb.x, y: orb.y },
-          { x: to.x, y: to.y },
-          t
-        );
+        getWindowTitleBarAnchor(rect);
+        threadPath(orbAnchor.x, orbAnchor.y, winAnchor.x, winAnchor.y, t, cpOut);
 
         // Draw luminous thread with glow
         ctx.save();
@@ -204,8 +211,8 @@ export default function Threads() {
         ctx.shadowColor = "rgba(34,211,238,0.6)";
         ctx.shadowBlur = 8 * dpr;
         ctx.beginPath();
-        ctx.moveTo(orb.x, orb.y);
-        ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, to.x, to.y);
+        ctx.moveTo(orbAnchor.x, orbAnchor.y);
+        ctx.bezierCurveTo(cpOut.cp1x, cpOut.cp1y, cpOut.cp2x, cpOut.cp2y, winAnchor.x, winAnchor.y);
         ctx.stroke();
         ctx.restore();
       }

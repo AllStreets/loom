@@ -44,8 +44,15 @@ function makeParticle(): Particle {
   };
 }
 
-function isCyan(): boolean {
-  return Math.random() > 0.4;
+function makeColorString(particle: Particle): string {
+  const cyan = Math.random() > 0.4;
+  return cyan
+    ? `rgba(34,211,238,${particle.a})`
+    : `rgba(255,255,255,${particle.a})`;
+}
+
+function createColorStrings(particles: Particle[]): string[] {
+  return particles.map(makeColorString);
 }
 
 export default function Field() {
@@ -57,8 +64,9 @@ export default function Field() {
   const count = reducedMotion ? REDUCED_PARTICLES : MAX_PARTICLES;
   // Preallocate once, stable across renders
   const particlesRef = useRef<Particle[]>(createParticles(count));
-  const colorsRef = useRef<boolean[]>(
-    Array.from({ length: count }, isCyan)
+  // Precomputed final color strings per particle — zero allocation in tick
+  const colorStringsRef = useRef<string[]>(
+    createColorStrings(particlesRef.current)
   );
 
   useEffect(() => {
@@ -78,7 +86,7 @@ export default function Field() {
 
     const ctx = canvas.getContext("2d");
     const particles = particlesRef.current;
-    const colors = colorsRef.current;
+    const colorStrings = colorStringsRef.current;
 
     // Static render for reduced motion — draw once and return
     if (reducedMotion) {
@@ -92,9 +100,7 @@ export default function Field() {
           const py = p.y * H;
           ctx.beginPath();
           ctx.arc(px, py, p.r * dpr, 0, Math.PI * 2);
-          ctx.fillStyle = colors[i]
-            ? `rgba(34,211,238,${p.a})`
-            : `rgba(255,255,255,${p.a})`;
+          ctx.fillStyle = colorStrings[i];
           ctx.fill();
         }
       }
@@ -132,9 +138,7 @@ export default function Field() {
 
         ctx.beginPath();
         ctx.arc(px, py, p.r * dpr, 0, Math.PI * 2);
-        ctx.fillStyle = colors[i]
-          ? `rgba(34,211,238,${p.a})`
-          : `rgba(255,255,255,${p.a})`;
+        ctx.fillStyle = colorStrings[i];
         ctx.fill();
       }
     }
