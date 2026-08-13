@@ -79,7 +79,7 @@ pub const DEFAULT_VOICE_ID: &str = "en_US-lessac-medium";
 
 pub fn voice_dir(app: &AppHandle) -> Result<PathBuf, LoomError> {
     let dir = loom_dir(app)?.join("voice");
-    std::fs::create_dir_all(&dir).map_err(|e| LoomError::Git(e.to_string()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| LoomError::Git(format!("create voice dir {}: {e}", dir.display())))?;
     Ok(dir)
 }
 
@@ -233,17 +233,26 @@ pub async fn voice_setup(app: AppHandle, window: tauri::Window) -> Result<(), Lo
             use tokio::io::AsyncWriteExt;
             let mut file = tokio::fs::File::create(&tmp_path)
                 .await
-                .map_err(|e| LoomError::Http(e.to_string()))?;
+                .map_err(|e| {
+                    let _ = tokio::fs::remove_file(&tmp_path);
+                    LoomError::Http(e.to_string())
+                })?;
 
             let mut stream = resp.bytes_stream();
             let mut downloaded: u64 = 0;
             let mut last_pct: i64 = -1;
 
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| LoomError::Http(e.to_string()))?;
+                let chunk = chunk.map_err(|e| {
+                    let _ = tokio::fs::remove_file(&tmp_path);
+                    LoomError::Http(e.to_string())
+                })?;
                 file.write_all(&chunk)
                     .await
-                    .map_err(|e| LoomError::Http(e.to_string()))?;
+                    .map_err(|e| {
+                        let _ = tokio::fs::remove_file(&tmp_path);
+                        LoomError::Http(e.to_string())
+                    })?;
                 downloaded += chunk.len() as u64;
 
                 let pct = if total > 0 {
@@ -261,12 +270,18 @@ pub async fn voice_setup(app: AppHandle, window: tauri::Window) -> Result<(), Lo
             }
             file.flush()
                 .await
-                .map_err(|e| LoomError::Http(e.to_string()))?;
+                .map_err(|e| {
+                    let _ = tokio::fs::remove_file(&tmp_path);
+                    LoomError::Http(e.to_string())
+                })?;
         }
 
         tokio::fs::rename(&tmp_path, &final_path)
             .await
-            .map_err(|e| LoomError::Http(e.to_string()))?;
+            .map_err(|e| {
+                let _ = tokio::fs::remove_file(&tmp_path);
+                LoomError::Http(e.to_string())
+            })?;
 
         let _ = window.emit(
             "voice-setup-progress",
