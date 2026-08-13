@@ -49,3 +49,9 @@ Deferred (non-blocking) findings from the foundation branch reviews. None block 
 - **useOrgans reload()** — fire-and-forget without .catch; add error surface.
 - **persistence shape** — spec said {x,y,w,h,min,collapsed}; stored without `min` (collapsed covers it) — spec updated in place.
 - **organ-focus flash on wrapper** vs window chrome — cosmetic.
+
+## From phase 5 (voice) reviews (2026-08-12)
+- **whisper context caching** — per-call model load ~200-400ms; add a Tauri State cache if PTT latency annoys. (`src-tauri/src/voice.rs`)
+- **transcribe fast-path timer non-clearance** — benign leak; clear on resolve. (`src/lib/voice/useVoice.ts`)
+- **micTest "ok" sentinel** — document in ORGAN_CONTRACT. Deferred: wake-word (by design), streaming TTS, VAD auto-stop tuning, AudioWorklet upgrade, voice cloning.
+- **player onended caf vs currentRafCancel** consistency (prod-benign). (`src/lib/voice/player.ts`)

@@ -79,6 +79,17 @@ Three local specialists, resident together on 64GB — no swapping, no cloud, pi
 
 If the configured builder is missing, LOOM automatically falls back to the **best installed coder model** before anything else — it degrades, it does not stop.
 
+**Voice** — fully offline speech, downloaded once from Settings (like pulling the fleet):
+
+| piece | model | size |
+|---|---|---|
+| Ears (STT) | whisper `ggml-base.en` (Metal) | 148 MB |
+| Voice: Lessac — warm, neutral (US, default) | `en_US-lessac-medium` | ~64 MB |
+| Voice: Alba — calm (British) | `en_GB-alba-medium` | ~64 MB |
+| Voice: LibriTTS — rich (US) | `en_US-libritts-high` | ~100 MB |
+
+Hold the **orb** (or **Space**) to talk; release to send. Replies are spoken aloud. Audition and switch voices in the Settings organ — which, being an organ, LOOM can edit for you.
+
 ---
 
 ## Quickstart
@@ -114,7 +125,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **3 · Companion** | prompt compiler · the presence (text) · organ editing by sentence · seed organs | **shipped** |
 | **4 · The orb + living UI** | react-three-fiber oracle-light orb · breathing motion · the living dashboard | **shipped** |
 | **4.5 · The Atelier** | loom.ui design kit — organs beautiful by construction · OS desktop: glass windows + dock | **shipped** |
-| **5 · Voice** | offline whisper.cpp + piper · push-to-talk · a voice loop that never half-works | next |
+| **5 · Voice** | offline whisper + piper voices · hold-the-orb / Space push-to-talk · spoken replies · Settings organ | **shipped** |
 | **later** | the OS-like windowed desktop · full self-modification, kernel included | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
