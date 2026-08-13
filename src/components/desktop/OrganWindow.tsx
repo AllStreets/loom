@@ -25,6 +25,19 @@ function persistPos(id: string, pos: WinPos) {
   }
 }
 
+/** Dock clearance: persisted positions whose y would place the title bar below
+ *  planeHeight - DOCK_CLEARANCE are clamped on load. Since we don't have the
+ *  plane height at load time (jsdom returns 0; real browser sets it later),
+ *  we clamp only against the viewport height as a safe upper bound. */
+const DOCK_CLEARANCE_PX = 72;
+
+function clampLoadedY(y: number): number {
+  const vh = typeof window !== "undefined" ? window.innerHeight : 0;
+  if (vh <= 0) return y; // can't clamp without layout info
+  const max = Math.max(0, vh - DOCK_CLEARANCE_PX - 28); // 28 = title bar height
+  return Math.min(y, max);
+}
+
 function loadPos(id: string, initial: { x: number; y: number; w: number; h: number }): WinPos {
   try {
     const raw = localStorage.getItem(`loom.win.${id}`);
@@ -32,7 +45,7 @@ function loadPos(id: string, initial: { x: number; y: number; w: number; h: numb
       const saved = JSON.parse(raw) as Partial<WinPos>;
       return {
         x: saved.x ?? initial.x,
-        y: saved.y ?? initial.y,
+        y: clampLoadedY(saved.y ?? initial.y),
         w: saved.w ?? initial.w,
         h: saved.h ?? initial.h,
         collapsed: saved.collapsed ?? false,

@@ -386,11 +386,14 @@ export default function Companion() {
   // Stable ref to runTurn so the loom-utterance listener doesn't need to re-register
   const runTurnRef = useRef<((utterance: string) => Promise<void>) | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const convoRef = useRef<HTMLDivElement | null>(null);
 
   function scrollToBottom() {
     requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView?.({ behavior: "smooth" });
+      const el = convoRef.current;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+      }
     });
   }
 
@@ -733,12 +736,16 @@ export default function Companion() {
         </label>
       </div>
 
-      {/* Conversation */}
+      {/* Conversation — scrolls within its own container */}
       <div
+        ref={convoRef}
+        data-testid="companion-log"
         style={{
           display: "flex",
           flexDirection: "column",
           minHeight: items.length === 0 ? 0 : 40,
+          maxHeight: 480,
+          overflowY: "auto",
           marginBottom: items.length > 0 ? 16 : 0,
         }}
       >
@@ -777,7 +784,6 @@ export default function Companion() {
           }
           return null;
         })}
-        <div ref={bottomRef} />
       </div>
 
       {/* Input */}

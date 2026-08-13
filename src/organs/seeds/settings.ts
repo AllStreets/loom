@@ -106,6 +106,7 @@ const ORGAN_JS = `export default {
           var row = document.createElement("div");
           row.style.display = "flex";
           row.style.alignItems = "center";
+          row.style.flexWrap = "wrap";
           row.style.gap = "8px";
           row.appendChild(label);
           row.appendChild(auditionBtn);

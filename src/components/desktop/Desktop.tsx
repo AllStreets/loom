@@ -3,6 +3,21 @@ import { useOrgans, type OrganState } from "../../lib/organs/host";
 import OrganWindow from "./OrganWindow";
 import Dock from "./Dock";
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Clearance below the desktop plane reserved for the dock (px). */
+const DOCK_CLEARANCE = 72;
+
+/** Default window size for any organ not listed in ORGAN_SIZES. */
+const DEFAULT_WIN_SIZE = { w: 420, h: 360 };
+
+/** Per-organ default sizes keyed by manifest id. */
+const ORGAN_SIZES: Record<string, { w: number; h: number }> = {
+  settings: { w: 560, h: 560 },
+};
+
 type WindowInfo = {
   minimized: boolean;
   focused: boolean;
@@ -144,13 +159,27 @@ export default function Desktop() {
 
   const approvedOrgans = organs.filter((o) => o.approved);
 
+  const planeRef = useRef<HTMLDivElement | null>(null);
+
   return (
-    <div data-desktop-plane="" style={{ position: "relative", minHeight: "60vh", width: "100%" }}>
+    <div
+      ref={planeRef}
+      data-desktop-plane=""
+      data-testid="desktop-plane"
+      style={{ position: "relative", minHeight: "60vh", width: "100%" }}
+    >
       {approvedOrgans.map((organ, i) => {
         const id = organ.entry.id;
         const ws = windowStates[id] ?? { minimized: false, focused: false };
         const zIndex = zOrder.indexOf(id) + 1;
-        const initial = { x: 40 + i * 36, y: 40 + i * 36, w: 420, h: 320 };
+        const size = ORGAN_SIZES[id] ?? DEFAULT_WIN_SIZE;
+        // Clamp spawn y so title bar never starts below plane bottom minus dock clearance.
+        // offsetHeight returns 0 in jsdom (no layout engine) — treat 0 as "unavailable" and skip clamping.
+        const planeH = planeRef.current?.offsetHeight ?? 0;
+        const rawY = 40 + i * 36;
+        const maxY = planeH > 0 ? Math.max(0, planeH - DOCK_CLEARANCE - 28) : rawY;
+        const clampedY = Math.min(rawY, maxY);
+        const initial = { x: 40 + i * 36, y: clampedY, ...size };
 
         return (
           <div

@@ -205,13 +205,11 @@ export default function Shell() {
       ref={shellRef}
       data-testid="loom-shell"
       style={{
-        minHeight: "100vh",
+        height: "100vh",
+        overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
         position: "relative",
-        overflow: "hidden",
-        padding: "0 24px 40px",
         "--mx": "50%",
         "--my": "30%",
       } as React.CSSProperties}
@@ -249,15 +247,16 @@ export default function Shell() {
       {/* Grain overlay */}
       <div aria-hidden className="shell-grain" />
 
-      {/* Top bar */}
+      {/* ── Zone A: Top bar (fixed height, never scrolls) ── */}
       <header
+        data-testid="shell-top-bar"
         style={{
+          flexShrink: 0,
           width: "100%",
-          maxWidth: 720,
           display: "flex",
           alignItems: "baseline",
           justifyContent: "space-between",
-          padding: "20px 0 16px",
+          padding: "20px 24px 16px",
           position: "relative",
           zIndex: 10,
         }}
@@ -289,131 +288,155 @@ export default function Shell() {
         </div>
       </header>
 
-      {/* Orb hero */}
+      {/* ── Zone B: Orb band (fixed height, always visible, never scrolls) ── */}
       <div
-        data-testid="orb-hero"
-        onPointerDown={(e) => { (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId); void voice.start(); }}
-        onPointerUp={() => { void voice.stop(); }}
-        onPointerCancel={() => { void voice.stop(); }}
+        data-testid="orb-band"
         style={{
-          display: "flex",
-          justifyContent: "center",
-          margin: "12px 0 24px",
-          position: "relative",
-          zIndex: 10,
-          cursor: "pointer",
-        }}
-      >
-        <Orb mood={mood} size={180} />
-        {voice.state === "listening" && (
-          <div
-            data-testid="listening-ring"
-            ref={ringRef}
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: -6,
-              borderRadius: "50%",
-              border: "2px solid var(--accent)",
-              pointerEvents: "none",
-              transform: "scale(1)",
-            }}
-          />
-        )}
-      </div>
-
-      {/* Voice status line */}
-      <div
-        data-testid="voice-status-line"
-        style={{
-          fontFamily: "var(--f-mono)",
-          fontSize: 11,
-          color: "var(--t3)",
-          textAlign: "center",
-          minHeight: 16,
-          marginBottom: 4,
-          position: "relative",
-          zIndex: 10,
-        }}
-      >
-        {voice.state === "listening" && "listening..."}
-        {voice.state === "transcribing" && "transcribing..."}
-        {voice.state === "speaking" && "speaking..."}
-        {voice.state === "unavailable" && `${voice.error ?? "Voice unavailable"} — open Settings`}
-        {voice.state === "idle" && voice.error && voice.error}
-        {voice.state === "idle" && !voice.error && voiceReady && "hold the orb or Space to talk"}
-      </div>
-
-      {/* Main column */}
-      <div
-        style={{
-          width: "100%",
-          maxWidth: 720,
+          flexShrink: 0,
           display: "flex",
           flexDirection: "column",
-          gap: 16,
+          alignItems: "center",
+          padding: "0 24px 8px",
           position: "relative",
           zIndex: 10,
         }}
       >
-        {/* Companion panel */}
-        <PanelTag
-          {...(motionProps as object)}
+        {/* Orb hero */}
+        <div
+          data-testid="orb-hero"
+          onPointerDown={(e) => { (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId); void voice.start(); }}
+          onPointerUp={() => { void voice.stop(); }}
+          onPointerCancel={() => { void voice.stop(); }}
           style={{
-            background: "var(--glass)",
-            backdropFilter: "blur(var(--blur))",
-            WebkitBackdropFilter: "blur(var(--blur))",
-            border: "1px solid var(--glass-border)",
-            borderRadius: 14,
+            display: "flex",
+            justifyContent: "center",
+            margin: "12px 0 24px",
+            position: "relative",
+            cursor: "pointer",
           }}
         >
-          <Companion />
-        </PanelTag>
-
-        {/* Organs panel */}
-        <div
-          data-testid="organs-region"
-          style={{ width: "100%", maxWidth: 1100, position: "relative", zIndex: 10 }}
-        >
-          <Desktop />
+          <Orb mood={mood} size={180} />
+          {voice.state === "listening" && (
+            <div
+              data-testid="listening-ring"
+              ref={ringRef}
+              aria-hidden
+              style={{
+                position: "absolute",
+                inset: -6,
+                borderRadius: "50%",
+                border: "2px solid var(--accent)",
+                pointerEvents: "none",
+                transform: "scale(1)",
+              }}
+            />
+          )}
         </div>
 
-        {/* Timeline collapsible footer */}
-        <details
-          className="glass"
-          style={{ padding: "12px 16px", cursor: "pointer" }}
+        {/* Voice status line */}
+        <div
+          data-testid="voice-status-line"
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 11,
+            color: "var(--t3)",
+            textAlign: "center",
+            minHeight: 16,
+            marginBottom: 4,
+          }}
         >
-          <summary
+          {voice.state === "listening" && "listening..."}
+          {voice.state === "transcribing" && "transcribing..."}
+          {voice.state === "speaking" && "speaking..."}
+          {voice.state === "unavailable" && `${voice.error ?? "Voice unavailable"} — open Settings`}
+          {voice.state === "idle" && voice.error && voice.error}
+          {voice.state === "idle" && !voice.error && voiceReady && "hold the orb or Space to talk"}
+        </div>
+      </div>
+
+      {/* ── Zone C: Content region (scrolls internally) ── */}
+      <div
+        data-testid="shell-content-region"
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          padding: "0 24px 40px",
+          position: "relative",
+          zIndex: 10,
+        }}
+      >
+        {/* Main column */}
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 720,
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+          }}
+        >
+          {/* Companion panel */}
+          <PanelTag
+            {...(motionProps as object)}
             style={{
-              fontFamily: "var(--f-mono)",
-              color: "var(--t3)",
-              fontSize: 12,
-              textTransform: "uppercase",
-              letterSpacing: ".08em",
-              userSelect: "none",
-              listStyle: "none",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
+              background: "var(--glass)",
+              backdropFilter: "blur(var(--blur))",
+              WebkitBackdropFilter: "blur(var(--blur))",
+              border: "1px solid var(--glass-border)",
+              borderRadius: 14,
             }}
           >
-            <span style={{ fontSize: 10, opacity: 0.6 }}>+</span>
-            Timeline
-          </summary>
-          <div style={{ marginTop: 10 }}>
-            {commits.length === 0 && (
-              <div style={{ color: "var(--t3)", fontSize: 13 }}>No commits yet.</div>
-            )}
-            {commits.map((c) => (
-              <div key={c.sha} style={{ fontSize: 13, padding: "3px 0" }}>
-                <span style={{ fontFamily: "var(--f-mono)", color: "var(--t3)" }}>
-                  {c.sha.slice(0, 7)}
-                </span>{" "}
-                <span style={{ color: "var(--t1)" }}>{c.message}</span>
-              </div>
-            ))}
+            <Companion />
+          </PanelTag>
+
+          {/* Organs panel */}
+          <div
+            data-testid="organs-region"
+            style={{ width: "100%", maxWidth: 1100, position: "relative", zIndex: 10 }}
+          >
+            <Desktop />
           </div>
-        </details>
+
+          {/* Timeline collapsible footer */}
+          <details
+            className="glass"
+            style={{ padding: "12px 16px", cursor: "pointer" }}
+          >
+            <summary
+              style={{
+                fontFamily: "var(--f-mono)",
+                color: "var(--t3)",
+                fontSize: 12,
+                textTransform: "uppercase",
+                letterSpacing: ".08em",
+                userSelect: "none",
+                listStyle: "none",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span style={{ fontSize: 10, opacity: 0.6 }}>+</span>
+              Timeline
+            </summary>
+            <div style={{ marginTop: 10 }}>
+              {commits.length === 0 && (
+                <div style={{ color: "var(--t3)", fontSize: 13 }}>No commits yet.</div>
+              )}
+              {commits.map((c) => (
+                <div key={c.sha} style={{ fontSize: 13, padding: "3px 0" }}>
+                  <span style={{ fontFamily: "var(--f-mono)", color: "var(--t3)" }}>
+                    {c.sha.slice(0, 7)}
+                  </span>{" "}
+                  <span style={{ color: "var(--t1)" }}>{c.message}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
       </div>
     </div>
   );

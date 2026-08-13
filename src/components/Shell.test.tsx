@@ -101,6 +101,36 @@ describe("Shell layout", () => {
     // Timeline collapsible
     expect(screen.getByText(/Timeline/i)).toBeInTheDocument();
   });
+
+  it("shell root is overflow:hidden and has the orb-band zone", async () => {
+    render(<Shell />);
+
+    const shell = screen.getByTestId("loom-shell");
+    expect(shell.style.overflow).toBe("hidden");
+
+    // orb-band present and within the shell
+    const orbBand = screen.getByTestId("orb-band");
+    expect(shell.contains(orbBand)).toBe(true);
+  });
+
+  it("content region has overflowY:auto and is a descendant of shell root", async () => {
+    render(<Shell />);
+
+    const contentRegion = screen.getByTestId("shell-content-region");
+    expect(contentRegion.style.overflowY).toBe("auto");
+
+    const shell = screen.getByTestId("loom-shell");
+    expect(shell.contains(contentRegion)).toBe(true);
+  });
+
+  it("orb-band is NOT inside the scrolling content region", async () => {
+    render(<Shell />);
+
+    const contentRegion = screen.getByTestId("shell-content-region");
+    const orbBand = screen.getByTestId("orb-band");
+
+    expect(contentRegion.contains(orbBand)).toBe(false);
+  });
 });
 
 describe("Shell mood: loom-mood event", () => {
