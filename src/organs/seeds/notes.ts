@@ -15,7 +15,7 @@ const ORGAN_JS = `export default {
     const { root, body } = ui.card({ title: "Notes" });
 
     const heading = ui.heading("Quick Capture", "Jot a thought, keep it forever.");
-    const input = ui.input({ placeholder: "New note...", action: "new-note" });
+    const input = ui.input({ placeholder: "New note...", action: "new-note", onEnter: addNote });
     const addBtn = ui.button("Add", { variant: "primary", action: "add" });
     const inputRow = ui.row(input, addBtn);
     input.style.flex = "1";
@@ -65,9 +65,6 @@ const ORGAN_JS = `export default {
     }
 
     addBtn.addEventListener("click", addNote);
-    input.addEventListener("keydown", function(e) {
-      if (e.key === "Enter") addNote();
-    });
 
     refresh();
   }
@@ -95,6 +92,19 @@ const TEST_JS = `export const tests = [
       const freshEl = document.createElement("div");
       organ.render(freshEl, loom);
       assert(freshEl.textContent.includes("existing note"), "existing note is rendered");
+    },
+  },
+  {
+    name: "removes a note",
+    fn: async ({ loom, organ, assert }) => {
+      loom.storage.set("items", [{ t: 1700000000000, text: "note to remove" }]);
+      const freshEl = document.createElement("div");
+      organ.render(freshEl, loom);
+      const removeBtn = freshEl.querySelector('[data-action="remove"]');
+      assert(removeBtn !== null, "remove button exists");
+      removeBtn.click();
+      const items = loom.storage.get("items", []);
+      assert(items.length === 0, "storage has 0 items");
     },
   },
 ];`;

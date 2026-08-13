@@ -25,7 +25,7 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
        //   loom.ui.heading(text, sub?)              -> header block (17px t1 + optional 12.5px t2 sub)
        //   loom.ui.card(opts?)                      -> { root, body } glass panel (opts.title = mono eyebrow)
        //   loom.ui.button(label, opts?)             -> <button> (variant: "primary"|"ghost"|"danger"; opts.action, opts.onClick)
-       //   loom.ui.input(opts?)                     -> <input> (opts.placeholder, opts.action, opts.onEnter)
+       //   loom.ui.input(opts?)                     -> <input> (opts.placeholder, opts.action, opts.onEnter, opts.value)
        //   loom.ui.row(...children)                 -> flex row, gap 8, align-center
        //   loom.ui.stack(...children)               -> flex column, gap 8
        //   loom.ui.stat(label, value)               -> big mono accent value over small uppercase label
@@ -56,18 +56,17 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
        const ui = loom.ui;
        const { root, body } = ui.card({ title: "Word Count" });
        const heading = ui.heading("Paste & Count", "Measure your writing at a glance.");
-       const textarea = ui.input({ placeholder: "Paste text here...", action: "text-input" });
-       textarea.style.height = "80px";
+       const field = ui.input({ placeholder: "Type or paste text...", action: "text-input" });
        const countStat = ui.stat("words", 0);
        const charStat = ui.stat("chars", 0);
        const stats = ui.row(countStat, charStat);
        stats.style.marginTop = "4px";
        body.appendChild(heading);
-       body.appendChild(textarea);
+       body.appendChild(field);
        body.appendChild(stats);
        el.appendChild(root);
-       textarea.addEventListener("input", () => {
-         const val = textarea.value;
+       field.addEventListener("input", () => {
+         const val = field.value;
          ui.setStat(countStat, val.trim() ? val.trim().split(/\s+/).length : 0);
          ui.setStat(charStat, val.length);
        });
