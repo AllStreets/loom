@@ -1,9 +1,12 @@
 import { fleetChat, type Msg } from "../core";
+import { buildUiKit, type LoomUiKit } from "./uikit";
+
+export type { LoomUiKit };
 
 export type LoomApi = {
   storage: { get<T>(k: string, fallback: T): T; set(k: string, v: unknown): void; del(k: string): void };
   model: { chat(messages: Msg[]): Promise<string> };
-  ui: { tokens: Record<string, string> };
+  ui: LoomUiKit;
   notify: (text: string) => void;
 };
 
@@ -52,7 +55,7 @@ export function makeLoomApi(
         return chat("companion", messages);
       },
     },
-    ui: { tokens: TOKENS },
+    ui: buildUiKit(TOKENS),
     notify: (text) => {
       need("notify");
       (deps.notify ?? ((t: string) => console.info("[notify]", t)))(text);

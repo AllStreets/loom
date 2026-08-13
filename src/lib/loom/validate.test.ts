@@ -33,6 +33,7 @@ describe("buildHarnessSrc", () => {
     expect(src).toContain("postMessage");
     expect(src).toContain("Blob");
     expect(src).toContain("unhandledrejection");
+    expect(src).toContain("makeUi");
   });
   it("rewrites relative organ.js imports in tests and passes organ into the test context", () => {
     const src = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce");

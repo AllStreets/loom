@@ -1,3 +1,5 @@
+import { UIKIT_SRC } from "../organs/uikitSrc";
+
 export type OrganFilesIn = { manifest: string; code: string; tests: string };
 export type SandboxVerdict = {
   ok: boolean;
@@ -19,16 +21,20 @@ const report = (r) => parent.postMessage(Object.assign({ nonce: NONCE }, r), "*"
 const fail = (stage, msg) => report({ ok: false, stage, errors: [String(msg)], testResults: [] });
 addEventListener("error", (e) => fail("load", e.message));
 addEventListener("unhandledrejection", (e) => fail("load", e.reason));
+${UIKIT_SRC}
 // Each render/test gets a FRESH loom api with its OWN empty storage — tests are
 // isolated, exactly as a developer (or model) naturally assumes. State pollution
 // between tests was a real failure mode: "three movies remain" failing because a
 // previous test's items were still in a shared store.
-const freshLoom = () => ({
-  storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },
-  model: { chat: async () => "(model unavailable in sandbox)" },
-  ui: { tokens: { bg: "#060b18", panel: "#0d1424", t1: "#e8edf7", t2: "#9fb0cc", t3: "#5f6f8c", accent: "#22d3ee", go: "#4ade80", warn: "#fbbf24", danger: "#f87171" } },
-  notify: () => {},
-});
+const freshLoom = () => {
+  const tokens = { bg: "#060b18", panel: "#0d1424", t1: "#e8edf7", t2: "#9fb0cc", t3: "#5f6f8c", accent: "#22d3ee", go: "#4ade80", warn: "#fbbf24", danger: "#f87171" };
+  return {
+    storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },
+    model: { chat: async () => "(model unavailable in sandbox)" },
+    ui: makeUi(tokens),
+    notify: () => {},
+  };
+};
 const mockLoom = freshLoom();
 const decode = (b64) => decodeURIComponent(escape(atob(b64)));
 const mkUrl = (src) => URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
