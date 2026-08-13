@@ -22,4 +22,13 @@ describe("contract", () => {
     expect(ORGAN_CONTRACT).toContain("card");
     expect(ORGAN_CONTRACT).toContain("design");
   });
+
+  it("documents loom.settings api and whitelisted keys", () => {
+    expect(ORGAN_CONTRACT).toContain("loom.settings");
+    expect(ORGAN_CONTRACT).toContain("voice.default");
+    expect(ORGAN_CONTRACT).toContain("voice.speakReplies");
+    expect(ORGAN_CONTRACT).toContain("orb.tier");
+    expect(ORGAN_CONTRACT).toContain("loom.reviewBeforeSave");
+    expect(ORGAN_CONTRACT).toContain("settings-type organs");
+  });
 });

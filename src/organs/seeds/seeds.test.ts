@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { manifestGuard } from "../../lib/loom/validate";
 import { files as notesFiles } from "./notes";
 import { files as timelineFiles } from "./timeline";
+import { files as settingsFiles } from "./settings";
 import { installSeeds } from "./install";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -28,6 +29,7 @@ function syntaxCheck(src: string): void {
 const ALL_SEEDS = [
   { id: "notes", files: notesFiles },
   { id: "timeline", files: timelineFiles },
+  { id: "settings", files: settingsFiles },
 ];
 
 // ── installSeeds unit tests ───────────────────────────────────────────────────
@@ -41,37 +43,42 @@ describe("installSeeds", () => {
     write = vi.fn().mockResolvedValue("sha");
   });
 
-  it("installs both seeds when none exist", async () => {
+  it("installs all seeds when none exist", async () => {
     list.mockResolvedValue([]);
     const installed = await installSeeds({ list, write });
-    expect(write).toHaveBeenCalledTimes(2);
-    expect(installed).toEqual(["notes", "timeline"]);
+    expect(write).toHaveBeenCalledTimes(3);
+    expect(installed).toEqual(["notes", "timeline", "settings"]);
   });
 
-  it("skips an existing organ and installs the missing one", async () => {
+  it("skips an existing organ and installs the missing ones", async () => {
     list.mockResolvedValue([
       { id: "notes", manifest: "{}", granted: null },
     ]);
     const installed = await installSeeds({ list, write });
-    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(2);
     expect(write).toHaveBeenCalledWith(
       "timeline",
       timelineFiles,
       "loom: seed timeline",
     );
-    expect(installed).toEqual(["timeline"]);
+    expect(write).toHaveBeenCalledWith(
+      "settings",
+      settingsFiles,
+      "loom: seed settings",
+    );
+    expect(installed).toEqual(["timeline", "settings"]);
   });
 
-  it("never overwrites — write failure on one seed does not prevent the other", async () => {
+  it("never overwrites — write failure on one seed does not prevent the others", async () => {
     list.mockResolvedValue([]);
     write.mockImplementation(async (id: string) => {
       if (id === "notes") throw new Error("disk full");
       return "sha";
     });
     const installed = await installSeeds({ list, write });
-    // notes failed; timeline should still be installed
-    expect(installed).toEqual(["timeline"]);
-    expect(write).toHaveBeenCalledTimes(2);
+    // notes failed; timeline and settings should still be installed
+    expect(installed).toEqual(["timeline", "settings"]);
+    expect(write).toHaveBeenCalledTimes(3);
   });
 
   it("returns empty array without throw when list() fails", async () => {
@@ -120,5 +127,19 @@ describe("seed content validity", () => {
     const raw = getFile(timelineFiles, "manifest.json");
     const parsed = JSON.parse(raw);
     expect(parsed.permissions).toEqual([]);
+  });
+
+  it("settings manifest permissions are exactly [\"settings\"]", () => {
+    const raw = getFile(settingsFiles, "manifest.json");
+    const parsed = JSON.parse(raw);
+    expect(parsed.permissions).toEqual(["settings"]);
+  });
+
+  it("install includes settings seed", async () => {
+    const list = vi.fn().mockResolvedValue([]);
+    const write = vi.fn().mockResolvedValue("sha");
+    const installed = await installSeeds({ list, write });
+    expect(installed).toContain("settings");
+    expect(write).toHaveBeenCalledWith("settings", settingsFiles, "loom: seed settings");
   });
 });

@@ -28,11 +28,23 @@ ${UIKIT_SRC}
 // previous test's items were still in a shared store.
 const freshLoom = () => {
   var tokens = ${JSON.stringify(KIT_TOKENS)};
+  var VOICE_IDS = ["en_US-lessac-medium","en_GB-alba-medium","en_US-libritts-high"];
+  var VOICE_LABELS = {"en_US-lessac-medium":"Lessac — warm, neutral (US)","en_GB-alba-medium":"Alba — calm (British)","en_US-libritts-high":"LibriTTS — rich (US)"};
+  var settingsMap = new Map();
   return {
     storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },
     model: { chat: async () => "(model unavailable in sandbox)" },
     ui: makeUi(tokens),
     notify: () => {},
+    settings: {
+      get: function(k) { return settingsMap.has(k) ? settingsMap.get(k) : ""; },
+      set: function(k, v) { settingsMap.set(k, v); },
+      voices: async function() { return VOICE_IDS.map(function(id) { return { id: id, label: VOICE_LABELS[id], present: false }; }); },
+      audition: async function() {},
+      micTest: async function() { return "ok"; },
+      voiceStatus: async function() { return { ready: false, whisper: false, voices: [], missing_bytes_hint: null }; },
+      setup: async function() {},
+    },
   };
 };
 const mockLoom = freshLoom();

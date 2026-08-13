@@ -1,12 +1,14 @@
 import type { organList, organWrite } from "../../lib/core";
 import { files as notesFiles } from "./notes";
 import { files as timelineFiles } from "./timeline";
+import { files as settingsFiles } from "./settings";
 
 type SeedEntry = { id: string; files: typeof notesFiles };
 
 const SEEDS: SeedEntry[] = [
   { id: "notes", files: notesFiles },
   { id: "timeline", files: timelineFiles },
+  { id: "settings", files: settingsFiles },
 ];
 
 export async function installSeeds(deps: {

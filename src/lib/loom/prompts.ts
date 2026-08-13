@@ -1,4 +1,4 @@
-export const PERMISSIONS = ["storage", "model", "notify"] as const;
+export const PERMISSIONS = ["storage", "model", "notify", "settings"] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
 export function ctxFor(chars: number): number {
@@ -9,7 +9,7 @@ export function ctxFor(chars: number): number {
 export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LOOM, made of exactly three files:
 
 1. manifest.json — {"id": "<kebab-case>", "name": "<Display Name>", "description": "<one line>", "version": 1, "permissions": [...]}
-   Allowed permissions (request ONLY what the organ truly needs): "storage" (persistent key-value store), "model" (chat with the local model), "notify" (show a notification).
+   Allowed permissions (request ONLY what the organ truly needs): "storage" (persistent key-value store), "model" (chat with the local model), "notify" (show a notification), "settings" (read/write user preferences — request only for settings-type organs).
 
 2. organ.js — an ES module:
    export default {
@@ -19,6 +19,17 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
        // loom.storage.get(key, fallback) / loom.storage.set(key, value) / loom.storage.del(key)  [needs "storage"]
        // await loom.model.chat([{role:"user",content:"..."}]) -> string                            [needs "model"]
        // loom.notify(text)                                                                          [needs "notify"]
+       // loom.settings — request only for settings-type organs                                     [needs "settings"]
+       //   loom.settings.get(key) -> string          whitelisted keys: voice.default (voice id),
+       //                                               voice.speakReplies ("always"|"whenSpoken"|"never"),
+       //                                               orb.tier ("auto"|"flat"),
+       //                                               loom.reviewBeforeSave ("0"|"1")
+       //   loom.settings.set(key, value) -> void     validates key + value against whitelist
+       //   loom.settings.voices() -> [{id,label,present}]  all 3 voice ids with download status
+       //   await loom.settings.audition(voiceId) -> void   speaks "Hello — I am LOOM." aloud
+       //   await loom.settings.micTest() -> string   2s record + transcribe; returns text or error
+       //   loom.settings.voiceStatus() -> Promise<{ready,whisper,voices,missing_bytes_hint}>
+       //   await loom.settings.setup(onPct?) -> void downloads missing models (fires onPct(pct) 0-100)
 
        // loom.ui — design kit (always available, no permission needed):
        //   loom.ui.tokens                           -> { bg, panel, t1, t2, t3, accent, go, warn, danger }
