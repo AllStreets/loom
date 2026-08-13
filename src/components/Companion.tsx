@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { fleetChat, organWrite, organRead, organList, type OrganFile, type Msg } from "../lib/core";
+import { fleetChat, organWrite, organRead, organList, ttsSpeak, type OrganFile, type Msg } from "../lib/core";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
 import { handle, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
+import { getSetting } from "../lib/voice/settings";
+import { playWav } from "../lib/voice/player";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -378,6 +380,12 @@ export default function Companion() {
   // Stores the pending "idle" timeout so it can be cancelled on new turn or unmount
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Spoken turn tracking
+  const spokenTurnRef = useRef(false);
+
+  // Stable ref to runTurn so the loom-utterance listener doesn't need to re-register
+  const runTurnRef = useRef<((utterance: string) => Promise<void>) | null>(null);
+
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   function scrollToBottom() {
@@ -591,11 +599,51 @@ export default function Companion() {
       // Do NOT push status string to history
     }
 
-    // Mood: turn settled — speak, then go idle after 2500ms
-    idleTimer.current = settleMood();
+    // Determine if we should speak the reply
+    let speakableText: string | null = null;
+    if (turn.kind === "reply") {
+      speakableText = turn.text;
+    } else if (turn.kind === "build") {
+      const r = turn.result;
+      if (r.ok && r.organId) speakableText = `${r.organId} is ready — approve it below.`;
+    } else if (turn.kind === "edit") {
+      const r = turn.result;
+      if (r.ok && r.organId) speakableText = `${r.organId} updated.`;
+    } else if (turn.kind === "act") {
+      speakableText = `Opening ${turn.organId} below.`;
+    }
 
+    const speakReplies = getSetting("voice.speakReplies");
+    const shouldSpeak =
+      speakableText !== null &&
+      (speakReplies === "always" || (speakReplies === "whenSpoken" && spokenTurnRef.current));
+
+    if (shouldSpeak && speakableText !== null) {
+      const textToSpeak = speakableText;
+      dispatchMood("speaking");
+      setBusy(false);
+      spokenTurnRef.current = false;
+      void (async () => {
+        try {
+          const raw = await ttsSpeak(textToSpeak, getSetting("voice.default"));
+          await playWav(new Uint8Array(raw));
+        } catch (e) {
+          console.warn("[Companion] ttsSpeak/playWav failed:", e);
+        } finally {
+          dispatchMood("idle");
+        }
+      })();
+      return;
+    }
+
+    // Non-speaking path
+    spokenTurnRef.current = false;
+    idleTimer.current = settleMood();
     setBusy(false);
   }
+
+  // Keep runTurnRef in sync so the loom-utterance listener can call current runTurn
+  runTurnRef.current = runTurn;
 
   function handleRetry(utterance: string) {
     runTurn(utterance);
@@ -613,6 +661,18 @@ export default function Companion() {
   useEffect(() => {
     scrollToBottom();
   }, [items]);
+
+  // loom-utterance listener — triggered by voice PTT
+  useEffect(() => {
+    function onUtterance(ev: Event) {
+      const detail = (ev as CustomEvent<{ text: string; spoken?: boolean }>).detail;
+      if (!detail?.text) return;
+      spokenTurnRef.current = detail.spoken === true;
+      void runTurnRef.current?.(detail.text);
+    }
+    window.addEventListener("loom-utterance", onUtterance);
+    return () => window.removeEventListener("loom-utterance", onUtterance);
+  }, []); // stable — uses ref pattern
 
   // Cleanup: settle all pending reviews on unmount, cancel idle timer, dispatch idle
   useEffect(() => {

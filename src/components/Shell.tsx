@@ -3,10 +3,12 @@ import { motion, useReducedMotion } from "framer-motion";
 import { Orb } from "./orb/Orb";
 import Companion from "./Companion";
 import Desktop from "./desktop/Desktop";
-import { fleetStatus, timelineInit, timelineLog, type RoleStatus, type Commit } from "../lib/core";
+import { fleetStatus, timelineInit, timelineLog, voiceStatus, type RoleStatus, type Commit } from "../lib/core";
 import { MOOD_TARGETS, type OrbMood } from "../lib/orb/state";
 import { organList, organWrite } from "../lib/core";
 import { installSeeds } from "../organs/seeds/install";
+import { useVoice } from "../lib/voice/useVoice";
+import { audioLevel } from "../lib/orb/audioLevel";
 
 // Active turn moods — fleet-offline cannot override these
 const ACTIVE_MOODS: ReadonlySet<OrbMood> = new Set([
@@ -22,10 +24,18 @@ export default function Shell() {
   const [mood, setMood] = useState<OrbMood>("idle");
   const [roles, setRoles] = useState<RoleStatus[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
+  const [voiceReady, setVoiceReady] = useState(false);
   const reducedMotion = useReducedMotion() ?? false;
+
+  // Voice state machine
+  const voice = useVoice();
 
   // Track mood from loom-mood events so fleet offline doesn't override active turns
   const lastEventMoodRef = useRef<OrbMood | null>(null);
+
+  // Refs for the listening ring animation
+  const ringRef = useRef<HTMLDivElement | null>(null);
+  const ringRafRef = useRef<number | null>(null);
 
   // ----- seed install (originally in App) -----
   useEffect(() => {
@@ -86,6 +96,21 @@ export default function Shell() {
     return () => clearInterval(id);
   }, []);
 
+  // ----- voiceReady poll (once on mount, then every 60s) -----
+  useEffect(() => {
+    async function checkVoice() {
+      try {
+        const s = await voiceStatus();
+        setVoiceReady(s.ready);
+      } catch {
+        // leave voiceReady false on error
+      }
+    }
+    checkVoice();
+    const id = setInterval(checkVoice, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   // ----- cursor spotlight (rAF throttled, passive, disabled on reducedMotion) -----
   const shellRef = useRef<HTMLDivElement | null>(null);
   const spotlightRef = useRef<HTMLDivElement | null>(null);
@@ -115,6 +140,64 @@ export default function Shell() {
       }
     };
   }, [reducedMotion]);
+
+  // ----- Listening ring rAF loop -----
+  useEffect(() => {
+    if (voice.state !== "listening") {
+      if (ringRafRef.current !== null) {
+        cancelAnimationFrame(ringRafRef.current);
+        ringRafRef.current = null;
+      }
+      return;
+    }
+    function tick() {
+      if (ringRef.current) {
+        const scale = 1 + audioLevel.current * 0.3;
+        ringRef.current.style.transform = `scale(${scale})`;
+      }
+      ringRafRef.current = requestAnimationFrame(tick);
+    }
+    ringRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (ringRafRef.current !== null) {
+        cancelAnimationFrame(ringRafRef.current);
+        ringRafRef.current = null;
+      }
+    };
+  }, [voice.state]);
+
+  // ----- Window blur — cancel voice -----
+  useEffect(() => {
+    function onBlur() { voice.cancel(); }
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, [voice]);
+
+  // ----- Space PTT keyboard handler -----
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.code !== "Space" || e.repeat) return;
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable ||
+        target.contentEditable === "true"
+      ) return;
+      e.preventDefault();
+      void voice.start();
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      void voice.stop();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [voice]);
 
   // ----- ambient glow color -----
   const moodColor = MOOD_TARGETS[mood].color;
@@ -224,15 +307,55 @@ export default function Shell() {
       {/* Orb hero */}
       <div
         data-testid="orb-hero"
+        onPointerDown={() => { void voice.start(); }}
+        onPointerUp={() => { void voice.stop(); }}
+        onPointerLeave={() => { void voice.stop(); }}
+        onPointerCancel={() => { void voice.stop(); }}
         style={{
           display: "flex",
           justifyContent: "center",
           margin: "12px 0 24px",
           position: "relative",
           zIndex: 10,
+          cursor: "pointer",
         }}
       >
         <Orb mood={mood} size={180} />
+        {voice.state === "listening" && (
+          <div
+            data-testid="listening-ring"
+            ref={ringRef}
+            aria-hidden
+            style={{
+              position: "absolute",
+              inset: -6,
+              borderRadius: "50%",
+              border: "2px solid var(--accent)",
+              pointerEvents: "none",
+              transform: "scale(1)",
+            }}
+          />
+        )}
+      </div>
+
+      {/* Voice status line */}
+      <div
+        data-testid="voice-status-line"
+        style={{
+          fontFamily: "var(--f-mono)",
+          fontSize: 11,
+          color: "var(--t3)",
+          textAlign: "center",
+          minHeight: 16,
+          marginBottom: 4,
+          position: "relative",
+          zIndex: 10,
+        }}
+      >
+        {voice.state === "listening" && "listening..."}
+        {voice.state === "transcribing" && "transcribing..."}
+        {voice.state === "unavailable" && `${voice.error ?? "Voice unavailable"} — open Settings`}
+        {voice.state === "idle" && voiceReady && "hold the orb or Space to talk"}
       </div>
 
       {/* Main column */}
