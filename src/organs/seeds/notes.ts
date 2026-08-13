@@ -11,110 +11,62 @@ const MANIFEST = JSON.stringify({
 const ORGAN_JS = `export default {
   id: "notes",
   render(el, loom) {
-    const t = loom.ui.tokens;
-    el.style.fontFamily = "system-ui, sans-serif";
-    el.style.color = t.t1;
+    const ui = loom.ui;
+    const { root, body } = ui.card({ title: "Notes" });
 
-    // Input row
-    const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.gap = "8px";
-    row.style.marginBottom = "12px";
-
-    const input = document.createElement("input");
-    input.dataset.action = "new-note";
-    input.placeholder = "Jot a thought...";
+    const heading = ui.heading("Quick Capture", "Jot a thought, keep it forever.");
+    const input = ui.input({ placeholder: "New note...", action: "new-note", onEnter: addNote });
+    const addBtn = ui.button("Add", { variant: "primary", action: "add" });
+    const inputRow = ui.row(input, addBtn);
     input.style.flex = "1";
-    input.style.background = t.panel;
-    input.style.color = t.t1;
-    input.style.border = "1px solid " + t.t3;
-    input.style.borderRadius = "4px";
-    input.style.padding = "6px 10px";
-    input.style.outline = "none";
 
-    const btn = document.createElement("button");
-    btn.dataset.action = "add";
-    btn.textContent = "Add";
-    btn.style.background = t.accent;
-    btn.style.color = t.bg;
-    btn.style.border = "none";
-    btn.style.borderRadius = "4px";
-    btn.style.padding = "6px 14px";
-    btn.style.cursor = "pointer";
-    btn.style.fontWeight = "bold";
+    const noteList = ui.list();
+    const countStat = ui.stat("notes", 0);
 
-    row.appendChild(input);
-    row.appendChild(btn);
-    el.appendChild(row);
+    body.appendChild(heading);
+    body.appendChild(inputRow);
+    body.appendChild(noteList.root);
+    body.appendChild(countStat);
+    el.appendChild(root);
 
-    // Notes list
-    const list = document.createElement("div");
-    el.appendChild(list);
-
-    // Count line
-    const countLine = document.createElement("div");
-    countLine.style.color = t.accent;
-    countLine.style.fontSize = "12px";
-    countLine.style.marginTop = "8px";
-    el.appendChild(countLine);
-
-    function render() {
+    function refresh() {
       const items = loom.storage.get("items", []);
-      list.innerHTML = "";
-      const sorted = items.slice().sort((a, b) => b.t - a.t);
-      for (const item of sorted) {
-        const noteEl = document.createElement("div");
-        noteEl.style.display = "flex";
-        noteEl.style.alignItems = "center";
-        noteEl.style.gap = "8px";
-        noteEl.style.background = t.panel;
-        noteEl.style.borderRadius = "4px";
-        noteEl.style.padding = "6px 10px";
-        noteEl.style.marginBottom = "6px";
-
-        const text = document.createElement("span");
-        text.style.flex = "1";
-        text.style.color = t.t1;
-        text.textContent = item.text;
-
-        const del = document.createElement("button");
-        del.dataset.action = "remove";
-        del.textContent = "x";
-        del.style.background = "transparent";
-        del.style.color = t.danger;
-        del.style.border = "none";
-        del.style.cursor = "pointer";
-        del.style.fontSize = "14px";
-        del.onclick = () => {
-          const all = loom.storage.get("items", []);
-          loom.storage.set("items", all.filter((n) => n.t !== item.t));
-          render();
-        };
-
-        noteEl.appendChild(text);
-        noteEl.appendChild(del);
-        list.appendChild(noteEl);
+      noteList.clear();
+      const sorted = items.slice().sort(function(a, b) { return b.t - a.t; });
+      if (sorted.length === 0) {
+        noteList.add(ui.empty("No notes yet."));
+      } else {
+        for (var i = 0; i < sorted.length; i++) {
+          var item = sorted[i];
+          (function(it) {
+            var row = ui.listRow(it.text, {
+              onRemove: function() {
+                var all = loom.storage.get("items", []);
+                loom.storage.set("items", all.filter(function(n) { return n.t !== it.t; }));
+                refresh();
+              },
+              removeAction: "remove",
+            });
+            noteList.add(row);
+          })(item);
+        }
       }
-      const count = items.length;
-      countLine.textContent = count === 0 ? "No notes yet." : count + " note" + (count === 1 ? "" : "s");
+      ui.setStat(countStat, items.length);
     }
 
     function addNote() {
-      const text = input.value.trim();
+      var text = input.value.trim();
       if (!text) return;
-      const items = loom.storage.get("items", []);
-      items.push({ t: Date.now(), text });
+      var items = loom.storage.get("items", []);
+      items.push({ t: Date.now(), text: text });
       loom.storage.set("items", items);
       input.value = "";
-      render();
+      refresh();
     }
 
-    btn.onclick = addNote;
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") addNote();
-    });
+    addBtn.addEventListener("click", addNote);
 
-    render();
+    refresh();
   }
 };`;
 
@@ -140,6 +92,19 @@ const TEST_JS = `export const tests = [
       const freshEl = document.createElement("div");
       organ.render(freshEl, loom);
       assert(freshEl.textContent.includes("existing note"), "existing note is rendered");
+    },
+  },
+  {
+    name: "removes a note",
+    fn: async ({ loom, organ, assert }) => {
+      loom.storage.set("items", [{ t: 1700000000000, text: "note to remove" }]);
+      const freshEl = document.createElement("div");
+      organ.render(freshEl, loom);
+      const removeBtn = freshEl.querySelector('[data-action="remove"]');
+      assert(removeBtn !== null, "remove button exists");
+      removeBtn.click();
+      const items = loom.storage.get("items", []);
+      assert(items.length === 0, "storage has 0 items");
     },
   },
 ];`;

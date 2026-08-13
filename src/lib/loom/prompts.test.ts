@@ -16,4 +16,10 @@ describe("contract", () => {
     for (const p of PERMISSIONS) expect(ORGAN_CONTRACT).toContain(p);
     expect(ORGAN_CONTRACT).toContain("export default");
   });
+
+  it("documents the loom.ui design kit factories", () => {
+    expect(ORGAN_CONTRACT).toContain("loom.ui");
+    expect(ORGAN_CONTRACT).toContain("card");
+    expect(ORGAN_CONTRACT).toContain("design");
+  });
 });

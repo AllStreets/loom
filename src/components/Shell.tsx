@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Orb } from "./orb/Orb";
 import Companion from "./Companion";
-import OrganHost from "../lib/organs/host";
+import Desktop from "./desktop/Desktop";
 import { fleetStatus, timelineInit, timelineLog, type RoleStatus, type Commit } from "../lib/core";
 import { MOOD_TARGETS, type OrbMood } from "../lib/orb/state";
 import { organList, organWrite } from "../lib/core";
@@ -262,32 +262,12 @@ export default function Shell() {
         </PanelTag>
 
         {/* Organs panel */}
-        <PanelTag
-          {...(motionProps as object)}
+        <div
           data-testid="organs-region"
-          style={{
-            background: "var(--glass)",
-            backdropFilter: "blur(var(--blur))",
-            WebkitBackdropFilter: "blur(var(--blur))",
-            border: "1px solid var(--glass-border)",
-            borderRadius: 14,
-            padding: "16px 20px",
-          }}
+          style={{ width: "100%", maxWidth: 1100, position: "relative", zIndex: 10 }}
         >
-          <div
-            style={{
-              fontFamily: "var(--f-mono)",
-              color: "var(--t3)",
-              fontSize: 12,
-              textTransform: "uppercase",
-              letterSpacing: ".08em",
-              marginBottom: 10,
-            }}
-          >
-            Organs
-          </div>
-          <OrganHost />
-        </PanelTag>
+          <Desktop />
+        </div>
 
         {/* Timeline collapsible footer */}
         <details

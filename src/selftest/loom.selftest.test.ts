@@ -149,6 +149,8 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
 
       const hasExportDefault = code.includes("export default");
       const hasRender = code.includes("render");
+      // Accept both direct usage (loom.ui.card) and aliased usage (const ui = loom.ui; ui.card)
+      const hasUiKit = code.includes("loom.ui.") || (code.includes("loom.ui") && /\bui\.(card|heading|button|input|list|listRow|stat|badge|empty|row|stack|progress)\b/.test(code));
 
       // strip module syntax so new Function can parse it
       const stripped = code
@@ -164,12 +166,12 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
         fnErr = String(e);
       }
 
-      if (hasExportDefault && hasRender && fnOk) {
+      if (hasExportDefault && hasRender && fnOk && hasUiKit) {
         passed++;
         console.info(`[build-organ-code] rep ${rep} PASS (${ms}ms)`);
       } else {
         console.info(
-          `[build-organ-code] rep ${rep} FAIL (${ms}ms) exportDefault=${hasExportDefault} render=${hasRender} fnOk=${fnOk} fnErr=${fnErr}`
+          `[build-organ-code] rep ${rep} FAIL (${ms}ms) exportDefault=${hasExportDefault} render=${hasRender} fnOk=${fnOk} hasUiKit=${hasUiKit} fnErr=${fnErr}`
         );
         console.info(`  code snippet:\n${code.slice(0, 400)}`);
       }
@@ -177,6 +179,7 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
       expect(hasExportDefault, `rep ${rep}: missing 'export default'`).toBe(true);
       expect(hasRender, `rep ${rep}: missing 'render'`).toBe(true);
       expect(fnOk, `rep ${rep}: new Function threw: ${fnErr}`).toBe(true);
+      expect(hasUiKit, `rep ${rep}: organ does not use loom.ui kit (expected loom.ui.factory or const ui = loom.ui + ui.factory calls)`).toBe(true);
     }
     console.info(`[build-organ-code] ${passed}/${REPS} passed`);
   });

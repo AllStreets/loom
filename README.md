@@ -51,6 +51,8 @@ This is a proven idea, generalized. Its predecessor — the Forge engine inside 
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
 
+The builder does not invent design — it **composes a curated design kit** (`loom.ui`): glass cards, stats, progress, lists, buttons — so every organ is born beautiful, and lives as a draggable window on the desktop.
+
 The load-bearing idea: **the model's output stays tiny** (one file at a time, or a single edit region), and three independent walls stand between model output and your machine — the validation gate, the git timeline, and your permission. When a build fails, the errors go **back to the builder**, which fixes its own code — tests are treated as the spec, so "should not add an empty item" gets fixed in the code, not deleted from the tests.
 
 An optional **Review code before saving** toggle adds a fourth wall: you read the three files and choose Apply or Discard before anything touches disk.
@@ -111,6 +113,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **2 · The Loom** | self-building engine: sandboxed validation · self-repair loop · permission-gated organs · review toggle · real-model selftest | **shipped** |
 | **3 · Companion** | prompt compiler · the presence (text) · organ editing by sentence · seed organs | **shipped** |
 | **4 · The orb + living UI** | react-three-fiber oracle-light orb · breathing motion · the living dashboard | **shipped** |
+| **4.5 · The Atelier** | loom.ui design kit — organs beautiful by construction · OS desktop: glass windows + dock | **shipped** |
 | **5 · Voice** | offline whisper.cpp + piper · push-to-talk · a voice loop that never half-works | next |
 | **later** | the OS-like windowed desktop · full self-modification, kernel included | vision |
 

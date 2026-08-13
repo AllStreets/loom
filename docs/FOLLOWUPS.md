@@ -43,3 +43,9 @@ Deferred (non-blocking) findings from the foundation branch reviews. None block 
 - **Orb2D style injection at render** — move `ensurePulseStyle()` into a useEffect. (`src/components/orb/Orb2D.tsx`)
 - **moods.firstEventMood call-site comment** — parameter/return asymmetry noted by review. (`src/lib/orb/moods.ts`)
 - **2600ms real-timer integration test** — potential slow-CI flake; revisit with better fake-timer strategy. (`src/components/Companion.test.tsx`)
+
+## From phase 4.5 (atelier) reviews (2026-08-12)
+- **desktop polish backlog** — window snap/tiling, dock reordering, per-organ icons (model-chosen glyph), kit chart primitive, per-organ theme accents.
+- **useOrgans reload()** — fire-and-forget without .catch; add error surface.
+- **persistence shape** — spec said {x,y,w,h,min,collapsed}; stored without `min` (collapsed covers it) — spec updated in place.
+- **organ-focus flash on wrapper** vs window chrome — cosmetic.
