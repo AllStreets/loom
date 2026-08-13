@@ -43,4 +43,25 @@ describe("buildHarnessSrc", () => {
     // and every test fn receives the organ object in its context
     expect(src).toContain("assert, organ");
   });
+  it("captures renderedHtml (el.innerHTML.slice(0,3000)) in both full and probe modes", () => {
+    const full = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce");
+    expect(full).toContain("el.innerHTML.slice(0, 3000)");
+    expect(full).toContain("renderedHtml");
+    const probe = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce", { probeOnly: true });
+    expect(probe).toContain("renderedHtml");
+    expect(probe).toContain("el.innerHTML.slice(0, 3000)");
+  });
+  it("probeOnly harness contains PROBE_ONLY=true flag and skips test loading", () => {
+    const probe = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce", { probeOnly: true });
+    expect(probe).toContain("PROBE_ONLY");
+    expect(probe).toContain('"probe"');
+    // The stage reported in probeOnly mode is "probe"
+    expect(probe).toContain('stage: "probe"');
+  });
+  it("non-probeOnly harness contains PROBE_ONLY=false", () => {
+    const src = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce");
+    expect(src).toContain("PROBE_ONLY");
+    // default opts: probeOnly is false
+    expect(src).toContain("false");
+  });
 });

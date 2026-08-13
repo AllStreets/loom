@@ -319,6 +319,141 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     expect(["rules", "model"] as string[]).toContain(result.source);
   });
 
+  it("tests-grounded-in-dom: 3 reps — test.js selectors must match provided rendered HTML", async () => {
+    const m = model ?? (await pickBuilder());
+
+    // A hand-written movie-list DOM that the model must ground its selectors in.
+    // This is exactly the kind of DOM a real movie-tracker organ would produce.
+    const MOVIE_DOM = `<div><div><input data-action="new-movie" placeholder="Movie title..."><button data-action="add">Add</button></div><ul data-action="list"><li>Inception <button data-action="remove">x</button></li></ul></div>`;
+
+    const MOVIE_MANIFEST = JSON.stringify({
+      id: "movie-tracker",
+      name: "Movie Tracker",
+      description: "Track movies to watch.",
+      version: 1,
+      permissions: ["storage"],
+    });
+
+    const MOVIE_CODE = `export default {
+  id: "movie-tracker",
+  render(el, loom) {
+    const ui = loom.ui;
+    const { root, body } = ui.card({ title: "Movie Tracker" });
+    const input = ui.input({ placeholder: "Movie title...", action: "new-movie" });
+    const addBtn = ui.button("Add", { action: "add" });
+    const row = ui.row(input, addBtn);
+    const listContainer = ui.list();
+    listContainer.root.dataset.action = "list";
+    const render = () => {
+      listContainer.clear();
+      const movies = loom.storage.get("movies", []);
+      movies.forEach((title, i) => {
+        const item = ui.listRow(title, { onRemove: () => {
+          const ms = loom.storage.get("movies", []);
+          ms.splice(i, 1);
+          loom.storage.set("movies", ms);
+          render();
+        }});
+        // mark remove buttons
+        const rmBtn = item.querySelector("button");
+        if (rmBtn) rmBtn.dataset.action = "remove";
+        listContainer.add(item);
+      });
+    };
+    addBtn.addEventListener("click", () => {
+      const val = input.value.trim();
+      if (!val) return;
+      const movies = loom.storage.get("movies", []);
+      movies.push(val);
+      loom.storage.set("movies", movies);
+      input.value = "";
+      render();
+    });
+    body.appendChild(row);
+    body.appendChild(listContainer.root);
+    el.appendChild(root);
+    render();
+  }
+};`;
+
+    const system = organSystemPrompt("tests");
+    // Give the model the real DOM — this is the DOM-grounded tests-gen prompt
+    const user =
+      `Manifest:\n${MOVIE_MANIFEST}\n\nCode:\n${MOVIE_CODE}\n\n` +
+      `The organ's ACTUAL rendered HTML (ground truth — your selectors MUST match elements present here):\n${MOVIE_DOM}`;
+
+    // Extract all data-action values from the DOM
+    function extractDomActions(html: string): Set<string> {
+      const actions = new Set<string>();
+      for (const m of html.matchAll(/data-action="([^"]+)"/g)) {
+        actions.add(m[1]);
+      }
+      return actions;
+    }
+
+    // Extract data-action references from test.js source
+    function extractTestActions(src: string): Set<string> {
+      const actions = new Set<string>();
+      for (const m of src.matchAll(/\[data-action="([^"]+)"\]/g)) {
+        actions.add(m[1]);
+      }
+      return actions;
+    }
+
+    // Count .value = assignments and [data-action="add"] click patterns
+    function countValueAssignments(src: string): number {
+      return (src.match(/\.value\s*=/g) ?? []).length;
+    }
+    function countAddClicks(src: string): number {
+      // matches .click() on add buttons or querySelector('[data-action="add"]').click()
+      const addPattern = /\[data-action="add"\][^;]*\.click\(\)/g;
+      return (src.match(addPattern) ?? []).length;
+    }
+
+    const domActions = extractDomActions(MOVIE_DOM);
+
+    let passed = 0;
+    for (let rep = 1; rep <= REPS; rep++) {
+      const t0 = Date.now();
+      const raw = await chat(m, system, user);
+      const code = extractCode(raw);
+      const ms = Date.now() - t0;
+
+      const hasTests = code.includes("export const tests");
+      const hasImport = /^\s*import\b/m.test(code) || code.includes("./organ.js");
+
+      // Check that all data-action selectors used in the test exist in the DOM
+      const testActions = extractTestActions(code);
+      const unknownActions: string[] = [];
+      for (const action of testActions) {
+        if (!domActions.has(action)) unknownActions.push(action);
+      }
+      const selectorsGrounded = unknownActions.length === 0;
+
+      // Multi-add compliance: if test clicks add >= 2 times, it must set .value at least as many times
+      const addClicks = countAddClicks(code);
+      const valueAssigns = countValueAssignments(code);
+      const multiAddOk = addClicks < 2 || valueAssigns >= addClicks;
+
+      const ok = hasTests && !hasImport && selectorsGrounded && multiAddOk;
+      if (ok) {
+        passed++;
+        console.info(`[tests-grounded-in-dom] rep ${rep} PASS (${ms}ms) addClicks=${addClicks} valueAssigns=${valueAssigns}`);
+      } else {
+        console.info(
+          `[tests-grounded-in-dom] rep ${rep} FAIL (${ms}ms) hasTests=${hasTests} hasImport=${hasImport} unknownActions=${JSON.stringify(unknownActions)} multiAddOk=${multiAddOk}(clicks=${addClicks},assigns=${valueAssigns})`
+        );
+        console.info(`  code snippet:\n${code.slice(0, 600)}`);
+      }
+
+      expect(hasTests, `rep ${rep}: missing 'export const tests'`).toBe(true);
+      expect(hasImport, `rep ${rep}: test.js contains an import`).toBe(false);
+      expect(selectorsGrounded, `rep ${rep}: test uses unknown data-action selectors: ${JSON.stringify(unknownActions)} (DOM has: ${JSON.stringify([...domActions])})`).toBe(true);
+      expect(multiAddOk, `rep ${rep}: multi-add pattern violation — ${addClicks} add clicks but only ${valueAssigns} .value= assignments`).toBe(true);
+    }
+    console.info(`[tests-grounded-in-dom] ${passed}/${REPS} passed`);
+  });
+
   it("edit-organ: 3 reps — notes seed organ.js heading change", async () => {
     const m = model ?? (await pickBuilder());
 
