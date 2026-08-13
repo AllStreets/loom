@@ -1,4 +1,4 @@
-import { UIKIT_SRC } from "../organs/uikitSrc";
+import { UIKIT_SRC, KIT_TOKENS } from "../organs/uikitSrc";
 
 export type OrganFilesIn = { manifest: string; code: string; tests: string };
 export type SandboxVerdict = {
@@ -27,7 +27,7 @@ ${UIKIT_SRC}
 // between tests was a real failure mode: "three movies remain" failing because a
 // previous test's items were still in a shared store.
 const freshLoom = () => {
-  const tokens = { bg: "#060b18", panel: "#0d1424", t1: "#e8edf7", t2: "#9fb0cc", t3: "#5f6f8c", accent: "#22d3ee", go: "#4ade80", warn: "#fbbf24", danger: "#f87171" };
+  var tokens = ${JSON.stringify(KIT_TOKENS)};
   return {
     storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },
     model: { chat: async () => "(model unavailable in sandbox)" },

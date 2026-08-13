@@ -294,6 +294,67 @@ describe("Desktop", () => {
     }
   });
 
+  it("'Not now' dismisses modal and does not reopen on organs-changed", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [UNAPPROVED_ORGAN];
+      return null;
+    });
+
+    render(<Desktop />);
+
+    // Auto-modal opens
+    await waitFor(() => {
+      expect(screen.getByText("Run Tracker")).toBeInTheDocument();
+    });
+
+    // Click "Not now"
+    const notNowBtn = screen.getByRole("button", { name: /not now/i });
+    await userEvent.click(notNowBtn);
+
+    // Modal should close
+    await waitFor(() => {
+      expect(screen.queryByText("Tracks runs")).not.toBeInTheDocument();
+    });
+
+    // Fire organs-changed — modal should NOT reopen
+    await act(async () => {
+      window.dispatchEvent(new Event("organs-changed"));
+    });
+
+    // Give React a tick to settle
+    await waitFor(() => {
+      expect(screen.queryByText("Tracks runs")).not.toBeInTheDocument();
+    });
+  });
+
+  it("dock tile click opens modal even after 'Not now' dismissal", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [UNAPPROVED_ORGAN];
+      return null;
+    });
+
+    render(<Desktop />);
+
+    // Auto-modal opens
+    await waitFor(() => {
+      expect(screen.getByText("Run Tracker")).toBeInTheDocument();
+    });
+
+    // Dismiss with "Not now"
+    await userEvent.click(screen.getByRole("button", { name: /not now/i }));
+    await waitFor(() => {
+      expect(screen.queryByText("Tracks runs")).not.toBeInTheDocument();
+    });
+
+    // Click the dock tile for the unapproved organ — should reopen modal explicitly
+    const dockTile = screen.getByTitle("Run Tracker");
+    await userEvent.click(dockTile);
+
+    await waitFor(() => {
+      expect(screen.getByText("Tracks runs")).toBeInTheDocument();
+    });
+  });
+
   it("organ-focus event restores and focuses the window", async () => {
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "organ_list") return [APPROVED_ORGAN];

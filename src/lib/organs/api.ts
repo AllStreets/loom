@@ -1,25 +1,15 @@
 import { fleetChat, type Msg } from "../core";
 import { buildUiKit, type LoomUiKit } from "./uikit";
+import { KIT_TOKENS } from "./uikitSrc";
 
 export type { LoomUiKit };
+export { KIT_TOKENS };
 
 export type LoomApi = {
   storage: { get<T>(k: string, fallback: T): T; set(k: string, v: unknown): void; del(k: string): void };
   model: { chat(messages: Msg[]): Promise<string> };
   ui: LoomUiKit;
   notify: (text: string) => void;
-};
-
-const TOKENS = {
-  bg: "#060b18",
-  panel: "#0d1424",
-  t1: "#e8edf7",
-  t2: "#9fb0cc",
-  t3: "#5f6f8c",
-  accent: "#22d3ee",
-  go: "#4ade80",
-  warn: "#fbbf24",
-  danger: "#f87171",
 };
 
 export function makeLoomApi(
@@ -55,7 +45,7 @@ export function makeLoomApi(
         return chat("companion", messages);
       },
     },
-    ui: buildUiKit(TOKENS),
+    ui: buildUiKit(KIT_TOKENS),
     notify: (text) => {
       need("notify");
       (deps.notify ?? ((t: string) => console.info("[notify]", t)))(text);

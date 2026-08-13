@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { UIKIT_SRC } from "./uikitSrc";
+import { UIKIT_SRC, KIT_TOKENS } from "./uikitSrc";
 import { buildUiKit } from "./uikit";
+import { buildHarnessSrc } from "../loom/sandbox";
+import { makeLoomApi } from "./api";
 
 const TOKENS = {
   bg: "#060b18",
@@ -348,5 +350,35 @@ describe("empty", () => {
     const e = ui.empty("Nothing here yet");
     expect(e.textContent).toBe("Nothing here yet");
     expect(e.style.textAlign).toBe("center");
+  });
+});
+
+describe("KIT_TOKENS single-source parity", () => {
+  it("harness srcdoc embeds JSON.stringify(KIT_TOKENS) verbatim", () => {
+    const src = buildHarnessSrc(
+      { manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" },
+      "tok-test",
+    );
+    expect(src).toContain(JSON.stringify(KIT_TOKENS));
+    // Spot-check the accent value is present
+    expect(src).toContain("#22d3ee");
+  });
+
+  it("harness tokens JSON round-trips to deep-equal KIT_TOKENS", () => {
+    const src = buildHarnessSrc(
+      { manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" },
+      "tok-test2",
+    );
+    // Extract the first JSON object that matches KIT_TOKENS serialisation
+    const serialised = JSON.stringify(KIT_TOKENS);
+    expect(src).toContain(serialised);
+    const idx = src.indexOf(serialised);
+    const parsed = JSON.parse(src.slice(idx, idx + serialised.length));
+    expect(parsed).toEqual(KIT_TOKENS);
+  });
+
+  it("makeLoomApi ui.tokens deep-equals KIT_TOKENS", () => {
+    const api = makeLoomApi("x", []);
+    expect(api.ui.tokens).toEqual(KIT_TOKENS);
   });
 });

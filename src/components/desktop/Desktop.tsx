@@ -15,6 +15,7 @@ export default function Desktop() {
   const [modalOrganId, setModalOrganId] = useState<string | null>(null);
   const windowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const flashTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const dismissedRef = useRef<Set<string>>(new Set());
 
   // Listen for organs-changed and organ-focus
   useEffect(() => {
@@ -51,14 +52,20 @@ export default function Desktop() {
     return () => {
       window.removeEventListener("organs-changed", onOrganChanged);
       window.removeEventListener("organ-focus", onOrganFocus);
+      // Clear any pending flash timers on unmount
+      for (const id of Object.keys(flashTimers.current)) {
+        clearTimeout(flashTimers.current[id]);
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-open modal for first unapproved organ
+  // Auto-open modal for first unapproved organ (skips session-dismissed ids)
   useEffect(() => {
     if (organs.length === 0) return;
-    const firstPending = organs.find((o) => !o.approved);
+    const firstPending = organs.find(
+      (o) => !o.approved && !dismissedRef.current.has(o.entry.id),
+    );
     if (firstPending && modalOrganId === null) {
       setModalOrganId(firstPending.entry.id);
     }
@@ -236,7 +243,10 @@ export default function Desktop() {
                 Approve
               </button>
               <button
-                onClick={() => setModalOrganId(null)}
+                onClick={() => {
+                  if (modalOrgan) dismissedRef.current.add(modalOrgan.entry.id);
+                  setModalOrganId(null);
+                }}
                 style={{
                   background: "rgba(255,255,255,.06)",
                   color: "var(--t2)",

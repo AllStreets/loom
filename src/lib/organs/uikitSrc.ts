@@ -1,6 +1,18 @@
 // Plain-JS source string for the loom.ui design kit.
 // MUST contain no import/export/TS syntax — executes via new Function in host AND sandbox iframe.
 
+export const KIT_TOKENS = {
+  bg: "#060b18",
+  panel: "#0d1424",
+  t1: "#e8edf7",
+  t2: "#9fb0cc",
+  t3: "#5f6f8c",
+  accent: "#22d3ee",
+  go: "#4ade80",
+  warn: "#fbbf24",
+  danger: "#f87171",
+} as const;
+
 export const UIKIT_SRC: string = `
 function makeUi(tokens) {
   // --- Style injection (once per document) ---
