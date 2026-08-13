@@ -1,9 +1,9 @@
-/// voice.rs — offline STT (whisper-rs, Metal) + TTS (sherpa-rs vits/piper .onnx)
+/// voice.rs — offline STT (whisper-rs, Metal) + TTS (sherpa-rs vits/piper bundles)
 ///
 /// Engine choice: whisper-rs 0.16 (whisper.cpp bindings, Metal feature enabled) for STT.
-/// TTS: piper-rs 0.2 failed to build — espeak-rs-sys requires system eSpeak-NG libraries
-/// not present on a plain macOS + Xcode CLT setup. Fallback: sherpa-rs 0.6 (sherpa-onnx)
-/// with default TTS feature, which supports piper/vits .onnx voices directly.
+/// TTS: sherpa-rs 0.6 (sherpa-onnx) with sherpa-converted piper bundles — raw HuggingFace
+/// piper .onnx/.onnx.json files do NOT work with sherpa-rs; the sherpa bundle format is
+/// required (model .onnx + tokens.txt + espeak-ng-data/).
 /// Both built cleanly after `brew install cmake` (cmake was absent; documented in report).
 
 use crate::error::LoomError;
@@ -18,52 +18,30 @@ use tauri::{AppHandle, Emitter};
 pub struct VoiceDef {
     pub id: &'static str,
     pub label: &'static str,
-    /// (filename, url) pairs — .onnx + .onnx.json for each voice
-    pub files: &'static [(&'static str, &'static str)],
+    /// URL to the sherpa-converted .tar.bz2 bundle on GitHub releases
+    pub archive_url: &'static str,
+    /// Top-level directory name inside the archive (and on disk under voice_dir)
+    pub dir_name: &'static str,
 }
 
 pub const VOICES: [VoiceDef; 3] = [
     VoiceDef {
         id: "en_US-lessac-medium",
         label: "Lessac (US, medium)",
-        files: &[
-            (
-                "en_US-lessac-medium.onnx",
-                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
-            ),
-            (
-                "en_US-lessac-medium.onnx.json",
-                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
-            ),
-        ],
+        archive_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2",
+        dir_name: "vits-piper-en_US-lessac-medium",
     },
     VoiceDef {
         id: "en_GB-alba-medium",
         label: "Alba (GB, medium)",
-        files: &[
-            (
-                "en_GB-alba-medium.onnx",
-                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx",
-            ),
-            (
-                "en_GB-alba-medium.onnx.json",
-                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json",
-            ),
-        ],
+        archive_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-alba-medium.tar.bz2",
+        dir_name: "vits-piper-en_GB-alba-medium",
     },
     VoiceDef {
         id: "en_US-libritts-high",
         label: "LibriTTS (US, high)",
-        files: &[
-            (
-                "en_US-libritts-high.onnx",
-                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx",
-            ),
-            (
-                "en_US-libritts-high.onnx.json",
-                "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json",
-            ),
-        ],
+        archive_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-libritts-high.tar.bz2",
+        dir_name: "vits-piper-en_US-libritts-high",
     },
 ];
 
@@ -85,21 +63,37 @@ pub fn voice_dir(app: &AppHandle) -> Result<PathBuf, LoomError> {
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
 
-/// Returns (filename, url) pairs for any file in the registry that is absent from `dir`.
-pub fn missing_files(dir: &Path) -> Vec<(String, String)> {
+/// Returns true if the three required bundle paths all exist for a voice.
+/// - `<dir_name>/<id>.onnx`
+/// - `<dir_name>/tokens.txt`
+/// - `<dir_name>/espeak-ng-data` (directory)
+pub fn voice_present(voice_dir: &Path, voice: &VoiceDef) -> bool {
+    let bundle = voice_dir.join(voice.dir_name);
+    bundle.join(format!("{}.onnx", voice.id)).exists()
+        && bundle.join("tokens.txt").exists()
+        && bundle.join("espeak-ng-data").exists()
+}
+
+/// Returns (archive_url, dir_name) pairs for any voice bundle absent from `dir`,
+/// plus (filename, url) for a missing whisper model.
+pub fn missing_voices(dir: &Path) -> Vec<(&'static str, &'static str, &'static str)> {
     let mut out = Vec::new();
-    let (wname, wurl) = WHISPER;
-    if !dir.join(wname).exists() {
-        out.push((wname.to_string(), wurl.to_string()));
-    }
     for voice in &VOICES {
-        for (fname, url) in voice.files {
-            if !dir.join(fname).exists() {
-                out.push((fname.to_string(), url.to_string()));
-            }
+        if !voice_present(dir, voice) {
+            out.push((voice.archive_url, voice.dir_name, voice.id));
         }
     }
     out
+}
+
+/// Returns the whisper (filename, url) if absent.
+pub fn missing_whisper(dir: &Path) -> Option<(&'static str, &'static str)> {
+    let (wname, wurl) = WHISPER;
+    if !dir.join(wname).exists() {
+        Some((wname, wurl))
+    } else {
+        None
+    }
 }
 
 /// Cap input to 30 seconds at 16kHz mono (480_000 samples).
@@ -173,7 +167,7 @@ pub async fn voice_status(app: AppHandle) -> Result<VoiceStatus, LoomError> {
     let mut voices = Vec::new();
     let mut all_voices_present = true;
     for v in &VOICES {
-        let present = v.files.iter().all(|(f, _)| dir.join(f).exists());
+        let present = voice_present(&dir, v);
         if !present {
             all_voices_present = false;
         }
@@ -185,11 +179,17 @@ pub async fn voice_status(app: AppHandle) -> Result<VoiceStatus, LoomError> {
     }
 
     let ready = whisper_present && all_voices_present;
-    let missing = missing_files(&dir);
-    let missing_bytes_hint = if missing.is_empty() {
+
+    let mut missing_count = 0usize;
+    if missing_whisper(&dir).is_some() {
+        missing_count += 1;
+    }
+    missing_count += missing_voices(&dir).len();
+
+    let missing_bytes_hint = if missing_count == 0 {
         None
     } else {
-        Some(format!("{} file(s) not downloaded", missing.len()))
+        Some(format!("{missing_count} item(s) not downloaded"))
     };
 
     Ok(VoiceStatus {
@@ -203,38 +203,33 @@ pub async fn voice_status(app: AppHandle) -> Result<VoiceStatus, LoomError> {
 #[tauri::command]
 pub async fn voice_setup(app: AppHandle, window: tauri::Window) -> Result<(), LoomError> {
     let dir = voice_dir(&app)?;
-    let missing = missing_files(&dir);
-    if missing.is_empty() {
-        return Ok(()); // idempotent
-    }
 
-    let client = reqwest::Client::new();
-
-    for (fname, url) in &missing {
+    // ── Whisper (single file, unchanged) ──────────────────────────────────────
+    if let Some((wname, wurl)) = missing_whisper(&dir) {
+        let client = reqwest::Client::new();
         let resp = client
-            .get(url)
+            .get(wurl)
             .send()
             .await
             .map_err(|e| LoomError::Http(e.to_string()))?;
 
         if !resp.status().is_success() {
             return Err(LoomError::Http(format!(
-                "download {} failed: {}",
-                fname,
+                "download whisper failed: {}",
                 resp.status()
             )));
         }
 
         let total = resp.content_length().unwrap_or(0);
-        let tmp_path = dir.join(format!("{fname}.tmp"));
-        let final_path = dir.join(fname);
+        let tmp_path = dir.join(format!("{wname}.tmp"));
+        let final_path = dir.join(wname);
 
         {
             use tokio::io::AsyncWriteExt;
             let mut file = tokio::fs::File::create(&tmp_path)
                 .await
                 .map_err(|e| {
-                    let _ = tokio::fs::remove_file(&tmp_path);
+                    let _ = std::fs::remove_file(&tmp_path);
                     LoomError::Http(e.to_string())
                 })?;
 
@@ -244,13 +239,13 @@ pub async fn voice_setup(app: AppHandle, window: tauri::Window) -> Result<(), Lo
 
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| {
-                    let _ = tokio::fs::remove_file(&tmp_path);
+                    let _ = std::fs::remove_file(&tmp_path);
                     LoomError::Http(e.to_string())
                 })?;
                 file.write_all(&chunk)
                     .await
                     .map_err(|e| {
-                        let _ = tokio::fs::remove_file(&tmp_path);
+                        let _ = std::fs::remove_file(&tmp_path);
                         LoomError::Http(e.to_string())
                     })?;
                 downloaded += chunk.len() as u64;
@@ -264,14 +259,14 @@ pub async fn voice_setup(app: AppHandle, window: tauri::Window) -> Result<(), Lo
                     last_pct = pct;
                     let _ = window.emit(
                         "voice-setup-progress",
-                        serde_json::json!({ "file": fname, "pct": pct }),
+                        serde_json::json!({ "file": wname, "pct": pct }),
                     );
                 }
             }
             file.flush()
                 .await
                 .map_err(|e| {
-                    let _ = tokio::fs::remove_file(&tmp_path);
+                    let _ = std::fs::remove_file(&tmp_path);
                     LoomError::Http(e.to_string())
                 })?;
         }
@@ -279,13 +274,126 @@ pub async fn voice_setup(app: AppHandle, window: tauri::Window) -> Result<(), Lo
         tokio::fs::rename(&tmp_path, &final_path)
             .await
             .map_err(|e| {
-                let _ = tokio::fs::remove_file(&tmp_path);
+                let _ = std::fs::remove_file(&tmp_path);
                 LoomError::Http(e.to_string())
             })?;
 
         let _ = window.emit(
             "voice-setup-progress",
-            serde_json::json!({ "file": fname, "pct": 100 }),
+            serde_json::json!({ "file": wname, "pct": 100 }),
+        );
+    }
+
+    // ── Voice bundles (.tar.bz2) ──────────────────────────────────────────────
+    let missing = missing_voices(&dir);
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let client = reqwest::Client::new();
+
+    for (archive_url, dir_name, _id) in &missing {
+        let archive_name = format!("{dir_name}.tar.bz2");
+        let tmp_path = dir.join(format!("{archive_name}.tmp"));
+        let extract_dir = dir.join(dir_name);
+
+        // Download archive to .tmp
+        let resp = client
+            .get(*archive_url)
+            .send()
+            .await
+            .map_err(|e| LoomError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            return Err(LoomError::Http(format!(
+                "download {archive_name} failed: {}",
+                resp.status()
+            )));
+        }
+
+        let total = resp.content_length().unwrap_or(0);
+
+        {
+            use tokio::io::AsyncWriteExt;
+            let mut file = tokio::fs::File::create(&tmp_path)
+                .await
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    LoomError::Http(e.to_string())
+                })?;
+
+            let mut stream = resp.bytes_stream();
+            let mut downloaded: u64 = 0;
+            let mut last_pct: i64 = -1;
+
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    LoomError::Http(e.to_string())
+                })?;
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| {
+                        let _ = std::fs::remove_file(&tmp_path);
+                        LoomError::Http(e.to_string())
+                    })?;
+                downloaded += chunk.len() as u64;
+
+                let pct = if total > 0 {
+                    (downloaded * 100 / total) as i64
+                } else {
+                    -1
+                };
+                if pct != last_pct {
+                    last_pct = pct;
+                    let _ = window.emit(
+                        "voice-setup-progress",
+                        serde_json::json!({ "file": archive_name, "pct": pct }),
+                    );
+                }
+            }
+            file.flush()
+                .await
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    LoomError::Http(e.to_string())
+                })?;
+        }
+
+        // Extract synchronously (blocking I/O — fine for setup path)
+        let tmp_path_clone = tmp_path.clone();
+        let extract_dir_clone = extract_dir.clone();
+        let dir_name_str = dir_name.to_string();
+        let dir_clone = dir.clone();
+
+        tokio::task::spawn_blocking(move || -> Result<(), LoomError> {
+            use bzip2::read::BzDecoder;
+            use tar::Archive;
+
+            let file = std::fs::File::open(&tmp_path_clone)
+                .map_err(|e| LoomError::Http(format!("open archive: {e}")))?;
+            let bz = BzDecoder::new(file);
+            let mut archive = Archive::new(bz);
+
+            archive
+                .unpack(&dir_clone)
+                .map_err(|e| {
+                    // Cleanup: remove partial extract dir and tmp archive
+                    let _ = std::fs::remove_dir_all(&extract_dir_clone);
+                    let _ = std::fs::remove_file(&tmp_path_clone);
+                    LoomError::Http(format!("extract {dir_name_str}: {e}"))
+                })?;
+
+            // Remove the archive after successful extraction
+            let _ = std::fs::remove_file(&tmp_path_clone);
+            Ok(())
+        })
+        .await
+        .map_err(|e| LoomError::Parse(e.to_string()))??;
+
+        let _ = window.emit(
+            "voice-setup-progress",
+            serde_json::json!({ "file": archive_name, "pct": 100 }),
         );
     }
 
@@ -363,43 +471,33 @@ pub async fn tts_speak(
 
     let dir = voice_dir(&app)?;
 
-    // Verify all files present
-    for (fname, _) in voice_def.files {
-        if !dir.join(fname).exists() {
-            return Err(LoomError::NotFound(format!(
-                "voice model files not downloaded: {fname}"
-            )));
-        }
+    // Verify bundle is fully present
+    if !voice_present(&dir, voice_def) {
+        return Err(LoomError::NotFound(format!(
+            "voice bundle not downloaded: {}",
+            voice_def.dir_name
+        )));
     }
 
-    let onnx_path = dir
-        .join(
-            voice_def
-                .files
-                .iter()
-                .find(|(f, _)| f.ends_with(".onnx") && !f.ends_with(".onnx.json"))
-                .map(|(f, _)| *f)
-                .ok_or_else(|| LoomError::Parse("no .onnx file in registry".into()))?,
-        )
+    let bundle_dir = dir.join(voice_def.dir_name);
+    let model_path = bundle_dir
+        .join(format!("{}.onnx", voice_def.id))
         .to_string_lossy()
         .to_string();
-
-    let json_path = dir
-        .join(
-            voice_def
-                .files
-                .iter()
-                .find(|(f, _)| f.ends_with(".onnx.json"))
-                .map(|(f, _)| *f)
-                .ok_or_else(|| LoomError::Parse("no .onnx.json file in registry".into()))?,
-        )
+    let tokens_path = bundle_dir
+        .join("tokens.txt")
+        .to_string_lossy()
+        .to_string();
+    let data_dir_path = bundle_dir
+        .join("espeak-ng-data")
         .to_string_lossy()
         .to_string();
 
     let (pcm, sample_rate) = tokio::task::spawn_blocking(move || -> Result<(Vec<i16>, u32), LoomError> {
         let mut tts = VitsTts::new(VitsTtsConfig {
-            model: onnx_path,
-            tokens: json_path,
+            model: model_path,
+            tokens: tokens_path,
+            data_dir: data_dir_path,
             length_scale: 1.0,
             noise_scale: 0.667,
             noise_scale_w: 0.8,
@@ -443,7 +541,8 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    // Registry integrity
+    // ── Registry integrity ────────────────────────────────────────────────────
+
     #[test]
     fn registry_has_three_voices() {
         assert_eq!(VOICES.len(), 3);
@@ -467,20 +566,45 @@ mod tests {
     }
 
     #[test]
-    fn all_urls_https_and_huggingface() {
+    fn all_archive_urls_https_github() {
         for v in &VOICES {
-            for (_, url) in v.files {
-                assert!(
-                    url.starts_with("https://"),
-                    "voice url not https: {url}"
-                );
-                assert!(
-                    url.contains("huggingface.co"),
-                    "voice url not on huggingface: {url}"
-                );
-            }
+            assert!(
+                v.archive_url.starts_with("https://"),
+                "archive url not https for {}: {}",
+                v.id,
+                v.archive_url
+            );
+            assert!(
+                v.archive_url.contains("github.com"),
+                "archive url not on github.com for {}: {}",
+                v.id,
+                v.archive_url
+            );
+            assert!(
+                v.archive_url.ends_with(".tar.bz2"),
+                "archive url does not end with .tar.bz2 for {}: {}",
+                v.id,
+                v.archive_url
+            );
         }
-        let (_, wurl) = WHISPER;
+    }
+
+    #[test]
+    fn dir_names_match_vits_piper_prefix_and_id() {
+        for v in &VOICES {
+            let expected = format!("vits-piper-{}", v.id);
+            assert_eq!(
+                v.dir_name, expected,
+                "dir_name mismatch for {}: expected {expected}, got {}",
+                v.id, v.dir_name
+            );
+        }
+    }
+
+    #[test]
+    fn whisper_url_unchanged() {
+        let (wname, wurl) = WHISPER;
+        assert_eq!(wname, "ggml-base.en.bin");
         assert!(wurl.starts_with("https://"), "whisper url not https");
         assert!(
             wurl.contains("huggingface.co"),
@@ -488,57 +612,101 @@ mod tests {
         );
     }
 
+    // ── voice_present tempdir matrix ─────────────────────────────────────────
+
+    fn make_complete_bundle(base: &Path, voice: &VoiceDef) {
+        let bundle = base.join(voice.dir_name);
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join(format!("{}.onnx", voice.id)), b"").unwrap();
+        fs::write(bundle.join("tokens.txt"), b"").unwrap();
+        // espeak-ng-data is a directory
+        fs::create_dir_all(bundle.join("espeak-ng-data")).unwrap();
+    }
+
     #[test]
-    fn each_voice_has_onnx_and_json() {
-        for v in &VOICES {
-            let has_onnx = v
-                .files
-                .iter()
-                .any(|(f, _)| f.ends_with(".onnx") && !f.ends_with(".onnx.json"));
-            let has_json = v.files.iter().any(|(f, _)| f.ends_with(".onnx.json"));
-            assert!(has_onnx, "voice {} missing .onnx file", v.id);
-            assert!(has_json, "voice {} missing .onnx.json file", v.id);
+    fn voice_present_all_present_returns_true() {
+        let dir = tempdir().unwrap();
+        let voice = &VOICES[0];
+        make_complete_bundle(dir.path(), voice);
+        assert!(voice_present(dir.path(), voice));
+    }
+
+    #[test]
+    fn voice_present_missing_onnx_returns_false() {
+        let dir = tempdir().unwrap();
+        let voice = &VOICES[0];
+        let bundle = dir.path().join(voice.dir_name);
+        fs::create_dir_all(&bundle).unwrap();
+        // omit .onnx
+        fs::write(bundle.join("tokens.txt"), b"").unwrap();
+        fs::create_dir_all(bundle.join("espeak-ng-data")).unwrap();
+        assert!(!voice_present(dir.path(), voice));
+    }
+
+    #[test]
+    fn voice_present_missing_tokens_returns_false() {
+        let dir = tempdir().unwrap();
+        let voice = &VOICES[0];
+        let bundle = dir.path().join(voice.dir_name);
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join(format!("{}.onnx", voice.id)), b"").unwrap();
+        // omit tokens.txt
+        fs::create_dir_all(bundle.join("espeak-ng-data")).unwrap();
+        assert!(!voice_present(dir.path(), voice));
+    }
+
+    #[test]
+    fn voice_present_missing_espeak_data_returns_false() {
+        let dir = tempdir().unwrap();
+        let voice = &VOICES[0];
+        let bundle = dir.path().join(voice.dir_name);
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join(format!("{}.onnx", voice.id)), b"").unwrap();
+        fs::write(bundle.join("tokens.txt"), b"").unwrap();
+        // omit espeak-ng-data
+        assert!(!voice_present(dir.path(), voice));
+    }
+
+    #[test]
+    fn voice_present_empty_dir_returns_false() {
+        let dir = tempdir().unwrap();
+        let voice = &VOICES[0];
+        assert!(!voice_present(dir.path(), voice));
+    }
+
+    // ── missing_voices / missing_whisper ─────────────────────────────────────
+
+    #[test]
+    fn missing_voices_empty_dir_returns_all_three() {
+        let dir = tempdir().unwrap();
+        assert_eq!(missing_voices(dir.path()).len(), 3);
+    }
+
+    #[test]
+    fn missing_voices_with_all_bundles_present_returns_empty() {
+        let dir = tempdir().unwrap();
+        for voice in &VOICES {
+            make_complete_bundle(dir.path(), voice);
         }
-    }
-
-    // missing_files
-    #[test]
-    fn missing_files_empty_dir_returns_all() {
-        let dir = tempdir().unwrap();
-        let missing = missing_files(dir.path());
-        // 1 whisper + 3*2 voice files = 7
-        assert_eq!(missing.len(), 7, "expected 7 missing files, got {}", missing.len());
+        assert!(missing_voices(dir.path()).is_empty());
     }
 
     #[test]
-    fn missing_files_with_all_present_returns_empty() {
+    fn missing_whisper_absent_returns_some() {
         let dir = tempdir().unwrap();
-        // touch whisper
+        assert!(missing_whisper(dir.path()).is_some());
+    }
+
+    #[test]
+    fn missing_whisper_present_returns_none() {
+        let dir = tempdir().unwrap();
         let (wname, _) = WHISPER;
         fs::write(dir.path().join(wname), b"").unwrap();
-        // touch all voice files
-        for v in &VOICES {
-            for (fname, _) in v.files {
-                fs::write(dir.path().join(fname), b"").unwrap();
-            }
-        }
-        let missing = missing_files(dir.path());
-        assert!(missing.is_empty(), "expected no missing files");
+        assert!(missing_whisper(dir.path()).is_none());
     }
 
-    #[test]
-    fn missing_files_partial() {
-        let dir = tempdir().unwrap();
-        // touch only whisper
-        let (wname, _) = WHISPER;
-        fs::write(dir.path().join(wname), b"").unwrap();
-        let missing = missing_files(dir.path());
-        assert_eq!(missing.len(), 6, "expected 6 missing (all voice files)");
-        // whisper must not appear
-        assert!(!missing.iter().any(|(f, _)| f == wname));
-    }
+    // ── wav_from_pcm16 header bytes ──────────────────────────────────────────
 
-    // wav_from_pcm16 header bytes
     #[test]
     fn wav_header_riff_wave_markers() {
         let wav = wav_from_pcm16(16000, &[]);
@@ -600,7 +768,8 @@ mod tests {
         assert_eq!(align, 2);
     }
 
-    // clamp_samples
+    // ── clamp_samples ────────────────────────────────────────────────────────
+
     #[test]
     fn clamp_samples_under_cap_unchanged() {
         let s = vec![0.5f32; 100];

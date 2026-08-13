@@ -28,6 +28,8 @@ git2 = "0.19"
 futures-util = "0.3"
 whisper-rs = { version = "0.16", features = ["metal"] }
 sherpa-rs = { version = "0.6", default-features = false, features = ["tts", "download-binaries"] }
+tar = "0.4"
+bzip2 = { version = "0.4", features = [] }
 
 [dev-dependencies]
 tempfile = "3"
