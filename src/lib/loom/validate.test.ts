@@ -82,4 +82,29 @@ describe("renderProbe", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain("unknown permission");
   });
+
+  it("returns {ok:true, renderedHtml} on successful render", async () => {
+    const { vi } = await import("vitest");
+    const sandbox = await import("./sandbox");
+    const { renderProbe } = await import("./validate");
+
+    // Spy on sandboxRun to return a successful probe result
+    const sandboxRunSpy = vi.spyOn(sandbox, "sandboxRun").mockResolvedValue({
+      ok: true,
+      stage: "probe",
+      renderedHtml: "<div>ok</div>",
+      errors: [],
+      testResults: [],
+    });
+
+    const manifest = JSON.stringify({ id: "test", name: "Test", description: "d", version: 1, permissions: [] });
+    const files = { manifest, code: "export default {render(){}}", tests: "" };
+    const result = await renderProbe(files);
+
+    expect(result.ok).toBe(true);
+    expect(result.renderedHtml).toBe("<div>ok</div>");
+    expect(result.error).toBeUndefined();
+
+    sandboxRunSpy.mockRestore();
+  });
 });

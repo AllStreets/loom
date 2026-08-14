@@ -440,11 +440,9 @@ describe("Desktop", () => {
       expect(windowRoot).not.toBeNull();
 
       const topStyle = windowRoot!.style.top;
-      if (topStyle) {
-        const actualY = parseFloat(topStyle);
-        expect(actualY).toBeLessThanOrEqual(maxAllowedY);
-      }
-      // If top is not set as inline style (jsdom limitation), the presence of the window is sufficient
+      expect(topStyle, "organ window must have an inline top style (clamp must have fired)").toBeTruthy();
+      const actualY = parseFloat(topStyle);
+      expect(actualY).toBeLessThanOrEqual(maxAllowedY);
     } finally {
       // Restore the original descriptor to avoid polluting other tests
       if (offsetHeightDescriptor) {

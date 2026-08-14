@@ -81,6 +81,12 @@ export default function Field() {
   );
 
   useEffect(() => {
+    // Re-create particles if count changed (live reduced-motion toggle)
+    if (particlesRef.current.length !== count) {
+      particlesRef.current = createParticles(count);
+      colorStringsRef.current = createColorStrings(particlesRef.current);
+    }
+
     const canvas = canvasRef.current;
     if (!canvas) return;
 

@@ -94,14 +94,14 @@ Hold the **orb** (or **Space**) to talk; release to send. Replies are spoken alo
 
 ## First five minutes
 
-**Prerequisites:** macOS (Apple Silicon recommended), [Node](https://nodejs.org) 20+, the [Rust toolchain](https://rustup.rs), and [Ollama](https://ollama.com). About 20 GB free for the model fleet. Voice is optional — download it from Settings after first launch.
+**Prerequisites:** macOS (Apple Silicon recommended), [Node](https://nodejs.org) 20+, the [Rust toolchain](https://rustup.rs), and [Ollama](https://ollama.com). About 35 GB free for the model fleet. Voice is optional — download it from Settings after first launch.
 
 ```bash
 # 1. Clone and install
 git clone https://github.com/AllStreets/loom.git
 cd loom && npm install
 
-# 2. Pull the model fleet (once, ~20 GB total — do this while you explore the code)
+# 2. Pull the model fleet (once, ~35 GB total — do this while you explore the code)
 ollama pull qwen3-coder:30b-a3b-q4_K_M   # builder: writes and repairs code
 ollama pull gpt-oss:20b                  # companion: the always-on presence
 ollama pull qwen3:1.7b                   # rewriter: structures your words for the model
