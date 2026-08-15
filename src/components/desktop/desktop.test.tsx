@@ -355,7 +355,7 @@ describe("Desktop", () => {
     });
   });
 
-  it("settings organ gets default window size w:560, h:560", async () => {
+  it("settings organ gets default window size w:640, h:560", async () => {
     const SETTINGS_ORGAN = {
       id: "settings",
       manifest: JSON.stringify({
@@ -381,12 +381,12 @@ describe("Desktop", () => {
       expect(screen.getByTestId("title-bar-settings")).toBeInTheDocument();
     });
 
-    // The window element wrapping the title bar should have width 560px and height includes 560 body
+    // The window element wrapping the title bar should have width 640px and height includes 560 body
     const titleBar = screen.getByTestId("title-bar-settings");
     const windowRoot = titleBar.closest(".glass") as HTMLElement | null;
     expect(windowRoot).not.toBeNull();
-    // Width is set as inline style on the window root
-    expect(windowRoot!.style.width).toBe("560px");
+    // Width is set as inline style on the window root (settings default is 640x560)
+    expect(windowRoot!.style.width).toBe("640px");
   });
 
   it("window spawn y is clamped when plane has a measurable height", async () => {

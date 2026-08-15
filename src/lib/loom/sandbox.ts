@@ -49,6 +49,21 @@ const freshLoom = () => {
       micTest: async function() { return "ok"; },
       voiceStatus: async function() { return { ready: false, whisper: false, voices: [], missing_bytes_hint: null }; },
       setup: async function() {},
+      models: async function() {
+        return [
+          { role: "builder", model: "qwen3-coder:30b-a3b-q4_K_M", "default": "qwen3-coder:30b-a3b-q4_K_M", override: "", present: true },
+          { role: "companion", model: "gpt-oss:20b", "default": "gpt-oss:20b", override: "", present: true },
+          { role: "rewriter", model: "qwen3:1.7b", "default": "qwen3:1.7b", override: "", present: false },
+        ];
+      },
+      setModel: async function(role, tag) {
+        var validRoles = ["builder", "companion", "rewriter"];
+        if (validRoles.indexOf(role) === -1) { return { ok: false, error: "unknown role" }; }
+        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/;
+        if (tag !== "" && (!tagRe.test(tag) || tag.length > 128)) { return { ok: false, error: "invalid tag" }; }
+        settingsMap.set("model." + role, tag);
+        return { ok: true };
+      },
     },
   };
 };

@@ -1,5 +1,5 @@
-import { fleetChat, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, type Msg, type VoiceStatus } from "../core";
-import { getSetting, setSetting, VOICE_IDS, VOICE_LABELS } from "../voice/settings";
+import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, FLEET_DEFAULTS, type Msg, type VoiceStatus } from "../core";
+import { getSetting, setSetting, isValidModelTag, VOICE_IDS, VOICE_LABELS } from "../voice/settings";
 import { startRecording } from "../voice/recorder";
 import { playWav } from "../voice/player";
 import { buildUiKit, type LoomUiKit } from "./uikit";
@@ -10,6 +10,15 @@ export { KIT_TOKENS };
 
 export type VoiceEntry = { id: string; label: string; present: boolean };
 
+export type ModelRole = "builder" | "companion" | "rewriter";
+export type ModelEntry = {
+  role: ModelRole;
+  model: string;       // effective model (override if set+valid, else default)
+  default: string;     // fleet default for this role
+  override: string;    // raw setting value ("" if unset)
+  present: boolean;    // whether Ollama reports this model installed
+};
+
 export type LoomSettingsApi = {
   get(key: string): string;
   set(key: string, value: string): void;
@@ -18,6 +27,8 @@ export type LoomSettingsApi = {
   micTest(): Promise<string>;
   voiceStatus(): Promise<VoiceStatus>;
   setup(onPct?: (pct: number) => void): Promise<void>;
+  models(): Promise<ModelEntry[]>;
+  setModel(role: string, tag: string): Promise<{ ok: boolean; error?: string }>;
 };
 
 export type LoomApi = {
@@ -38,6 +49,7 @@ export type ApiDeps = {
   startRecording?: typeof startRecording;
   playWav?: typeof playWav;
   listenProgress?: (cb: (pct: number) => void) => Promise<() => void>;
+  fleetStatus?: typeof fleetStatus;
 };
 
 export function makeLoomApi(
@@ -53,6 +65,7 @@ export function makeLoomApi(
 
   const _voiceStatus = deps.voiceStatus ?? coreVoiceStatus;
   const _voiceSetup = deps.voiceSetup ?? coreVoiceSetup;
+  const _fleetStatus = deps.fleetStatus ?? fleetStatus;
   const _sttTranscribe = deps.sttTranscribe ?? sttTranscribe;
   const _ttsSpeak = deps.ttsSpeak ?? ttsSpeak;
   const _startRecording = deps.startRecording ?? startRecording;
@@ -145,6 +158,47 @@ export function makeLoomApi(
           await _voiceSetup();
         } finally {
           unlisten();
+        }
+      },
+      async models() {
+        need("settings");
+        const roles: ModelRole[] = ["builder", "companion", "rewriter"];
+        // Fetch fleet status; gracefully degrade on error (Ollama may not be running)
+        let statusRows: { role: string; model: string; present: boolean }[] = [];
+        try {
+          statusRows = await _fleetStatus();
+        } catch {
+          // absent Ollama → present defaults to false for all roles
+        }
+        const presentMap = new Map(statusRows.map((r) => [r.role, r.present]));
+        return roles.map((role): ModelEntry => {
+          const override = getSetting(`model.${role}`);
+          const def = FLEET_DEFAULTS[role];
+          const model = (override && isValidModelTag(override)) ? override : def;
+          return {
+            role,
+            model,
+            default: def,
+            override,
+            present: presentMap.get(role) ?? false,
+          };
+        });
+      },
+      async setModel(role, tag) {
+        need("settings");
+        const validRoles: ModelRole[] = ["builder", "companion", "rewriter"];
+        if (!validRoles.includes(role as ModelRole)) {
+          return { ok: false, error: `unknown role "${role}"` };
+        }
+        // Empty string = reset to default (allowed); non-empty must be a valid tag
+        if (tag !== "" && !isValidModelTag(tag)) {
+          return { ok: false, error: "invalid tag" };
+        }
+        try {
+          setSetting(`model.${role}`, tag);
+          return { ok: true };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
       },
     },

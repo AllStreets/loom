@@ -15,7 +15,7 @@ const DEFAULT_WIN_SIZE = { w: 420, h: 360 };
 
 /** Per-organ default sizes keyed by manifest id. */
 const ORGAN_SIZES: Record<string, { w: number; h: number }> = {
-  settings: { w: 560, h: 560 },
+  settings: { w: 640, h: 560 },
 };
 
 /** z-index for the desktop plane overlay — above orb band (10) but below Dock (1000) and modals (2000). */

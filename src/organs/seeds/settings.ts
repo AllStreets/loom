@@ -14,17 +14,95 @@ const ORGAN_JS = `export default {
     var ui = loom.ui;
     var settings = loom.settings;
 
-    // ── Outer stack ─────────────────────────────────────────────────────────
-    var wrap = document.createElement("div");
-    wrap.style.display = "flex";
-    wrap.style.flexDirection = "column";
-    wrap.style.gap = "12px";
+    // ── Root layout: sidebar + content ──────────────────────────────────────
+    var root = document.createElement("div");
+    root.style.display = "flex";
+    root.style.height = "100%";
+    root.style.minHeight = "0";
+    root.style.gap = "0";
 
-    // ── Voice card ──────────────────────────────────────────────────────────
-    var voiceCard = ui.card({ title: "Voice" });
-    var voiceBody = voiceCard.body;
+    // ── Sidebar ──────────────────────────────────────────────────────────────
+    var sidebar = document.createElement("div");
+    sidebar.style.width = "140px";
+    sidebar.style.flexShrink = "0";
+    sidebar.style.display = "flex";
+    sidebar.style.flexDirection = "column";
+    sidebar.style.gap = "2px";
+    sidebar.style.padding = "8px 8px 8px 0";
+    sidebar.style.borderRight = "1px solid rgba(255,255,255,.08)";
 
-    voiceBody.appendChild(ui.heading("Voice", "Choose a voice, audition it, and set when LOOM speaks."));
+    var NAV_ITEMS = [
+      { label: "Voice", page: "voice", action: "page-voice" },
+      { label: "Models", page: "models", action: "page-models" },
+      { label: "Appearance", page: "appearance", action: "page-appearance" },
+      { label: "Building", page: "building", action: "page-building" },
+    ];
+
+    var activePage = "voice";
+    var navBtns = {};
+
+    function refreshNavBtns() {
+      for (var ni = 0; ni < NAV_ITEMS.length; ni++) {
+        var item = NAV_ITEMS[ni];
+        var nb = navBtns[item.page];
+        if (!nb) continue;
+        var isActive = item.page === activePage;
+        nb.style.background = isActive ? "rgba(34,211,238,.12)" : "transparent";
+        nb.style.color = isActive ? ui.tokens.accent : ui.tokens.t2;
+        nb.style.fontWeight = isActive ? "700" : "500";
+      }
+    }
+
+    function showPage(page) {
+      activePage = page;
+      refreshNavBtns();
+      for (var pi = 0; pi < NAV_ITEMS.length; pi++) {
+        var pitem = NAV_ITEMS[pi];
+        var pageEl = pages[pitem.page];
+        if (pageEl) {
+          pageEl.style.display = pitem.page === page ? "block" : "none";
+        }
+      }
+      if (page === "models") {
+        refreshModelsPage();
+      }
+    }
+
+    for (var ni = 0; ni < NAV_ITEMS.length; ni++) {
+      (function(item) {
+        var nb = document.createElement("button");
+        nb.className = "lui-btn";
+        nb.style.textAlign = "left";
+        nb.style.padding = "8px 12px";
+        nb.style.borderRadius = "8px";
+        nb.style.fontSize = "13.5px";
+        nb.style.fontFamily = "inherit";
+        nb.style.cursor = "pointer";
+        nb.style.border = "none";
+        nb.style.transition = "background .15s, color .15s";
+        nb.dataset.action = item.action;
+        nb.textContent = item.label;
+        nb.addEventListener("click", function() { showPage(item.page); });
+        navBtns[item.page] = nb;
+        sidebar.appendChild(nb);
+      })(NAV_ITEMS[ni]);
+    }
+
+    // ── Content area ─────────────────────────────────────────────────────────
+    var content = document.createElement("div");
+    content.style.flex = "1";
+    content.style.overflowY = "auto";
+    content.style.padding = "12px 16px";
+
+    var pages = {};
+
+    // ════════════════════════════════════════════════════════════════════════
+    // PAGE: Voice
+    // ════════════════════════════════════════════════════════════════════════
+    var voicePage = document.createElement("div");
+    pages["voice"] = voicePage;
+
+    voicePage.appendChild(ui.heading("Voice", "Choose a voice, audition it, and set when LOOM speaks."));
 
     // Status row with dot
     var voiceStatusDot = ui.dot("warn");
@@ -33,7 +111,7 @@ const ORGAN_JS = `export default {
     statusText.style.color = ui.tokens.t2;
     statusText.textContent = "Checking voice status...";
     var statusRow = ui.row(voiceStatusDot, statusText);
-    voiceBody.appendChild(statusRow);
+    voicePage.appendChild(statusRow);
 
     var downloadRow = document.createElement("div");
     downloadRow.style.display = "none";
@@ -43,7 +121,7 @@ const ORGAN_JS = `export default {
     progressBar.style.display = "none";
     downloadRow.appendChild(downloadBtn);
     downloadRow.appendChild(progressBar);
-    voiceBody.appendChild(downloadRow);
+    voicePage.appendChild(downloadRow);
 
     downloadBtn.addEventListener("click", function() {
       downloadBtn.disabled = true;
@@ -57,18 +135,17 @@ const ORGAN_JS = `export default {
         downloadBtn.disabled = false;
         refreshStatus();
       }).catch(function(err) {
-        downloadBtn.textContent = "Download failed — retry";
+        downloadBtn.textContent = "Download failed -- retry";
         downloadBtn.disabled = false;
         statusText.textContent = String(err);
       });
     });
 
     // Voices section
-    var voicesSection = ui.section("Voices");
-    voiceBody.appendChild(voicesSection);
+    voicePage.appendChild(ui.section("Voices"));
 
     var voiceList = ui.list();
-    voiceBody.appendChild(voiceList.root);
+    voicePage.appendChild(voiceList.root);
 
     function refreshVoiceList(voices, currentDefault) {
       voiceList.clear();
@@ -116,8 +193,7 @@ const ORGAN_JS = `export default {
     }
 
     // Speak-replies section
-    var speakSection = ui.section("Speak replies");
-    voiceBody.appendChild(speakSection);
+    voicePage.appendChild(ui.section("Speak replies"));
 
     var speakOptions = [
       { label: "Always", value: "always", action: "speak-always" },
@@ -166,11 +242,10 @@ const ORGAN_JS = `export default {
         speakRow.appendChild(btn);
       })(speakOptions[si]);
     }
-    voiceBody.appendChild(speakRow);
+    voicePage.appendChild(speakRow);
 
     // Mic test section
-    var micSection = ui.section("Microphone");
-    voiceBody.appendChild(micSection);
+    voicePage.appendChild(ui.section("Microphone"));
 
     var micTestBtn = ui.button("Test microphone", { variant: "ghost", action: "mic-test" });
     var micResult = document.createElement("span");
@@ -186,14 +261,118 @@ const ORGAN_JS = `export default {
         micTestBtn.disabled = false;
       });
     });
-    voiceBody.appendChild(ui.row(micTestBtn, micResult));
+    voicePage.appendChild(ui.row(micTestBtn, micResult));
 
-    wrap.appendChild(voiceCard.root);
+    // ════════════════════════════════════════════════════════════════════════
+    // PAGE: Models
+    // ════════════════════════════════════════════════════════════════════════
+    var modelsPage = document.createElement("div");
+    pages["models"] = modelsPage;
 
-    // ── Appearance card ─────────────────────────────────────────────────────
-    var appCard = ui.card({ title: "Appearance" });
-    var appBody = appCard.body;
-    appBody.appendChild(ui.heading("Orb renderer", "Auto detects your GPU; Flat uses a simpler 2D orb."));
+    var modelsHeading = ui.heading("Models", "Override which local model each role uses. Leave blank to use the fleet default.");
+    modelsPage.appendChild(modelsHeading);
+
+    var modelsNote = document.createElement("div");
+    modelsNote.style.fontSize = "12px";
+    modelsNote.style.color = ui.tokens.t3;
+    modelsNote.style.marginTop = "4px";
+    modelsNote.textContent = "Absent models fall back automatically to the next available option.";
+    modelsPage.appendChild(modelsNote);
+
+    var modelRoleCards = {};
+
+    var ROLES = ["builder", "companion", "rewriter"];
+
+    for (var ri = 0; ri < ROLES.length; ri++) {
+      (function(role) {
+        var card = ui.card({ title: role.charAt(0).toUpperCase() + role.slice(1) });
+        modelRoleCards[role] = card;
+        modelsPage.appendChild(card.root);
+        card.root.style.marginTop = "10px";
+      })(ROLES[ri]);
+    }
+
+    function refreshModelsPage() {
+      settings.models().then(function(entries) {
+        for (var ei = 0; ei < entries.length; ei++) {
+          (function(entry) {
+            var role = entry.role;
+            var card = modelRoleCards[role];
+            if (!card) return;
+            // Clear and rebuild card body
+            card.body.innerHTML = "";
+
+            // Effective model keyval
+            card.body.appendChild(ui.keyval([
+              ["Effective model", entry.model],
+              ["Default", entry["default"]],
+            ]));
+
+            // Status dot row
+            var statusDot = ui.dot(entry.present ? "go" : "muted");
+            var statusLabel = document.createElement("span");
+            statusLabel.style.fontSize = "12.5px";
+            statusLabel.style.color = ui.tokens.t3;
+            statusLabel.textContent = entry.present ? "installed" : "not installed";
+            card.body.appendChild(ui.row(statusDot, statusLabel));
+
+            // Override input + buttons
+            var overrideSection = ui.section("Override");
+            card.body.appendChild(overrideSection);
+
+            var inp = ui.input({ placeholder: entry["default"], action: "model-input-" + role });
+            inp.value = entry.override;
+            card.body.appendChild(inp);
+
+            var errorSpan = document.createElement("span");
+            errorSpan.style.fontSize = "12px";
+            errorSpan.style.color = ui.tokens.danger;
+            errorSpan.style.display = "none";
+            card.body.appendChild(errorSpan);
+
+            var applyBtn = ui.button("Apply", { variant: "primary", action: "model-apply-" + role });
+            var resetBtn = ui.button("Reset", { variant: "ghost", action: "model-reset-" + role });
+            card.body.appendChild(ui.row(applyBtn, resetBtn));
+
+            applyBtn.addEventListener("click", function() {
+              var tag = inp.value.trim();
+              errorSpan.style.display = "none";
+              errorSpan.textContent = "";
+              settings.setModel(role, tag).then(function(result) {
+                if (result.ok) {
+                  refreshModelsPage();
+                } else {
+                  errorSpan.textContent = result.error || "Invalid tag";
+                  errorSpan.style.display = "inline";
+                }
+              });
+            });
+
+            resetBtn.addEventListener("click", function() {
+              errorSpan.style.display = "none";
+              errorSpan.textContent = "";
+              settings.setModel(role, "").then(function(result) {
+                if (result.ok) {
+                  inp.value = "";
+                  refreshModelsPage();
+                } else {
+                  errorSpan.textContent = result.error || "Reset failed";
+                  errorSpan.style.display = "inline";
+                }
+              });
+            });
+          })(entries[ei]);
+        }
+      }).catch(function() {});
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // PAGE: Appearance
+    // ════════════════════════════════════════════════════════════════════════
+    var appearancePage = document.createElement("div");
+    pages["appearance"] = appearancePage;
+
+    appearancePage.appendChild(ui.heading("Orb renderer", "Auto detects your GPU; Flat uses a simpler 2D orb."));
 
     var orbOptions = [
       { label: "Auto", value: "auto", action: "orb-auto" },
@@ -240,13 +419,15 @@ const ORGAN_JS = `export default {
         orbRow.appendChild(btn);
       })(orbOptions[oi]);
     }
-    appBody.appendChild(orbRow);
-    wrap.appendChild(appCard.root);
+    appearancePage.appendChild(orbRow);
 
-    // ── Building card ───────────────────────────────────────────────────────
-    var buildCard = ui.card({ title: "Building" });
-    var buildBody = buildCard.body;
-    buildBody.appendChild(ui.heading("Review before save", "When on, LOOM shows a diff before writing any organ file."));
+    // ════════════════════════════════════════════════════════════════════════
+    // PAGE: Building
+    // ════════════════════════════════════════════════════════════════════════
+    var buildingPage = document.createElement("div");
+    pages["building"] = buildingPage;
+
+    buildingPage.appendChild(ui.heading("Review before save", "When on, LOOM shows a diff before writing any organ file."));
 
     var reviewOptions = [
       { label: "On", value: "1", action: "review-on" },
@@ -268,7 +449,7 @@ const ORGAN_JS = `export default {
       }
     }
 
-    for (var ri = 0; ri < reviewOptions.length; ri++) {
+    for (var rvi = 0; rvi < reviewOptions.length; rvi++) {
       (function(opt) {
         var btn = document.createElement("button");
         btn.className = "lui-btn";
@@ -291,14 +472,25 @@ const ORGAN_JS = `export default {
         });
         reviewBtns.push(btn);
         reviewRow.appendChild(btn);
-      })(reviewOptions[ri]);
+      })(reviewOptions[rvi]);
     }
-    buildBody.appendChild(reviewRow);
-    wrap.appendChild(buildCard.root);
+    buildingPage.appendChild(reviewRow);
 
-    el.appendChild(wrap);
+    // ── Assemble ─────────────────────────────────────────────────────────────
+    for (var pi = 0; pi < NAV_ITEMS.length; pi++) {
+      var pitem = NAV_ITEMS[pi];
+      var pageEl = pages[pitem.page];
+      if (pageEl) {
+        pageEl.style.display = "none";
+        content.appendChild(pageEl);
+      }
+    }
 
-    // ── Initialize state ────────────────────────────────────────────────────
+    root.appendChild(sidebar);
+    root.appendChild(content);
+    el.appendChild(root);
+
+    // ── Initialize state ──────────────────────────────────────────────────────
     function refreshStatus() {
       settings.voiceStatus().then(function(status) {
         if (status.ready) {
@@ -328,6 +520,7 @@ const ORGAN_JS = `export default {
     refreshOrbBtns(settings.get("orb.tier") || "auto");
     refreshReviewBtns(settings.get("loom.reviewBeforeSave") || "0");
     refreshStatus();
+    showPage("voice");
   }
 };`;
 
@@ -335,13 +528,10 @@ const TEST_JS = `export const tests = [
   {
     name: "choose voice sets voice.default in settings",
     fn: async function({ el, loom, assert }) {
-      // Find the "Use" button for en_GB-alba-medium (not the default)
-      // Give the async render time to populate voice rows
       await new Promise(function(r) { setTimeout(r, 50); });
       var useBtn = el.querySelector('[data-action="choose-en_GB-alba-medium"]');
       assert(useBtn !== null, "Use button for alba voice exists");
       useBtn.click();
-      // Settings.set is called on click — check via settings mock
       assert(loom.settings.get("voice.default") === "en_GB-alba-medium", "voice.default updated in settings");
     },
   },
@@ -369,6 +559,66 @@ const TEST_JS = `export const tests = [
         var auditionBtn = el.querySelector('[data-action="audition-' + id + '"]');
         assert(auditionBtn !== null, "Audition button exists for " + id);
       }
+    },
+  },
+  {
+    name: "nav to models page renders models content",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var modelsNav = el.querySelector('[data-action="page-models"]');
+      assert(modelsNav !== null, "page-models nav button exists");
+      modelsNav.click();
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var applyBtn = el.querySelector('[data-action="model-apply-builder"]');
+      assert(applyBtn !== null, "model-apply-builder button appears after nav to models");
+    },
+  },
+  {
+    name: "model apply writes via setModel mock",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var modelsNav = el.querySelector('[data-action="page-models"]');
+      modelsNav.click();
+      await new Promise(function(r) { setTimeout(r, 60); });
+      var inp = el.querySelector('[data-action="model-input-rewriter"]');
+      assert(inp !== null, "model-input-rewriter exists");
+      inp.value = "qwen3:0.6b";
+      var applyBtn = el.querySelector('[data-action="model-apply-rewriter"]');
+      assert(applyBtn !== null, "model-apply-rewriter button exists");
+      applyBtn.click();
+      await new Promise(function(r) { setTimeout(r, 60); });
+      assert(loom.settings.get("model.rewriter") === "qwen3:0.6b", "setModel wrote model.rewriter via mock");
+    },
+  },
+  {
+    name: "model reset clears override",
+    fn: async function({ el, loom, assert }) {
+      loom.settings.set("model.builder", "llama3:8b");
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var modelsNav = el.querySelector('[data-action="page-models"]');
+      modelsNav.click();
+      await new Promise(function(r) { setTimeout(r, 60); });
+      var resetBtn = el.querySelector('[data-action="model-reset-builder"]');
+      assert(resetBtn !== null, "model-reset-builder button exists");
+      resetBtn.click();
+      await new Promise(function(r) { setTimeout(r, 60); });
+      assert(loom.settings.get("model.builder") === "", "reset clears model.builder to empty string");
+    },
+  },
+  {
+    name: "invalid model tag shows error, does not write",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var modelsNav = el.querySelector('[data-action="page-models"]');
+      modelsNav.click();
+      await new Promise(function(r) { setTimeout(r, 60); });
+      var inp = el.querySelector('[data-action="model-input-companion"]');
+      assert(inp !== null, "model-input-companion exists");
+      inp.value = "bad tag!";
+      var applyBtn = el.querySelector('[data-action="model-apply-companion"]');
+      applyBtn.click();
+      await new Promise(function(r) { setTimeout(r, 60); });
+      assert(loom.settings.get("model.companion") === "", "invalid tag was not written");
     },
   },
 ];`;
