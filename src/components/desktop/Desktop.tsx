@@ -15,8 +15,11 @@ const DEFAULT_WIN_SIZE = { w: 420, h: 360 };
 
 /** Per-organ default sizes keyed by manifest id. */
 const ORGAN_SIZES: Record<string, { w: number; h: number }> = {
-  settings: { w: 560, h: 560 },
+  settings: { w: 640, h: 560 },
 };
+
+/** z-index for the desktop plane overlay — above orb band (10) but below Dock (1000) and modals (2000). */
+const PLANE_Z = 100;
 
 type WindowInfo = {
   minimized: boolean;
@@ -161,12 +164,36 @@ export default function Desktop() {
 
   const planeRef = useRef<HTMLDivElement | null>(null);
 
+  // Single viewport-resize listener: re-clamp all open windows and persist corrections.
+  useEffect(() => {
+    function onResize() {
+      const planeEl = planeRef.current;
+      const planeW = planeEl?.offsetWidth ?? 0;
+      const planeH = planeEl?.offsetHeight ?? 0;
+      if (planeW <= 0 || planeH <= 0) return;
+
+      // Dispatch a custom event that OrganWindow instances can listen to.
+      // We carry the new plane dims so each window can self-clamp.
+      window.dispatchEvent(new CustomEvent("desktop-plane-resize", {
+        detail: { planeW, planeH },
+      }));
+    }
+
+    window.addEventListener("resize", onResize, { passive: true });
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   return (
     <div
       ref={planeRef}
       data-desktop-plane=""
       data-testid="desktop-plane"
-      style={{ position: "relative", minHeight: "60vh", width: "100%" }}
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: PLANE_Z,
+        pointerEvents: "none",
+      }}
     >
       {approvedOrgans.map((organ, i) => {
         const id = organ.entry.id;
@@ -191,6 +218,7 @@ export default function Desktop() {
               top: 0,
               left: 0,
               zIndex,
+              pointerEvents: "auto",
             }}
           >
             <OrganWindow
@@ -215,6 +243,7 @@ export default function Desktop() {
             alignItems: "center",
             justifyContent: "center",
             background: "rgba(0,0,0,.55)",
+            pointerEvents: "auto",
           }}
           onClick={(e) => { if (e.target === e.currentTarget) setModalOrganId(null); }}
         >

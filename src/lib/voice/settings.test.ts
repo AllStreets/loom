@@ -5,6 +5,7 @@ import {
   SETTINGS_KEYS,
   VOICE_IDS,
   VOICE_LABELS,
+  isValidModelTag,
 } from "./settings";
 
 // jsdom provides localStorage
@@ -13,12 +14,15 @@ beforeEach(() => {
 });
 
 describe("settings whitelist", () => {
-  it("SETTINGS_KEYS contains the four required keys", () => {
+  it("SETTINGS_KEYS contains the seven required keys", () => {
     expect(SETTINGS_KEYS).toContain("voice.default");
     expect(SETTINGS_KEYS).toContain("voice.speakReplies");
     expect(SETTINGS_KEYS).toContain("orb.tier");
     expect(SETTINGS_KEYS).toContain("loom.reviewBeforeSave");
-    expect(SETTINGS_KEYS).toHaveLength(4);
+    expect(SETTINGS_KEYS).toContain("model.builder");
+    expect(SETTINGS_KEYS).toContain("model.companion");
+    expect(SETTINGS_KEYS).toContain("model.rewriter");
+    expect(SETTINGS_KEYS).toHaveLength(7);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -128,5 +132,82 @@ describe("VOICE_IDS and VOICE_LABELS", () => {
     expect(VOICE_IDS).toContain("en_US-lessac-medium");
     expect(VOICE_IDS).toContain("en_GB-alba-medium");
     expect(VOICE_IDS).toContain("en_US-libritts-high");
+  });
+});
+
+describe("isValidModelTag", () => {
+  it("accepts simple name without tag", () => {
+    expect(isValidModelTag("llama3.2")).toBe(true);
+  });
+
+  it("accepts name with tag", () => {
+    expect(isValidModelTag("qwen3-coder:30b-a3b-q4_K_M")).toBe(true);
+  });
+
+  it("accepts HuggingFace-style path with tag", () => {
+    expect(isValidModelTag("hf.co/user/model:Q4")).toBe(true);
+  });
+
+  it("rejects string with space and special char", () => {
+    expect(isValidModelTag("bad tag!")).toBe(false);
+  });
+
+  it("rejects leading hyphen", () => {
+    expect(isValidModelTag("-leading")).toBe(false);
+  });
+
+  it("rejects empty string", () => {
+    expect(isValidModelTag("")).toBe(false);
+  });
+
+  it("rejects string longer than 128 chars", () => {
+    expect(isValidModelTag("a".repeat(129))).toBe(false);
+  });
+
+  it("accepts string exactly 128 chars", () => {
+    // 128 alphanumeric chars is valid
+    expect(isValidModelTag("a".repeat(128))).toBe(true);
+  });
+
+  it("rejects two colons (a:b:c)", () => {
+    expect(isValidModelTag("a:b:c")).toBe(false);
+  });
+});
+
+describe("model.* settings", () => {
+  it("model.builder defaults to empty string", () => {
+    expect(getSetting("model.builder")).toBe("");
+  });
+
+  it("model.companion defaults to empty string", () => {
+    expect(getSetting("model.companion")).toBe("");
+  });
+
+  it("model.rewriter defaults to empty string", () => {
+    expect(getSetting("model.rewriter")).toBe("");
+  });
+
+  it("setSetting accepts a valid model tag", () => {
+    expect(() => setSetting("model.builder", "llama3.2")).not.toThrow();
+    expect(getSetting("model.builder")).toBe("llama3.2");
+  });
+
+  it("setSetting accepts empty string (reset to unset)", () => {
+    setSetting("model.builder", "llama3.2");
+    expect(() => setSetting("model.builder", "")).not.toThrow();
+    expect(getSetting("model.builder")).toBe("");
+  });
+
+  it("setSetting rejects garbage tag", () => {
+    expect(() => setSetting("model.builder", "bad tag!")).toThrow(/Invalid model tag/);
+  });
+
+  it("setSetting rejects 200-char string", () => {
+    expect(() => setSetting("model.companion", "a".repeat(200))).toThrow(/Invalid model tag/);
+  });
+
+  it("setSetting accepts complex valid tag for rewriter", () => {
+    expect(() => setSetting("model.rewriter", "hf.co/user/model:Q4_K_M")).not.toThrow();
+    expect(getSetting("model.rewriter")).toBe("hf.co/user/model:Q4_K_M");
   });
 });

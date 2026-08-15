@@ -49,6 +49,27 @@ const freshLoom = () => {
       micTest: async function() { return "ok"; },
       voiceStatus: async function() { return { ready: false, whisper: false, voices: [], missing_bytes_hint: null }; },
       setup: async function() {},
+      models: async function() {
+        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/;
+        var DEFS = [
+          { role: "builder",   def: "qwen3-coder:30b-a3b-q4_K_M", present: true  },
+          { role: "companion", def: "gpt-oss:20b",                 present: true  },
+          { role: "rewriter",  def: "qwen3:1.7b",                  present: false },
+        ];
+        return DEFS.map(function(d) {
+          var ov = settingsMap.has("model." + d.role) ? settingsMap.get("model." + d.role) : "";
+          var effectiveModel = (ov && tagRe.test(ov) && ov.length <= 128) ? ov : d.def;
+          return { role: d.role, model: effectiveModel, "default": d.def, override: ov, present: d.present };
+        });
+      },
+      setModel: async function(role, tag) {
+        var validRoles = ["builder", "companion", "rewriter"];
+        if (validRoles.indexOf(role) === -1) { return { ok: false, error: "unknown role" }; }
+        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/;
+        if (tag !== "" && (!tagRe.test(tag) || tag.length > 128)) { return { ok: false, error: "invalid tag" }; }
+        settingsMap.set("model." + role, tag);
+        return { ok: true };
+      },
     },
   };
 };

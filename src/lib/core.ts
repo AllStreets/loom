@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getSetting } from "./voice/settings";
 
 // ── Voice types ────────────────────────────────────────────────────────────────
 
@@ -15,12 +16,38 @@ export type Msg = { role: "system" | "user" | "assistant"; content: string };
 export type Commit = { sha: string; message: string };
 
 export type ChatOpts = { numCtx?: number; temperature?: number };
+export type ModelOverrides = { builder?: string; companion?: string; rewriter?: string };
 
-export const fleetStatus = () => invoke<RoleStatus[]>("fleet_status");
+/** Rust-side defaults, mirrored here as a single source of truth for the UI. */
+export const FLEET_DEFAULTS = {
+  builder: "qwen3-coder:30b-a3b-q4_K_M",
+  companion: "gpt-oss:20b",
+  rewriter: "qwen3:1.7b",
+} as const;
+
+/**
+ * Read model.* settings and build an overrides object, omitting empty values.
+ * Empty = unset = Rust will use its own default.
+ */
+export function modelOverrides(): ModelOverrides {
+  const result: ModelOverrides = {};
+  const builder = getSetting("model.builder");
+  const companion = getSetting("model.companion");
+  const rewriter = getSetting("model.rewriter");
+  if (builder) result.builder = builder;
+  if (companion) result.companion = companion;
+  if (rewriter) result.rewriter = rewriter;
+  return result;
+}
+
+export const fleetStatus = () =>
+  invoke<RoleStatus[]>("fleet_status", { overrides: modelOverrides() });
+
 export const fleetChat = (role: string, messages: Msg[], opts?: ChatOpts) =>
   invoke<string>("fleet_chat", {
     role, messages,
     opts: opts ? { num_ctx: opts.numCtx ?? null, temperature: opts.temperature ?? null } : null,
+    overrides: modelOverrides(),
   });
 
 export const timelineInit = () => invoke<void>("timeline_init");
