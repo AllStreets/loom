@@ -13,6 +13,16 @@ export type GateRepairResult =
   | { ok: true; code: string; tests: string }
   | { ok: false; stage: string; errors: string };
 
+// Round targeting for tests-stage failures:
+// round 1 → organ.js  (the code is probably wrong)
+// round 2 → test.js   (the tests may be imagining elements that don't exist)
+// round 3 → organ.js  (last chance fix to the code)
+function targetForRound(stage: string, round: number): "organ.js" | "test.js" {
+  if (stage !== "tests") return "organ.js";
+  if (round === 2) return "test.js";
+  return "organ.js";
+}
+
 export async function runGateWithRepair(
   files: { manifest: string; code: string; tests: string },
   organId: string,
@@ -27,22 +37,36 @@ export async function runGateWithRepair(
   let gateResult = await gate({ manifest, code, tests }, organId);
   let round = 0;
 
-  while (!gateResult.ok && round < 2) {
+  while (!gateResult.ok && round < 3) {
     round++;
     const stage = gateResult.verdict?.stage ?? "gate";
     const errors = gateResult.verdict?.errors?.join("; ") ?? gateResult.error ?? "gate failed";
+    const renderedHtml = gateResult.verdict?.renderedHtml;
     emit("gate", `failed at ${stage}: ${errors}`);
 
-    const target = stage === "tests" && round === 2 ? "test.js" : "organ.js";
+    const target = targetForRound(stage, round);
     const broken = target === "test.js" ? tests : code;
+
+    // Build per-test failure lines for structured feedback
+    const failedTests = gateResult.verdict?.testResults?.filter((r) => !r.ok) ?? [];
+    const perTestLines = failedTests.length > 0
+      ? "\nFAILED TESTS:\n" + failedTests.map((r) => `- ${r.name}: ${r.error ?? "unknown error"}`).join("\n")
+      : "";
+
+    // Include the real rendered DOM so the model sees what was actually built
+    const renderedHtmlSection = renderedHtml
+      ? `\nThe organ's ACTUAL rendered HTML (ground truth — your selectors MUST match elements present here):\n${renderedHtml}\n`
+      : "";
+
     emit("repair", `round ${round}: asking the builder to fix ${target}...`);
     const repairSystem = organSystemPrompt("repair");
     const repairUser =
       `FILE: ${target}\n\nCURRENT (FAILED) CONTENT:\n${broken}\n\n` +
-      `VALIDATION ERRORS (stage: ${stage}):\n${errors}\n\n` +
+      `VALIDATION ERRORS (stage: ${stage}):\n${errors}${perTestLines}\n\n` +
+      renderedHtmlSection +
       (target === "test.js"
-        ? `The organ.js under test is:\n${code}\n\nThe tests may be too strict or query elements that do not exist — make them robust and faithful to the organ's real behavior.\n\n`
-        : `The manifest is:\n${manifest}\n\nThe failing tests describe the intended behavior — fix organ.js so it satisfies them:\n${tests}\n\n`) +
+        ? `The organ.js under test is:\n${code}\n\nThe tests may be too strict or query elements that do not exist — make them robust and faithful to the organ's real behavior. Remember: re-set input.value before each add click; re-query remove buttons after each mutation.\n\n`
+        : `The manifest is:\n${manifest}\n\nThe failing tests describe the intended behavior — fix organ.js so it satisfies them. Remember: clear input after successful add; re-render the list after every mutation:\n${tests}\n\n`) +
       `Output the complete corrected ${target}.`;
     const repairRaw = await chat("builder", [
       { role: "system", content: repairSystem },

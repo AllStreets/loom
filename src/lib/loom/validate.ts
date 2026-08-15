@@ -1,5 +1,6 @@
 import { PERMISSIONS } from "./prompts";
 import { sandboxRun, type SandboxVerdict, type OrganFilesIn } from "./sandbox";
+export type { OrganFilesIn };
 
 export type OrganManifest = { id: string; name: string; description: string; version: number; permissions: string[] };
 
@@ -31,4 +32,15 @@ export async function gate(files: OrganFilesIn, expectedId?: string):
   if (!mg.ok) return { ok: false, error: mg.error };
   const verdict = await sandboxRun(files);
   return { ok: verdict.ok, manifest: mg.manifest, verdict };
+}
+
+export async function renderProbe(files: OrganFilesIn, expectedId?: string):
+  Promise<{ ok: boolean; renderedHtml?: string; error?: string }> {
+  const mg = manifestGuard(files.manifest, expectedId);
+  if (!mg.ok) return { ok: false, error: mg.error };
+  const verdict = await sandboxRun(files, 8000, { probeOnly: true });
+  if (!verdict.ok) {
+    return { ok: false, error: verdict.errors.join("; ") };
+  }
+  return { ok: true, renderedHtml: verdict.renderedHtml };
 }

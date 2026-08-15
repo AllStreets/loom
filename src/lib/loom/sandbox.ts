@@ -3,22 +3,27 @@ import { UIKIT_SRC, KIT_TOKENS } from "../organs/uikitSrc";
 export type OrganFilesIn = { manifest: string; code: string; tests: string };
 export type SandboxVerdict = {
   ok: boolean;
-  stage: "load" | "render" | "tests" | "timeout" | "pass";
+  stage: "load" | "render" | "tests" | "timeout" | "pass" | "probe";
   errors: string[];
   testResults: { name: string; ok: boolean; error?: string }[];
+  renderedHtml?: string;
 };
 
-export function buildHarnessSrc(files: OrganFilesIn, nonce: string): string {
+export type SandboxOpts = { probeOnly?: boolean };
+
+export function buildHarnessSrc(files: OrganFilesIn, nonce: string, opts?: SandboxOpts): string {
   // The harness runs INSIDE a sandboxed iframe. It loads organ.js and test.js from
   // blob URLs, renders the organ into a detached div with a MOCK loom api, runs the
   // tests, and posts one result message keyed by the nonce. Any uncaught error or
   // unhandled rejection fails the run.
+  const probeOnly = opts?.probeOnly ?? false;
   const codeB64 = btoa(unescape(encodeURIComponent(files.code)));
   const testsB64 = btoa(unescape(encodeURIComponent(files.tests)));
   return `<!doctype html><meta charset="utf-8"><body><script type="module">
 const NONCE = ${JSON.stringify(nonce)};
+const PROBE_ONLY = ${JSON.stringify(probeOnly)};
 const report = (r) => parent.postMessage(Object.assign({ nonce: NONCE }, r), "*");
-const fail = (stage, msg) => report({ ok: false, stage, errors: [String(msg)], testResults: [] });
+const fail = (stage, msg, renderedHtml) => report({ ok: false, stage, errors: [String(msg)], testResults: [], renderedHtml: renderedHtml || null });
 addEventListener("error", (e) => fail("load", e.message));
 addEventListener("unhandledrejection", (e) => fail("load", e.reason));
 ${UIKIT_SRC}
@@ -57,6 +62,11 @@ try {
   else {
     const el = document.createElement("div");
     try { await organ.render(el, mockLoom); } catch (e) { fail("render", e && e.message || e); throw e; }
+    const renderedHtml = el.innerHTML.slice(0, 3000);
+    if (PROBE_ONLY) {
+      report({ ok: true, stage: "probe", errors: [], testResults: [], renderedHtml });
+      throw new Error("probe done");
+    }
     let tests = [];
     // Relative imports cannot resolve from a blob URL — rewrite any organ.js
     // specifier in the tests to the actual organ blob URL so they still work.
@@ -66,7 +76,7 @@ try {
       .split('"./organ.js"').join('"' + organUrl + '"')
       .split("'organ.js'").join("'" + organUrl + "'")
       .split('"organ.js"').join('"' + organUrl + '"');
-    try { tests = (await import(mkUrl(testsSrc))).tests || []; } catch (e) { fail("tests", "test.js failed to load: " + (e && e.message || e)); throw e; }
+    try { tests = (await import(mkUrl(testsSrc))).tests || []; } catch (e) { fail("tests", "test.js failed to load: " + (e && e.message || e), renderedHtml); throw e; }
     const results = [];
     for (const t of tests) {
       const tEl = document.createElement("div");
@@ -77,13 +87,13 @@ try {
       catch (e) { results.push({ name: t.name, ok: false, error: String(e && e.message || e) }); }
     }
     const allOk = results.every((r) => r.ok);
-    report({ ok: allOk, stage: allOk ? "pass" : "tests", errors: allOk ? [] : results.filter((r) => !r.ok).map((r) => r.name + ": " + r.error), testResults: results });
+    report({ ok: allOk, stage: allOk ? "pass" : "tests", errors: allOk ? [] : results.filter((r) => !r.ok).map((r) => r.name + ": " + r.error), testResults: results, renderedHtml });
   }
 } catch (e) { /* already reported */ }
 </${"script"}>`;
 }
 
-export function sandboxRun(files: OrganFilesIn, timeoutMs = 8000): Promise<SandboxVerdict> {
+export function sandboxRun(files: OrganFilesIn, timeoutMs = 8000, opts?: SandboxOpts): Promise<SandboxVerdict> {
   return new Promise((resolve) => {
     const nonce = Math.random().toString(36).slice(2);
     const iframe = document.createElement("iframe");
@@ -99,11 +109,11 @@ export function sandboxRun(files: OrganFilesIn, timeoutMs = 8000): Promise<Sandb
     };
     const onMsg = (e: MessageEvent) => {
       if (!e.data || e.data.nonce !== nonce) return;
-      finish({ ok: !!e.data.ok, stage: e.data.stage, errors: e.data.errors ?? [], testResults: e.data.testResults ?? [] });
+      finish({ ok: !!e.data.ok, stage: e.data.stage, errors: e.data.errors ?? [], testResults: e.data.testResults ?? [], renderedHtml: e.data.renderedHtml ?? undefined });
     };
     window.addEventListener("message", onMsg);
     setTimeout(() => finish({ ok: false, stage: "timeout", errors: [`sandbox timed out after ${timeoutMs}ms`], testResults: [] }), timeoutMs);
-    iframe.srcdoc = buildHarnessSrc(files, nonce);
+    iframe.srcdoc = buildHarnessSrc(files, nonce, opts);
     document.body.appendChild(iframe);
   });
 }

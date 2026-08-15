@@ -32,6 +32,15 @@ export type LoomUiKit = {
   ): HTMLElement;
   badge(text: string, tone?: "accent" | "go" | "warn" | "danger" | "muted"): HTMLElement;
   empty(text: string): HTMLElement;
+  hero(value: string | number, label: string): HTMLElement & { _valNode: HTMLElement };
+  spark(
+    values: number[],
+    opts?: { width?: number; height?: number; color?: string },
+  ): SVGSVGElement & { update(values: number[]): void };
+  keyval(pairs: [string, string | number][]): HTMLElement;
+  section(title: string): HTMLElement;
+  dot(tone?: "accent" | "go" | "warn" | "danger" | "muted"): HTMLElement;
+  toolbar(...children: HTMLElement[]): HTMLElement;
 };
 
 export function buildUiKit(tokens: Record<string, string>): LoomUiKit {

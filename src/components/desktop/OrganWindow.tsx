@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { type OrganState, mountOrgan } from "../../lib/organs/host";
+import { windowRegistry } from "../../lib/ambient/windowRegistry";
 
 type WinPos = {
   x: number;
@@ -25,6 +26,19 @@ function persistPos(id: string, pos: WinPos) {
   }
 }
 
+/** Dock clearance: persisted positions whose y would place the title bar below
+ *  planeHeight - DOCK_CLEARANCE are clamped on load. Since we don't have the
+ *  plane height at load time (jsdom returns 0; real browser sets it later),
+ *  we clamp only against the viewport height as a safe upper bound. */
+const DOCK_CLEARANCE_PX = 72;
+
+function clampLoadedY(y: number): number {
+  const vh = typeof window !== "undefined" ? window.innerHeight : 0;
+  if (vh <= 0) return y; // can't clamp without layout info
+  const max = Math.max(0, vh - DOCK_CLEARANCE_PX - 28); // 28 = title bar height
+  return Math.min(y, max);
+}
+
 function loadPos(id: string, initial: { x: number; y: number; w: number; h: number }): WinPos {
   try {
     const raw = localStorage.getItem(`loom.win.${id}`);
@@ -32,7 +46,7 @@ function loadPos(id: string, initial: { x: number; y: number; w: number; h: numb
       const saved = JSON.parse(raw) as Partial<WinPos>;
       return {
         x: saved.x ?? initial.x,
-        y: saved.y ?? initial.y,
+        y: clampLoadedY(saved.y ?? initial.y),
         w: saved.w ?? initial.w,
         h: saved.h ?? initial.h,
         collapsed: saved.collapsed ?? false,
@@ -67,6 +81,19 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
         el.style.fontFamily = "var(--f-mono)";
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Register window position in ambient registry on mount/pos change
+  useEffect(() => {
+    windowRegistry.set(id, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
+  }, [id, pos.x, pos.y, pos.w, pos.h]);
+
+  // Clean up registry on unmount
+  useEffect(() => {
+    return () => {
+      windowRegistry.delete(id);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -106,11 +133,15 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     function onMove(ev: PointerEvent) {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
-      setPos((p) => ({
-        ...p,
-        x: clampX(origX + dx, p.w),
-        y: clampY(origY + dy, p.h),
-      }));
+      setPos((p) => {
+        const next = {
+          ...p,
+          x: clampX(origX + dx, p.w),
+          y: clampY(origY + dy, p.h),
+        };
+        windowRegistry.set(id, { x: next.x, y: next.y, w: next.w, h: next.h });
+        return next;
+      });
     }
 
     function onUp(ev: PointerEvent) {

@@ -11,41 +11,63 @@ const MANIFEST = JSON.stringify({
 const ORGAN_JS = `export default {
   id: "timeline",
   render(el, loom) {
-    const t = loom.ui.tokens;
-    el.style.fontFamily = "system-ui, sans-serif";
-    el.style.color = t.t1;
-    el.style.padding = "4px";
+    var ui = loom.ui;
+    var { root, body } = ui.card({ title: "Timeline" });
 
-    const heading = document.createElement("h3");
-    heading.textContent = "The Timeline";
-    heading.style.color = t.t1;
-    heading.style.margin = "0 0 12px 0";
-    heading.style.fontSize = "16px";
-    heading.style.fontWeight = "bold";
-    el.appendChild(heading);
+    var heading = ui.heading("LOOM remembers everything.", "Every change is a commit - nothing is ever lost.");
+    body.appendChild(heading);
 
-    const principles = [
-      "Every change is a git commit.",
-      "One-click rollback to any prior state.",
-      "A bad edit can never strand you.",
-    ];
+    // How it works section
+    var howSection = ui.section("How it works");
+    body.appendChild(howSection);
 
-    for (const principle of principles) {
-      const line = document.createElement("p");
-      line.textContent = principle;
-      line.style.color = t.t2;
-      line.style.margin = "0 0 8px 0";
-      line.style.fontSize = "14px";
-      el.appendChild(line);
-    }
+    var principles = ui.keyval([
+      ["commits", "every organ edit"],
+      ["rollback", "one click to any state"],
+      ["safety", "bad edits cannot strand you"],
+      ["history", "full git log, always intact"],
+    ]);
+    body.appendChild(principles);
+
+    // Status section
+    var statusSection = ui.section("System");
+    body.appendChild(statusSection);
+
+    var statusRow = ui.row(
+      ui.dot("go"),
+      (function() {
+        var s = document.createElement("span");
+        s.textContent = "Timeline active";
+        s.style.fontSize = "13px";
+        s.style.color = ui.tokens.t2;
+        return s;
+      })()
+    );
+    body.appendChild(statusRow);
+
+    el.appendChild(root);
   }
 };`;
 
 const TEST_JS = `export const tests = [
   {
-    name: "renders the heading",
+    name: "renders the organ heading",
     fn: async ({ el, assert }) => {
-      assert(el.textContent.includes("The Timeline"), "heading text is present");
+      assert(el.textContent.includes("LOOM remembers everything"), "heading text is present");
+    },
+  },
+  {
+    name: "renders keyval principle rows",
+    fn: async ({ el, assert }) => {
+      assert(el.textContent.includes("commits"), "commits key is present");
+      assert(el.textContent.includes("rollback"), "rollback key is present");
+    },
+  },
+  {
+    name: "renders section labels",
+    fn: async ({ el, assert }) => {
+      var text = el.textContent.toUpperCase();
+      assert(text.includes("HOW IT WORKS"), "How it works section present");
     },
   },
 ];`;

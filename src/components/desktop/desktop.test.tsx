@@ -355,6 +355,105 @@ describe("Desktop", () => {
     });
   });
 
+  it("settings organ gets default window size w:560, h:560", async () => {
+    const SETTINGS_ORGAN = {
+      id: "settings",
+      manifest: JSON.stringify({
+        id: "settings",
+        name: "Settings",
+        description: "Voice and appearance preferences.",
+        version: 1,
+        permissions: ["settings"],
+      }),
+      granted: JSON.stringify(["settings"]),
+    };
+
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [SETTINGS_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'settings', render(el){ el.textContent = 'settings-content'; } }";
+      return null;
+    });
+
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-settings")).toBeInTheDocument();
+    });
+
+    // The window element wrapping the title bar should have width 560px and height includes 560 body
+    const titleBar = screen.getByTestId("title-bar-settings");
+    const windowRoot = titleBar.closest(".glass") as HTMLElement | null;
+    expect(windowRoot).not.toBeNull();
+    // Width is set as inline style on the window root
+    expect(windowRoot!.style.width).toBe("560px");
+  });
+
+  it("window spawn y is clamped when plane has a measurable height", async () => {
+    // Mock offsetHeight on the prototype BEFORE rendering so Desktop's clamp logic sees a real height.
+    // With PLANE_H=200, DOCK_CLEARANCE=72, maxY = 200 - 72 - 28 = 100.
+    // organ index 5 would normally spawn at rawY = 40 + 5*36 = 220, which exceeds 100, so it gets clamped.
+    const PLANE_H = 200;
+    const DOCK_CLEARANCE = 72;
+    const TITLE_BAR_H = 28;
+    const maxAllowedY = PLANE_H - DOCK_CLEARANCE - TITLE_BAR_H; // 100
+
+    const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetHeight"
+    );
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get() { return PLANE_H; },
+    });
+
+    try {
+      // 6 organs: index 5 spawns at rawY = 40 + 5*36 = 220, well above 100
+      const organs = Array.from({ length: 6 }, (_, i) => ({
+        id: `organ-${i}`,
+        manifest: JSON.stringify({
+          id: `organ-${i}`,
+          name: `Organ ${i}`,
+          description: "Test",
+          version: 1,
+          permissions: [],
+        }),
+        granted: JSON.stringify([]),
+      }));
+
+      invoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "organ_list") return organs;
+        if (cmd === "organ_read")
+          return `export default { id: 'test', render(el){ el.textContent = 'ok'; } }`;
+        return null;
+      });
+
+      render(<Desktop />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("title-bar-organ-5")).toBeInTheDocument();
+      });
+
+      // The last organ window's .glass element should have top <= maxAllowedY (clamped)
+      const titleBar5 = screen.getByTestId("title-bar-organ-5");
+      const windowRoot = titleBar5.closest(".glass") as HTMLElement | null;
+      expect(windowRoot).not.toBeNull();
+
+      const topStyle = windowRoot!.style.top;
+      expect(topStyle, "organ window must have an inline top style (clamp must have fired)").toBeTruthy();
+      const actualY = parseFloat(topStyle);
+      expect(actualY).toBeLessThanOrEqual(maxAllowedY);
+    } finally {
+      // Restore the original descriptor to avoid polluting other tests
+      if (offsetHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetHeight;
+      }
+    }
+  });
+
   it("organ-focus event restores and focuses the window", async () => {
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "organ_list") return [APPROVED_ORGAN];

@@ -11,7 +11,7 @@
 <img alt="vessel" src="https://img.shields.io/badge/vessel-Tauri_v2-22D3EE?style=for-the-badge&labelColor=060b18"/>
 <img alt="runs" src="https://img.shields.io/badge/runs-100%25_offline-22D3EE?style=for-the-badge&labelColor=060b18"/>
 <img alt="self-building" src="https://img.shields.io/badge/it-builds_itself-7DD3FC?style=for-the-badge&labelColor=060b18"/>
-<img alt="selftest" src="https://img.shields.io/badge/real--model_selftest-12%2F12_reps-4ADE80?style=for-the-badge&labelColor=060b18"/>
+<img alt="selftest" src="https://img.shields.io/badge/real--model_selftest-10%2F10-4ADE80?style=for-the-badge&labelColor=060b18"/>
 <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-4ADE80?style=for-the-badge&labelColor=060b18"/></a>
 
 <br/>
@@ -92,25 +92,43 @@ Hold the **orb** (or **Space**) to talk; release to send. Replies are spoken alo
 
 ---
 
-## Quickstart
+## First five minutes
 
-> **Prerequisites:** [Node](https://nodejs.org) 20+, the [Rust toolchain](https://rustup.rs), and [Ollama](https://ollama.com). Everything runs on your machine — no keys, no accounts, no network.
+**Prerequisites:** macOS (Apple Silicon recommended), [Node](https://nodejs.org) 20+, the [Rust toolchain](https://rustup.rs), and [Ollama](https://ollama.com). About 35 GB free for the model fleet. Voice is optional — download it from Settings after first launch.
+
+```bash
+# 1. Clone and install
+git clone https://github.com/AllStreets/loom.git
+cd loom && npm install
+
+# 2. Pull the model fleet (once, ~35 GB total — do this while you explore the code)
+ollama pull qwen3-coder:30b-a3b-q4_K_M   # builder: writes and repairs code
+ollama pull gpt-oss:20b                  # companion: the always-on presence
+ollama pull qwen3:1.7b                   # rewriter: structures your words for the model
+
+# 3. Verify everything is wired up
+npm run check      # vitest + cargo test — must be fully green
+
+# 4. Open LOOM
+npm run tauri dev
+```
+
+On first launch the companion greets you. When the fleet is ready, type or speak your first build request — *"build me a water tracker"* or *"build an organ that tracks my reading log"* — and watch LOOM plan it, write it, test it, repair it if needed, and ask your permission before anything runs. Approve the card and your new organ is alive in the desktop.
+
+**Voice:** hold the **orb** (or press **Space**) to talk; release to send. To download voices, open Settings from the dock and use the Download button next to each voice — no account, no network call beyond the download.
+
+---
+
+## Quickstart (short form)
 
 ```bash
 git clone https://github.com/AllStreets/loom.git
 cd loom && npm install
-
-# pull the local fleet (once, ~35GB — the app runs without it; the fleet just shows offline)
-ollama pull qwen3-coder:30b-a3b-q4_K_M   # builder
-ollama pull gpt-oss:20b                  # companion
-ollama pull qwen3:1.7b                   # rewriter
-
-npm run check      # gate: vitest + cargo test
-npm run selftest   # the whole pipeline vs the REAL local model (~2 min)
-npm run tauri dev  # open LOOM
+ollama pull qwen3-coder:30b-a3b-q4_K_M && ollama pull gpt-oss:20b && ollama pull qwen3:1.7b
+npm run check && npm run tauri dev
 ```
 
-Type a sentence into The Loom — *"Build an organ that tracks my daily water intake with a goal and a progress bar."* — and press **Enter**. Watch it write, validate, repair if needed, and commit; approve the permission card and your new organ is alive.
+Type into LOOM — *"Build an organ that tracks my daily water intake with a goal and a progress bar."* — and press **Enter**. Watch it write, validate, repair if needed, and commit; approve the permission card and your new organ is alive.
 
 ---
 
@@ -126,7 +144,8 @@ Built in phases, each a working, tested, reviewed milestone.
 | **4 · The orb + living UI** | react-three-fiber oracle-light orb · breathing motion · the living dashboard | **shipped** |
 | **4.5 · The Atelier** | loom.ui design kit — organs beautiful by construction · OS desktop: glass windows + dock | **shipped** |
 | **5 · Voice** | offline whisper + piper voices · hold-the-orb / Space push-to-talk · spoken replies · Settings organ | **shipped** |
-| **later** | the OS-like windowed desktop · full self-modification, kernel included | vision |
+| **6 · Vitality** | threads of light · ambient field · ignition · kit v2 (hero/spark/section) · DOM-grounded builder · first-run greeting | **shipped** |
+| **later** | full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 

@@ -15,6 +15,12 @@ export const KIT_TOKENS = {
 
 export const UIKIT_SRC: string = `
 function makeUi(tokens) {
+  // --- Helpers ---
+  function rgba(hex, a) {
+    var h = hex.replace('#', '');
+    return 'rgba(' + parseInt(h.substr(0, 2), 16) + ',' + parseInt(h.substr(2, 2), 16) + ',' + parseInt(h.substr(4, 2), 16) + ',' + a + ')';
+  }
+
   // --- Style injection (once per document) ---
   function injectStyles() {
     if (document.getElementById('lui-style')) return;
@@ -291,6 +297,171 @@ function makeUi(tokens) {
         padding:'24px 0',
       });
       wrap.textContent = text;
+      return wrap;
+    },
+
+    // --- hero(value, label) --- big luminous focal stat (ONE per organ)
+    hero: function(value, label) {
+      var wrap = el('div', { display:'flex', flexDirection:'column', gap:'4px' });
+      var val = el('div', {
+        fontSize:'28px',
+        fontFamily:'monospace',
+        fontWeight:'700',
+        color:tokens.accent,
+        lineHeight:'1.15',
+        textShadow:'0 0 18px ' + rgba(tokens.accent, '.45'),
+      });
+      val.textContent = String(value);
+      var lbl = el('div', {
+        fontSize:'11px',
+        fontFamily:'monospace',
+        textTransform:'uppercase',
+        letterSpacing:'0.07em',
+        color:tokens.t3,
+      });
+      lbl.textContent = label;
+      append(wrap, val, lbl);
+      wrap._valNode = val;
+      return wrap;
+    },
+
+    // --- spark(values, opts?) --- tiny inline SVG sparkline (60x18)
+    spark: function(values, opts) {
+      opts = opts || {};
+      var W = opts.width || 60;
+      var H = opts.height || 18;
+      var color = opts.color || tokens.accent;
+
+      var ns = 'http://www.w3.org/2000/svg';
+      var svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('width', String(W));
+      svg.setAttribute('height', String(H));
+      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+      svg.style.display = 'inline-block';
+      svg.style.verticalAlign = 'middle';
+      svg.style.overflow = 'visible';
+
+      function renderLine(vals) {
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        if (!vals || vals.length < 2) return;
+        var arr = vals.map(function(v) { return typeof v === 'number' ? v : 0; });
+        var mn = arr.reduce(function(a, b) { return a < b ? a : b; }, arr[0]);
+        var mx = arr.reduce(function(a, b) { return a > b ? a : b; }, arr[0]);
+        var range = mx - mn || 1;
+        var pts = arr.map(function(v, i) {
+          var x = (i / (arr.length - 1)) * W;
+          var y = H - ((v - mn) / range) * (H - 2) - 1;
+          return x + ',' + y;
+        });
+        var polyline = document.createElementNS(ns, 'polyline');
+        polyline.setAttribute('points', pts.join(' '));
+        polyline.setAttribute('fill', 'none');
+        polyline.setAttribute('stroke', color);
+        polyline.setAttribute('stroke-width', '1.5');
+        polyline.setAttribute('stroke-linecap', 'round');
+        polyline.setAttribute('stroke-linejoin', 'round');
+        svg.appendChild(polyline);
+        // accent dot at last point
+        var lastPt = pts[pts.length - 1].split(',');
+        var dot = document.createElementNS(ns, 'circle');
+        dot.setAttribute('cx', lastPt[0]);
+        dot.setAttribute('cy', lastPt[1]);
+        dot.setAttribute('r', '2.5');
+        dot.setAttribute('fill', color);
+        svg.appendChild(dot);
+      }
+
+      renderLine(values || []);
+      svg.update = function(newVals) { renderLine(newVals); };
+      return svg;
+    },
+
+    // --- keyval(pairs) --- aligned key/value rows
+    keyval: function(pairs) {
+      var wrap = el('div', { display:'flex', flexDirection:'column', gap:'6px' });
+      for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i];
+        var rowEl = el('div', { display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:'12px' });
+        var keyEl = el('span', {
+          fontSize:'11.5px',
+          fontFamily:'monospace',
+          color:tokens.t3,
+          textTransform:'uppercase',
+          letterSpacing:'0.05em',
+          flexShrink:'0',
+        });
+        keyEl.textContent = pair[0];
+        var valEl = el('span', {
+          fontSize:'14px',
+          color:tokens.t1,
+          textAlign:'right',
+          wordBreak:'break-word',
+        });
+        valEl.textContent = String(pair[1]);
+        append(rowEl, keyEl, valEl);
+        append(wrap, rowEl);
+      }
+      return wrap;
+    },
+
+    // --- section(title) --- titled group with mono uppercase label + hairline
+    section: function(title) {
+      var wrap = el('div', { marginTop:'8px' });
+      var header = el('div', { display:'flex', alignItems:'center', gap:'8px' });
+      var label = el('span', {
+        fontSize:'10px',
+        fontFamily:'monospace',
+        textTransform:'uppercase',
+        letterSpacing:'0.09em',
+        color:tokens.t3,
+        fontWeight:'600',
+        flexShrink:'0',
+        whiteSpace:'nowrap',
+      });
+      label.textContent = title;
+      var line = el('div', {
+        flex:'1',
+        height:'1px',
+        background:'rgba(255,255,255,.07)',
+      });
+      append(header, label, line);
+      append(wrap, header);
+      return wrap;
+    },
+
+    // --- dot(tone) --- 8px status dot with mood color
+    dot: function(tone) {
+      var toneColors = {
+        accent: tokens.accent,
+        go:     tokens.go,
+        warn:   tokens.warn,
+        danger: tokens.danger,
+        muted:  tokens.t3,
+      };
+      var color = toneColors[tone] || toneColors.accent;
+      var d = el('span', {
+        display:'inline-block',
+        width:'8px',
+        height:'8px',
+        borderRadius:'50%',
+        background:color,
+        flexShrink:'0',
+        boxShadow:'0 0 6px ' + color,
+      });
+      return d;
+    },
+
+    // --- toolbar(...children) --- right-aligned action row for card headers
+    toolbar: function() {
+      var children = Array.prototype.slice.call(arguments);
+      var wrap = el('div', {
+        display:'flex',
+        flexDirection:'row',
+        gap:'6px',
+        alignItems:'center',
+        justifyContent:'flex-end',
+      });
+      children.forEach(function(c){ if(c) append(wrap, c); });
       return wrap;
     },
   };

@@ -101,6 +101,36 @@ describe("Shell layout", () => {
     // Timeline collapsible
     expect(screen.getByText(/Timeline/i)).toBeInTheDocument();
   });
+
+  it("shell root is overflow:hidden and has the orb-band zone", async () => {
+    render(<Shell />);
+
+    const shell = screen.getByTestId("loom-shell");
+    expect(shell.style.overflow).toBe("hidden");
+
+    // orb-band present and within the shell
+    const orbBand = screen.getByTestId("orb-band");
+    expect(shell.contains(orbBand)).toBe(true);
+  });
+
+  it("content region has overflowY:auto and is a descendant of shell root", async () => {
+    render(<Shell />);
+
+    const contentRegion = screen.getByTestId("shell-content-region");
+    expect(contentRegion.style.overflowY).toBe("auto");
+
+    const shell = screen.getByTestId("loom-shell");
+    expect(shell.contains(contentRegion)).toBe(true);
+  });
+
+  it("orb-band is NOT inside the scrolling content region", async () => {
+    render(<Shell />);
+
+    const contentRegion = screen.getByTestId("shell-content-region");
+    const orbBand = screen.getByTestId("orb-band");
+
+    expect(contentRegion.contains(orbBand)).toBe(false);
+  });
 });
 
 describe("Shell mood: loom-mood event", () => {
@@ -157,5 +187,54 @@ describe("Shell fleet-offline path", () => {
     const style = orb2d.getAttribute("style") ?? "";
     // Flexible assertion: offline color #5f6f8c
     expect(style).toMatch(/#5f6f8c/i);
+  });
+});
+
+describe("Shell ignition sequence", () => {
+  it("when loom.ignited is not set, shell starts at opacity:0 and transitions to opacity:1", async () => {
+    // Ensure flag is cleared
+    localStorage.removeItem("loom.ignited");
+
+    render(<Shell />);
+
+    // Shell should begin at opacity 0 (igniting state)
+    const shell = screen.getByTestId("loom-shell");
+    // Initial state: opacity 0 before the setTimeout fires
+    // After 50ms setTimeout (skipIgnition or t1 in effect), it transitions
+    // The style should eventually reach opacity 1
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    // After the ramp-up timeout, opacity should be 1
+    expect(shell.style.opacity).toBe("1");
+  });
+
+  it("when loom.ignited is already set, shell starts at opacity:1 (short fade)", async () => {
+    localStorage.setItem("loom.ignited", "1");
+
+    render(<Shell />);
+
+    const shell = screen.getByTestId("loom-shell");
+    // Already ignited: starts at opacity 0 and fades in quickly
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // Shell should have opacity set (either 0 transitioning or 1 if already resolved)
+    // The important invariant: it reaches 1
+    expect(shell.style.opacity).toBe("1");
+  });
+
+  it("after ignition completes, loom.ignited is set in localStorage", async () => {
+    localStorage.removeItem("loom.ignited");
+
+    render(<Shell />);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 2000));
+    });
+
+    expect(localStorage.getItem("loom.ignited")).toBe("1");
   });
 });

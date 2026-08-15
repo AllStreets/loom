@@ -72,6 +72,36 @@ describe("Companion", () => {
     expect(screen.getByText(/Review code before saving/i)).toBeTruthy();
   });
 
+  it("scroll-to-bottom uses container scrollTop, not page-level scrollIntoView", async () => {
+    // Verify that no element's scrollIntoView is called on a non-container element
+    // (i.e., scrollToBottom does not call window/document scroll).
+    // We spy on scrollIntoView globally to confirm it is never invoked.
+    const scrollIntoViewSpy = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy;
+
+    mockHandle.mockResolvedValue({ kind: "reply", text: "test reply" });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+
+    await userEvent.type(textarea, "hello");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockHandle).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("test reply")).toBeTruthy();
+    });
+
+    // scrollIntoView must NOT have been called by the auto-scroll mechanism
+    expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+
+    // Restore
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+  });
+
   it("typing and pressing Enter submits, calls handle, and renders user + reply bubbles", async () => {
     mockHandle.mockResolvedValue({ kind: "reply", text: "hello from loom" });
 

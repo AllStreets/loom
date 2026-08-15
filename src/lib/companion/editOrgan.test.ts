@@ -79,21 +79,24 @@ describe("editOrgan", () => {
     expect(writtenOrgan.content).toContain("fallback");
   });
 
-  it("gate fails after max repairs — no write, stage is surfaced", async () => {
+  it("gate fails after max repairs (3 rounds) — no write, stage is surfaced", async () => {
     const failGate = vi.fn().mockResolvedValue({
       ok: false,
       verdict: { ok: false, stage: "render", errors: ["boom"], testResults: [] },
     });
     const deps = mkDeps({ gate: failGate });
-    // two repair chat calls after the initial edit call
+    // three repair chat calls after the initial edit call
     deps.chat
       .mockResolvedValueOnce("```js\nexport default { id: 'counter', render(el){ el.textContent='fix1'; } }\n```")
-      .mockResolvedValueOnce("```js\nexport default { id: 'counter', render(el){ el.textContent='fix2'; } }\n```");
+      .mockResolvedValueOnce("```js\nexport default { id: 'counter', render(el){ el.textContent='fix2'; } }\n```")
+      .mockResolvedValueOnce("```js\nexport default { id: 'counter', render(el){ el.textContent='fix3'; } }\n```");
     const r = await editOrgan("counter", "break something", deps);
     expect(r.ok).toBe(false);
     expect(r.stage).toBe("render");
     expect(r.error).toContain("boom");
     expect(deps.write).not.toHaveBeenCalled();
+    // 3 rounds of repair (gate called 4 times: initial + 3)
+    expect(failGate).toHaveBeenCalledTimes(4);
   });
 
   it("review declined — no write, error surfaced", async () => {

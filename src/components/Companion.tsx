@@ -386,11 +386,14 @@ export default function Companion() {
   // Stable ref to runTurn so the loom-utterance listener doesn't need to re-register
   const runTurnRef = useRef<((utterance: string) => Promise<void>) | null>(null);
 
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const convoRef = useRef<HTMLDivElement | null>(null);
 
   function scrollToBottom() {
     requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView?.({ behavior: "smooth" });
+      const el = convoRef.current;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+      }
     });
   }
 
@@ -674,6 +677,18 @@ export default function Companion() {
     return () => window.removeEventListener("loom-utterance", onUtterance);
   }, []); // stable — uses ref pattern
 
+  // First-run greeting — injected instantly, no model call required
+  useEffect(() => {
+    if (localStorage.getItem("loom.firstGreeting") !== null) return;
+    setItems([{
+      kind: "bubble",
+      role: "assistant",
+      text: "I am LOOM. I run on your machine, entirely offline. To start building: ask me to build something — a water tracker, a reading log, a habit counter. Press Enter or hold the orb and speak.",
+      id: nextId(),
+    }]);
+    localStorage.setItem("loom.firstGreeting", "1");
+  }, []);
+
   // Cleanup: settle all pending reviews on unmount, cancel idle timer, dispatch idle
   useEffect(() => {
     const resolvers = reviewResolvers.current;
@@ -733,12 +748,16 @@ export default function Companion() {
         </label>
       </div>
 
-      {/* Conversation */}
+      {/* Conversation — scrolls within its own container */}
       <div
+        ref={convoRef}
+        data-testid="companion-log"
         style={{
           display: "flex",
           flexDirection: "column",
           minHeight: items.length === 0 ? 0 : 40,
+          maxHeight: 480,
+          overflowY: "auto",
           marginBottom: items.length > 0 ? 16 : 0,
         }}
       >
@@ -777,7 +796,6 @@ export default function Companion() {
           }
           return null;
         })}
-        <div ref={bottomRef} />
       </div>
 
       {/* Input */}

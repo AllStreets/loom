@@ -353,6 +353,200 @@ describe("empty", () => {
   });
 });
 
+describe("hero", () => {
+  it("renders value and label text", () => {
+    const ui = buildUiKit(TOKENS);
+    const h = ui.hero(1234, "steps today");
+    expect(h.textContent).toContain("1234");
+    expect(h.textContent).toContain("steps today");
+  });
+
+  it("value node has 28px font-size", () => {
+    const ui = buildUiKit(TOKENS);
+    const h = ui.hero(42, "items");
+    const valNode = h._valNode as HTMLElement;
+    expect(valNode).toBeTruthy();
+    expect(valNode.style.fontSize).toBe("28px");
+  });
+
+  it("value node has accent color", () => {
+    const ui = buildUiKit(TOKENS);
+    const h = ui.hero(7, "days");
+    const valNode = h._valNode as HTMLElement;
+    expect(valNode.style.color).toContain(toRgb(TOKENS.accent));
+  });
+
+  it("converts numeric value to string", () => {
+    const ui = buildUiKit(TOKENS);
+    const h = ui.hero(0, "count");
+    expect(h.textContent).toContain("0");
+  });
+});
+
+describe("spark", () => {
+  it("returns an SVGSVGElement", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.spark([1, 2, 3, 4, 5]);
+    expect(s.tagName.toLowerCase()).toBe("svg");
+  });
+
+  it("renders a polyline for 2+ values", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.spark([10, 20, 15, 30]);
+    expect(s.querySelector("polyline")).toBeTruthy();
+  });
+
+  it("renders nothing for less than 2 values", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.spark([42]);
+    expect(s.querySelector("polyline")).toBeNull();
+  });
+
+  it(".update() replaces the polyline with new data", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.spark([1, 2, 3]);
+    expect(s.querySelector("polyline")).toBeTruthy();
+    s.update([5, 10, 7, 12]);
+    // Still has polyline, but with updated points
+    expect(s.querySelector("polyline")).toBeTruthy();
+  });
+
+  it(".update() with 0 values removes polyline", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.spark([1, 2]);
+    s.update([]);
+    expect(s.querySelector("polyline")).toBeNull();
+  });
+
+  it("renders accent dot on last data point", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.spark([1, 5, 3]);
+    expect(s.querySelector("circle")).toBeTruthy();
+  });
+
+  it("respects custom width and height", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.spark([1, 2], { width: 100, height: 30 });
+    expect(s.getAttribute("width")).toBe("100");
+    expect(s.getAttribute("height")).toBe("30");
+  });
+});
+
+describe("keyval", () => {
+  it("renders all key/value pairs", () => {
+    const ui = buildUiKit(TOKENS);
+    const kv = ui.keyval([["speed", "fast"], ["weight", 42], ["mode", "auto"]]);
+    expect(kv.textContent).toContain("speed");
+    expect(kv.textContent).toContain("fast");
+    expect(kv.textContent).toContain("weight");
+    expect(kv.textContent).toContain("42");
+    expect(kv.textContent).toContain("mode");
+  });
+
+  it("renders correct number of rows", () => {
+    const ui = buildUiKit(TOKENS);
+    const kv = ui.keyval([["a", 1], ["b", 2]]);
+    expect(kv.children.length).toBe(2);
+  });
+
+  it("returns empty container for empty pairs array", () => {
+    const ui = buildUiKit(TOKENS);
+    const kv = ui.keyval([]);
+    expect(kv.children.length).toBe(0);
+  });
+});
+
+describe("section", () => {
+  it("renders the title text", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.section("Voice Settings");
+    expect(s.textContent).toContain("Voice Settings");
+  });
+
+  it("contains a hairline divider element", () => {
+    const ui = buildUiKit(TOKENS);
+    const s = ui.section("General");
+    // The header div contains a label and a line div
+    const header = s.firstChild as HTMLElement;
+    expect(header.children.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("dot", () => {
+  it("renders an inline 8px circle", () => {
+    const ui = buildUiKit(TOKENS);
+    const d = ui.dot("go");
+    expect(d.style.width).toBe("8px");
+    expect(d.style.height).toBe("8px");
+    expect(d.style.borderRadius).toBe("50%");
+  });
+
+  it("go tone uses go color", () => {
+    const ui = buildUiKit(TOKENS);
+    const d = ui.dot("go");
+    expect(d.style.background).toContain(toRgb(TOKENS.go));
+  });
+
+  it("danger tone uses danger color", () => {
+    const ui = buildUiKit(TOKENS);
+    const d = ui.dot("danger");
+    expect(d.style.background).toContain(toRgb(TOKENS.danger));
+  });
+
+  it("defaults to accent tone when no tone given", () => {
+    const ui = buildUiKit(TOKENS);
+    const d = ui.dot();
+    expect(d.style.background).toContain(toRgb(TOKENS.accent));
+  });
+});
+
+describe("toolbar", () => {
+  it("creates a flex row with justify-content flex-end", () => {
+    const ui = buildUiKit(TOKENS);
+    const tb = ui.toolbar(ui.button("A"), ui.button("B"));
+    expect(tb.style.display).toBe("flex");
+    expect(tb.style.justifyContent).toBe("flex-end");
+  });
+
+  it("contains all passed children", () => {
+    const ui = buildUiKit(TOKENS);
+    const tb = ui.toolbar(ui.button("X"), ui.button("Y"), ui.button("Z"));
+    expect(tb.children.length).toBe(3);
+  });
+
+  it("works with zero children", () => {
+    const ui = buildUiKit(TOKENS);
+    const tb = ui.toolbar();
+    expect(tb.children.length).toBe(0);
+  });
+});
+
+describe("buildUiKit — v2 factory presence", () => {
+  it("returns all v2 factories", () => {
+    const ui = buildUiKit(TOKENS);
+    expect(typeof ui.hero).toBe("function");
+    expect(typeof ui.spark).toBe("function");
+    expect(typeof ui.keyval).toBe("function");
+    expect(typeof ui.section).toBe("function");
+    expect(typeof ui.dot).toBe("function");
+    expect(typeof ui.toolbar).toBe("function");
+  });
+});
+
+describe("UIKIT_SRC srcdoc-safety", () => {
+  it("contains no backtick characters", () => {
+    expect(UIKIT_SRC).not.toContain("`");
+  });
+
+  it("contains no template literal ${", () => {
+    expect(UIKIT_SRC).not.toContain("${");
+  });
+
+  it("contains no </script substring", () => {
+    expect(UIKIT_SRC.toLowerCase()).not.toContain("</script");
+  });
+});
+
 describe("KIT_TOKENS single-source parity", () => {
   it("harness srcdoc embeds JSON.stringify(KIT_TOKENS) verbatim", () => {
     const src = buildHarnessSrc(
