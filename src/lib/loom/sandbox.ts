@@ -50,11 +50,17 @@ const freshLoom = () => {
       voiceStatus: async function() { return { ready: false, whisper: false, voices: [], missing_bytes_hint: null }; },
       setup: async function() {},
       models: async function() {
-        return [
-          { role: "builder", model: "qwen3-coder:30b-a3b-q4_K_M", "default": "qwen3-coder:30b-a3b-q4_K_M", override: "", present: true },
-          { role: "companion", model: "gpt-oss:20b", "default": "gpt-oss:20b", override: "", present: true },
-          { role: "rewriter", model: "qwen3:1.7b", "default": "qwen3:1.7b", override: "", present: false },
+        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/;
+        var DEFS = [
+          { role: "builder",   def: "qwen3-coder:30b-a3b-q4_K_M", present: true  },
+          { role: "companion", def: "gpt-oss:20b",                 present: true  },
+          { role: "rewriter",  def: "qwen3:1.7b",                  present: false },
         ];
+        return DEFS.map(function(d) {
+          var ov = settingsMap.has("model." + d.role) ? settingsMap.get("model." + d.role) : "";
+          var effectiveModel = (ov && tagRe.test(ov) && ov.length <= 128) ? ov : d.def;
+          return { role: d.role, model: effectiveModel, "default": d.def, override: ov, present: d.present };
+        });
       },
       setModel: async function(role, tag) {
         var validRoles = ["builder", "companion", "rewriter"];

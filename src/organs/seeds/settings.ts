@@ -14,14 +14,14 @@ const ORGAN_JS = `export default {
     var ui = loom.ui;
     var settings = loom.settings;
 
-    // ── Root layout: sidebar + content ──────────────────────────────────────
+    // -- Root layout: sidebar + content ------------------------------------------
     var root = document.createElement("div");
     root.style.display = "flex";
     root.style.height = "100%";
     root.style.minHeight = "0";
     root.style.gap = "0";
 
-    // ── Sidebar ──────────────────────────────────────────────────────────────
+    // -- Sidebar ------------------------------------------------------------------
     var sidebar = document.createElement("div");
     sidebar.style.width = "140px";
     sidebar.style.flexShrink = "0";
@@ -88,7 +88,7 @@ const ORGAN_JS = `export default {
       })(NAV_ITEMS[ni]);
     }
 
-    // ── Content area ─────────────────────────────────────────────────────────
+    // -- Content area -------------------------------------------------------------
     var content = document.createElement("div");
     content.style.flex = "1";
     content.style.overflowY = "auto";
@@ -96,9 +96,9 @@ const ORGAN_JS = `export default {
 
     var pages = {};
 
-    // ════════════════════════════════════════════════════════════════════════
+    // ========================================================================
     // PAGE: Voice
-    // ════════════════════════════════════════════════════════════════════════
+    // ========================================================================
     var voicePage = document.createElement("div");
     pages["voice"] = voicePage;
 
@@ -263,9 +263,9 @@ const ORGAN_JS = `export default {
     });
     voicePage.appendChild(ui.row(micTestBtn, micResult));
 
-    // ════════════════════════════════════════════════════════════════════════
+    // ========================================================================
     // PAGE: Models
-    // ════════════════════════════════════════════════════════════════════════
+    // ========================================================================
     var modelsPage = document.createElement("div");
     pages["models"] = modelsPage;
 
@@ -366,9 +366,9 @@ const ORGAN_JS = `export default {
       }).catch(function() {});
     }
 
-    // ════════════════════════════════════════════════════════════════════════
+    // ========================================================================
     // PAGE: Appearance
-    // ════════════════════════════════════════════════════════════════════════
+    // ========================================================================
     var appearancePage = document.createElement("div");
     pages["appearance"] = appearancePage;
 
@@ -421,9 +421,9 @@ const ORGAN_JS = `export default {
     }
     appearancePage.appendChild(orbRow);
 
-    // ════════════════════════════════════════════════════════════════════════
+    // ========================================================================
     // PAGE: Building
-    // ════════════════════════════════════════════════════════════════════════
+    // ========================================================================
     var buildingPage = document.createElement("div");
     pages["building"] = buildingPage;
 
@@ -476,7 +476,7 @@ const ORGAN_JS = `export default {
     }
     buildingPage.appendChild(reviewRow);
 
-    // ── Assemble ─────────────────────────────────────────────────────────────
+    // -- Assemble -----------------------------------------------------------------
     for (var pi = 0; pi < NAV_ITEMS.length; pi++) {
       var pitem = NAV_ITEMS[pi];
       var pageEl = pages[pitem.page];
@@ -490,7 +490,7 @@ const ORGAN_JS = `export default {
     root.appendChild(content);
     el.appendChild(root);
 
-    // ── Initialize state ──────────────────────────────────────────────────────
+    // -- Initialize state ---------------------------------------------------------
     function refreshStatus() {
       settings.voiceStatus().then(function(status) {
         if (status.ready) {
@@ -596,13 +596,20 @@ const TEST_JS = `export const tests = [
       loom.settings.set("model.builder", "llama3:8b");
       await new Promise(function(r) { setTimeout(r, 50); });
       var modelsNav = el.querySelector('[data-action="page-models"]');
+      assert(modelsNav !== null, "page-models nav button exists");
       modelsNav.click();
-      await new Promise(function(r) { setTimeout(r, 60); });
+      await new Promise(function(r) { setTimeout(r, 80); });
+      var inp = el.querySelector('[data-action="model-input-builder"]');
+      assert(inp !== null, "model-input-builder exists");
+      assert(inp.value === "llama3:8b", "input reflects live override before reset (got: " + inp.value + ")");
       var resetBtn = el.querySelector('[data-action="model-reset-builder"]');
       assert(resetBtn !== null, "model-reset-builder button exists");
       resetBtn.click();
-      await new Promise(function(r) { setTimeout(r, 60); });
+      await new Promise(function(r) { setTimeout(r, 80); });
       assert(loom.settings.get("model.builder") === "", "reset clears model.builder to empty string");
+      var inp2 = el.querySelector('[data-action="model-input-builder"]');
+      assert(inp2 !== null, "model-input-builder still present after reset");
+      assert(inp2.value === "", "input cleared after reset (got: " + inp2.value + ")");
     },
   },
   {
