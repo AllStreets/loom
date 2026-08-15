@@ -656,6 +656,76 @@ describe("Desktop", () => {
     }
   });
 
+  it("resize keeps window fully inside plane bounds (clampW/clampH with mocked plane dims)", async () => {
+    // Mock plane to 800x600 so clamp logic has a known bound
+    const offsetWidthDescriptor  = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+    const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth",  { configurable: true, get() { return 800; } });
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get() { return 600; } });
+
+    try {
+      invoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "organ_list") return [APPROVED_ORGAN];
+        if (cmd === "organ_read")
+          return "export default { id: 'notes', render(el){ el.textContent = 'ok'; } }";
+        return null;
+      });
+
+      render(<Desktop />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+      });
+
+      const titleBar = screen.getByTestId("title-bar-notes");
+      const windowRoot = titleBar.closest(".glass") as HTMLElement | null;
+      const resizeHandle = windowRoot?.querySelector("[style*='se-resize']") as HTMLElement | null;
+      expect(resizeHandle).not.toBeNull();
+
+      // Resize far beyond the right/bottom edges of the plane
+      // Initial window: x=40, y=40, w=420, h=360 (defaults)
+      // Plane: 800x600
+      // Max resize: w limited to 800-40=760, h limited to 600-40-28=532
+      // But we try to add +10000 to both — should be clamped
+      await act(async () => {
+        resizeHandle!.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, clientX: 100, clientY: 100, pointerId: 2 }),
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, clientX: 10100, clientY: 10100, pointerId: 2 }),
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup",   { bubbles: true, clientX: 10100, clientY: 10100, pointerId: 2 }),
+        );
+      });
+
+      await waitFor(() => {
+        const saved = localStorage.getItem("loom.win.notes");
+        expect(saved).not.toBeNull();
+        const parsed = JSON.parse(saved!);
+        // w must be clamped to min 260 and max (planeW - origX) = 800 - 40 = 760
+        expect(parsed.w).toBeGreaterThanOrEqual(260);
+        expect(parsed.w).toBeLessThanOrEqual(800 - 40); // planeW - origX = 760
+        // h must be clamped to min 180 and max (planeH - origY - TITLE_BAR_H) = 600 - 40 - 28 = 532
+        expect(parsed.h).toBeGreaterThanOrEqual(180);
+        expect(parsed.h).toBeLessThanOrEqual(600 - 40 - 28); // planeH - origY - titlebar = 532
+      });
+    } finally {
+      if (offsetWidthDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetWidth", offsetWidthDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetWidth;
+      }
+      if (offsetHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetHeight;
+      }
+    }
+  });
+
   it("viewport-resize listener re-clamps an open window that would be off-screen after shrink", async () => {
     // Start with a wide viewport
     Object.defineProperty(window, "innerWidth",  { configurable: true, writable: true, value: 1280 });

@@ -216,15 +216,40 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     const startY = e.clientY;
     const origW = posRef.current.w;
     const origH = posRef.current.h;
+    const origX = posRef.current.x;
+    const origY = posRef.current.y;
     (e.currentTarget as HTMLDivElement).setPointerCapture?.(e.pointerId);
+
+    // Capture parent bounds at pointerdown for clamping.
+    // offsetWidth/offsetHeight return 0 in jsdom (no layout engine) — treat 0 as "unavailable"
+    // so we fall back to only >= 0 clamping, preserving full resize freedom in tests.
+    const parentEl = (e.currentTarget as HTMLElement).closest("[data-desktop-plane]") as HTMLElement | null;
+    const rawParentW = parentEl?.offsetWidth ?? 0;
+    const rawParentH = parentEl?.offsetHeight ?? 0;
+    const parentW = rawParentW > 0 ? rawParentW : null;
+    const parentH = rawParentH > 0 ? rawParentH : null;
+
+    function clampW(w: number): number {
+      const minW = 260;
+      if (parentW === null) return Math.max(minW, w);
+      const maxW = Math.max(minW, parentW - origX);
+      return Math.max(minW, Math.min(w, maxW));
+    }
+
+    function clampH(h: number): number {
+      const minH = 180;
+      if (parentH === null) return Math.max(minH, h);
+      const maxH = Math.max(minH, parentH - origY - TITLE_BAR_H);
+      return Math.max(minH, Math.min(h, maxH));
+    }
 
     function onMove(ev: PointerEvent) {
       const dw = ev.clientX - startX;
       const dh = ev.clientY - startY;
       setPos((p) => ({
         ...p,
-        w: Math.max(260, origW + dw),
-        h: Math.max(180, origH + dh),
+        w: clampW(origW + dw),
+        h: clampH(origH + dh),
       }));
     }
 
@@ -234,8 +259,8 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
       const live = posRef.current;
       const newPos: WinPos = {
         ...live,
-        w: Math.max(260, origW + dw),
-        h: Math.max(180, origH + dh),
+        w: clampW(origW + dw),
+        h: clampH(origH + dh),
       };
       setPos(newPos);
       persistPos(id, newPos);

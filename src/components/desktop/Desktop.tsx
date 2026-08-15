@@ -18,7 +18,7 @@ const ORGAN_SIZES: Record<string, { w: number; h: number }> = {
   settings: { w: 560, h: 560 },
 };
 
-/** z-index for the desktop plane overlay — above orb band (10) but below Dock (2000) and modals. */
+/** z-index for the desktop plane overlay — above orb band (10) but below Dock (1000) and modals (2000). */
 const PLANE_Z = 100;
 
 type WindowInfo = {
