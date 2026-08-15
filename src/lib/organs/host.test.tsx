@@ -112,7 +112,7 @@ describe("settings.setModel()", () => {
     expect(localStorage.getItem("model.builder")).toBe("qwen3:1.7b");
   });
 
-  it("(h) empty string resets override and returns {ok:true}", async () => {
+  it("(i) empty string resets override and returns {ok:true}", async () => {
     const api = makeLoomApi("x", ["settings"]);
     // First set a real override
     await api.settings.setModel("companion", "mistral:7b");
