@@ -475,8 +475,6 @@ export default function Shell() {
             : {}),
         }}
       >
-        {/* Ambient Threads — above desktop plane, below windows */}
-        <Threads />
         {/* Main column */}
         <div
           style={{
@@ -501,13 +499,11 @@ export default function Shell() {
             <Companion />
           </PanelTag>
 
-          {/* Organs panel */}
+          {/* Organs region marker — Desktop plane is now a shell-level overlay */}
           <div
             data-testid="organs-region"
             style={{ width: "100%", maxWidth: 1100, position: "relative", zIndex: 10 }}
-          >
-            <Desktop />
-          </div>
+          />
 
           {/* Timeline collapsible footer */}
           <details
@@ -547,6 +543,12 @@ export default function Shell() {
           </details>
         </div>
       </div>
+
+      {/* ── Shell-level overlay: Threads bezier canvas (same coordinate space as Desktop plane) ── */}
+      <Threads />
+
+      {/* ── Shell-level overlay: Desktop plane — absolute inset 0, windows float above orb band ── */}
+      <Desktop />
     </div>
   );
 }

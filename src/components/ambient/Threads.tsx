@@ -240,11 +240,12 @@ export default function Threads() {
   return (
     <div
       ref={containerRef}
+      data-testid="threads-container"
       style={{
-        position: "absolute",
+        position: "fixed",
         inset: 0,
         pointerEvents: "none",
-        zIndex: 5,
+        zIndex: 99,
       }}
     >
       <canvas

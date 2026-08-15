@@ -28,6 +28,7 @@ export default function Dock({ organs, windowStates, onTileClick }: Props) {
     WebkitBackdropFilter: "blur(var(--blur))",
     border: "1px solid var(--glass-border)",
     borderRadius: 14,
+    pointerEvents: "auto",
   };
 
   return (

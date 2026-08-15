@@ -501,4 +501,236 @@ describe("Desktop", () => {
       expect(hidden).toBe(false);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Task 1 — Freedom: full-viewport plane + never-off-screen clamping
+  // ---------------------------------------------------------------------------
+
+  it("desktop plane has pointerEvents:none and organ windows have pointerEvents:auto", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'notes', render(el){ el.textContent = 'ok'; } }";
+      return null;
+    });
+
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+    });
+
+    // Plane must have pointer-events:none so the orb/chat beneath remain clickable
+    const plane = screen.getByTestId("desktop-plane");
+    expect(plane.style.pointerEvents).toBe("none");
+
+    // OrganWindow root (.glass) must re-enable pointer events
+    const titleBar = screen.getByTestId("title-bar-notes");
+    const windowRoot = titleBar.closest(".glass") as HTMLElement | null;
+    expect(windowRoot).not.toBeNull();
+    expect(windowRoot!.style.pointerEvents).toBe("auto");
+  });
+
+  it("persisted position far off-screen loads clamped inside viewport", async () => {
+    // Persist a position way off-screen
+    localStorage.setItem("loom.win.notes", JSON.stringify({ x: 5000, y: 4000, w: 420, h: 360, collapsed: false }));
+
+    // Mock viewport to 1280x800 and plane offsetWidth/Height
+    const origInnerWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    const origInnerHeight = Object.getOwnPropertyDescriptor(window, "innerHeight");
+    Object.defineProperty(window, "innerWidth",  { configurable: true, writable: true, value: 1280 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, writable: true, value: 800 });
+
+    const offsetWidthDescriptor  = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+    const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth",  { configurable: true, get() { return 1280; } });
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get() { return 800; } });
+
+    try {
+      invoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "organ_list") return [APPROVED_ORGAN];
+        if (cmd === "organ_read")
+          return "export default { id: 'notes', render(el){ el.textContent = 'ok'; } }";
+        return null;
+      });
+
+      render(<Desktop />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+      });
+
+      const titleBar = screen.getByTestId("title-bar-notes");
+      const windowRoot = titleBar.closest(".glass") as HTMLElement | null;
+      expect(windowRoot).not.toBeNull();
+
+      // x must be <= vw - w = 1280 - 420 = 860, and >= 0
+      const leftStyle = windowRoot!.style.left;
+      expect(leftStyle).toBeTruthy();
+      const actualX = parseFloat(leftStyle);
+      expect(actualX).toBeGreaterThanOrEqual(0);
+      expect(actualX).toBeLessThanOrEqual(1280 - 420); // vw - w
+
+      // y must be <= vh - DOCK_CLEARANCE - TITLE_BAR_H = 800 - 72 - 28 = 700, and >= 0
+      const topStyle = windowRoot!.style.top;
+      expect(topStyle).toBeTruthy();
+      const actualY = parseFloat(topStyle);
+      expect(actualY).toBeGreaterThanOrEqual(0);
+      expect(actualY).toBeLessThanOrEqual(800 - 72 - 28); // vh - dock - titlebar
+    } finally {
+      if (origInnerWidth) Object.defineProperty(window, "innerWidth", origInnerWidth);
+      if (origInnerHeight) Object.defineProperty(window, "innerHeight", origInnerHeight);
+      if (offsetWidthDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetWidth", offsetWidthDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetWidth;
+      }
+      if (offsetHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetHeight;
+      }
+    }
+  });
+
+  it("drag keeps window fully inside plane bounds (clampX/clampY with mocked plane dims)", async () => {
+    // Mock plane to 800x600 so clamp logic has a known bound
+    const offsetWidthDescriptor  = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+    const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth",  { configurable: true, get() { return 800; } });
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get() { return 600; } });
+
+    try {
+      invoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "organ_list") return [APPROVED_ORGAN];
+        if (cmd === "organ_read")
+          return "export default { id: 'notes', render(el){ el.textContent = 'ok'; } }";
+        return null;
+      });
+
+      render(<Desktop />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+      });
+
+      const titleBar = screen.getByTestId("title-bar-notes");
+
+      // Drag far beyond the right edge of the plane (800px wide, window is 420px wide → maxX = 380)
+      await act(async () => {
+        titleBar.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, clientX: 100, clientY: 100, pointerId: 1 }),
+        );
+        // Move +10000px to the right — should be clamped to maxX = 380
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, clientX: 10100, clientY: 100, pointerId: 1 }),
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup",   { bubbles: true, clientX: 10100, clientY: 100, pointerId: 1 }),
+        );
+      });
+
+      await waitFor(() => {
+        const saved = localStorage.getItem("loom.win.notes");
+        expect(saved).not.toBeNull();
+        const parsed = JSON.parse(saved!);
+        // x must be clamped to 0..plane_w-w range
+        expect(parsed.x).toBeGreaterThanOrEqual(0);
+        expect(parsed.x).toBeLessThanOrEqual(800 - 420); // planeW - w = 380
+      });
+    } finally {
+      if (offsetWidthDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetWidth", offsetWidthDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetWidth;
+      }
+      if (offsetHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetHeight;
+      }
+    }
+  });
+
+  it("viewport-resize listener re-clamps an open window that would be off-screen after shrink", async () => {
+    // Start with a wide viewport
+    Object.defineProperty(window, "innerWidth",  { configurable: true, writable: true, value: 1280 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, writable: true, value: 800 });
+
+    // Persist the window at a position that is valid for 1280x800 but off-screen for 400x400
+    localStorage.setItem("loom.win.notes", JSON.stringify({ x: 800, y: 600, w: 420, h: 360, collapsed: false }));
+
+    const offsetWidthDescriptor  = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+    const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    // Start with wide plane
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth",  { configurable: true, get() { return 1280; } });
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get() { return 800; } });
+
+    try {
+      invoke.mockImplementation(async (cmd: string) => {
+        if (cmd === "organ_list") return [APPROVED_ORGAN];
+        if (cmd === "organ_read")
+          return "export default { id: 'notes', render(el){ el.textContent = 'ok'; } }";
+        return null;
+      });
+
+      render(<Desktop />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+      });
+
+      // Now shrink the viewport so the current position (x:800, y:600) would be off-screen
+      Object.defineProperty(HTMLElement.prototype, "offsetWidth",  { configurable: true, get() { return 400; } });
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get() { return 400; } });
+      Object.defineProperty(window, "innerWidth",  { configurable: true, writable: true, value: 400 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, writable: true, value: 400 });
+
+      // Dispatch resize event — Desktop's single listener fires desktop-plane-resize
+      await act(async () => {
+        window.dispatchEvent(new Event("resize"));
+        // Also dispatch the plane-resize event with the new dims directly (since jsdom doesn't re-layout)
+        window.dispatchEvent(new CustomEvent("desktop-plane-resize", {
+          detail: { planeW: 400, planeH: 400 },
+        }));
+      });
+
+      // Wait for state to settle and check persisted position is clamped
+      await waitFor(() => {
+        const saved = localStorage.getItem("loom.win.notes");
+        if (!saved) return; // not yet persisted — let waitFor retry
+        const parsed = JSON.parse(saved);
+        // With planeW=400, w clamped to 400; maxX = 0 (planeW-w = 400-400=0)
+        // With planeH=400, h clamped to 400-72=328; maxY = 400-72-28=300
+        expect(parsed.x).toBeGreaterThanOrEqual(0);
+        expect(parsed.x).toBeLessThanOrEqual(400); // can't exceed planeW
+        expect(parsed.y).toBeGreaterThanOrEqual(0);
+        expect(parsed.y).toBeLessThanOrEqual(400 - 72 - 28); // 300
+      });
+
+      // Also verify window style updated
+      const titleBar = screen.getByTestId("title-bar-notes");
+      const windowRoot = titleBar.closest(".glass") as HTMLElement | null;
+      expect(windowRoot).not.toBeNull();
+      const actualY = parseFloat(windowRoot!.style.top);
+      expect(actualY).toBeLessThanOrEqual(400 - 72 - 28);
+    } finally {
+      if (offsetWidthDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetWidth", offsetWidthDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetWidth;
+      }
+      if (offsetHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (HTMLElement.prototype as any).offsetHeight;
+      }
+    }
+  });
 });

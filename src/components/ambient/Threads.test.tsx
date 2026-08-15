@@ -73,12 +73,14 @@ describe("Threads", () => {
     expect(canvas.style.pointerEvents).toBe("none");
   });
 
-  it("container has position:absolute and pointer-events:none", () => {
+  it("container has position:fixed (shell-level overlay) and pointer-events:none", () => {
     render(<Threads />);
     const canvas = screen.getByTestId("ambient-threads");
     const container = canvas.parentElement;
     expect(container).not.toBeNull();
-    expect(container!.style.position).toBe("absolute");
+    // Threads now lives at the shell root level as a fixed overlay so its
+    // coordinate space matches the full-viewport desktop plane.
+    expect(container!.style.position).toBe("fixed");
     expect(container!.style.pointerEvents).toBe("none");
   });
 

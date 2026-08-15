@@ -26,17 +26,33 @@ function persistPos(id: string, pos: WinPos) {
   }
 }
 
-/** Dock clearance: persisted positions whose y would place the title bar below
- *  planeHeight - DOCK_CLEARANCE are clamped on load. Since we don't have the
- *  plane height at load time (jsdom returns 0; real browser sets it later),
- *  we clamp only against the viewport height as a safe upper bound. */
+/** Dock clearance reserved at the bottom of the viewport (px). */
 const DOCK_CLEARANCE_PX = 72;
 
-function clampLoadedY(y: number): number {
+/** Title bar height (px) — minimum visible region. */
+const TITLE_BAR_H = 28;
+
+/**
+ * Clamp x AND y against the current viewport so no window can be loaded off-screen.
+ * Also clamps w/h to the viewport so oversized windows shrink to fit.
+ * Falls back gracefully when viewport dimensions are unavailable (e.g. jsdom).
+ */
+function clampToViewport(pos: WinPos): WinPos {
+  const vw = typeof window !== "undefined" ? window.innerWidth : 0;
   const vh = typeof window !== "undefined" ? window.innerHeight : 0;
-  if (vh <= 0) return y; // can't clamp without layout info
-  const max = Math.max(0, vh - DOCK_CLEARANCE_PX - 28); // 28 = title bar height
-  return Math.min(y, max);
+  if (vw <= 0 || vh <= 0) return pos; // can't clamp without layout info
+
+  // Clamp dimensions first so position clamping uses the effective size.
+  const w = Math.min(pos.w, vw);
+  const h = Math.min(pos.h, vh - DOCK_CLEARANCE_PX);
+
+  // Clamp position: title bar must stay fully inside [0, vw-w] x [0, vh-DOCK_CLEARANCE-TITLE_BAR_H].
+  const maxX = Math.max(0, vw - w);
+  const maxY = Math.max(0, vh - DOCK_CLEARANCE_PX - TITLE_BAR_H);
+  const x = Math.max(0, Math.min(pos.x, maxX));
+  const y = Math.max(0, Math.min(pos.y, maxY));
+
+  return { ...pos, x, y, w, h };
 }
 
 function loadPos(id: string, initial: { x: number; y: number; w: number; h: number }): WinPos {
@@ -44,18 +60,19 @@ function loadPos(id: string, initial: { x: number; y: number; w: number; h: numb
     const raw = localStorage.getItem(`loom.win.${id}`);
     if (raw) {
       const saved = JSON.parse(raw) as Partial<WinPos>;
-      return {
+      const raw_pos: WinPos = {
         x: saved.x ?? initial.x,
-        y: clampLoadedY(saved.y ?? initial.y),
+        y: saved.y ?? initial.y,
         w: saved.w ?? initial.w,
         h: saved.h ?? initial.h,
         collapsed: saved.collapsed ?? false,
       };
+      return clampToViewport(raw_pos);
     }
   } catch {
     // ignore parse errors
   }
-  return { x: initial.x, y: initial.y, w: initial.w, h: initial.h, collapsed: false };
+  return clampToViewport({ x: initial.x, y: initial.y, w: initial.w, h: initial.h, collapsed: false });
 }
 
 export default function OrganWindow({ state, focused, onFocus, onMinimize, initial }: Props) {
@@ -95,6 +112,34 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
       windowRegistry.delete(id);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Viewport-resize re-clamp: listen for Desktop's single resize dispatcher.
+  // Re-clamps this window's position and persists any corrections.
+  useEffect(() => {
+    function onPlaneResize(ev: Event) {
+      const detail = (ev as CustomEvent<{ planeW: number; planeH: number }>).detail;
+      if (!detail || detail.planeW <= 0 || detail.planeH <= 0) return;
+      const { planeW, planeH } = detail;
+      setPos((p) => {
+        const w = Math.min(p.w, planeW);
+        const h = Math.min(p.h, planeH - DOCK_CLEARANCE_PX);
+        const maxX = Math.max(0, planeW - w);
+        const maxY = Math.max(0, planeH - DOCK_CLEARANCE_PX - TITLE_BAR_H);
+        const x = Math.max(0, Math.min(p.x, maxX));
+        const y = Math.max(0, Math.min(p.y, maxY));
+        const corrected: WinPos = { ...p, x, y, w, h };
+        // Persist only if something actually changed.
+        if (corrected.x !== p.x || corrected.y !== p.y || corrected.w !== p.w || corrected.h !== p.h) {
+          windowRegistry.set(id, { x: corrected.x, y: corrected.y, w: corrected.w, h: corrected.h });
+          persistPos(id, corrected);
+        }
+        return corrected;
+      });
+    }
+
+    window.addEventListener("desktop-plane-resize", onPlaneResize);
+    return () => window.removeEventListener("desktop-plane-resize", onPlaneResize);
   }, [id]);
 
   // Drag logic
@@ -215,7 +260,7 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     position: "absolute",
     left: pos.x,
     top: pos.y,
-    width: pos.w,
+    width: Math.min(pos.w, typeof window !== "undefined" && window.innerWidth > 0 ? window.innerWidth : pos.w),
     boxShadow: focused
       ? "0 0 0 1px rgba(34,211,238,.35), 0 8px 32px rgba(0,0,0,.4)"
       : "0 4px 16px rgba(0,0,0,.3)",
@@ -226,6 +271,7 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     border: "1px solid var(--glass-border)",
     borderRadius: 14,
     overflow: "hidden",
+    pointerEvents: "auto",
   };
 
   const titleBarStyle: React.CSSProperties = {
