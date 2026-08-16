@@ -566,6 +566,26 @@ describe("kit v3 factories", () => {
     expect(polyline).toBeTruthy();
   });
 
+  it("lineChart: two lineCharts in one document have distinct gradient ids", () => {
+    const ui = buildUiKit(TOKENS);
+    const svg1 = ui.lineChart([1, 5, 3, 8, 2]);
+    const svg2 = ui.lineChart([2, 4, 6, 3, 7]);
+
+    // Extract gradient IDs from fill attributes
+    const area1 = svg1.querySelector("polygon");
+    const area2 = svg2.querySelector("polygon");
+    expect(area1).toBeTruthy();
+    expect(area2).toBeTruthy();
+
+    const fill1 = area1!.getAttribute("fill");
+    const fill2 = area2!.getAttribute("fill");
+
+    // Both should have url(#...) pattern but different IDs
+    expect(fill1).toMatch(/^url\(#lui-lg-\d+\)$/);
+    expect(fill2).toMatch(/^url\(#lui-lg-\d+\)$/);
+    expect(fill1).not.toBe(fill2);
+  });
+
   it("gauge: arc dasharray changes with different values", () => {
     const ui = buildUiKit(TOKENS);
     const g1 = ui.gauge(25, 100);
@@ -610,6 +630,25 @@ describe("kit v3 factories", () => {
     // First data row has correct column count
     const firstRow = table.children[1] as HTMLElement;
     expect(firstRow.children.length).toBe(columns.length);
+  });
+
+  it("dataGrid: short row still renders columns.length cells per row", () => {
+    const ui = buildUiKit(TOKENS);
+    const columns = ["Name", "Value", "Status"];
+    // Second and third rows are shorter than columns.length
+    const rows = [["Alpha", 1, "ok"], ["Beta", 2], ["Gamma"]];
+    const grid = ui.dataGrid(columns, rows);
+    const table = grid.firstChild as HTMLElement;
+
+    // All three data rows should have exactly columns.length cells
+    for (let i = 0; i < rows.length; i++) {
+      const row = table.children[i + 1] as HTMLElement;
+      expect(row.children.length).toBe(columns.length);
+    }
+
+    // Short row cells should render as empty strings for missing values
+    const shortRow = table.children[2] as HTMLElement; // ["Beta", 2]
+    expect(shortRow.children[2].textContent).toBe(""); // Third cell should be empty
   });
 
   it("toggle: flips checked state and calls onChange with new value", () => {

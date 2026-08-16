@@ -15,6 +15,7 @@ export const KIT_TOKENS = {
 
 export const UIKIT_SRC: string = `
 function makeUi(tokens) {
+  var luiGradSeq = 0;
   // --- Helpers ---
   function rgba(hex, a) {
     var h = hex.replace('#', '');
@@ -625,7 +626,8 @@ function makeUi(tokens) {
       // defs with linearGradient for area fill
       var defs = document.createElementNS(ns, 'defs');
       var grad = document.createElementNS(ns, 'linearGradient');
-      grad.setAttribute('id', 'lui-lg');
+      var gid = 'lui-lg-' + (++luiGradSeq);
+      grad.setAttribute('id', gid);
       grad.setAttribute('x1', '0');
       grad.setAttribute('y1', '0');
       grad.setAttribute('x2', '0');
@@ -647,7 +649,7 @@ function makeUi(tokens) {
       var areaPoints = pts.concat([lastPt, firstPt]).join(' ');
       var area = document.createElementNS(ns, 'polygon');
       area.setAttribute('points', areaPoints);
-      area.setAttribute('fill', 'url(#lui-lg)');
+      area.setAttribute('fill', 'url(#' + gid + ')');
       svg.appendChild(area);
 
       // Polyline
@@ -830,7 +832,7 @@ function makeUi(tokens) {
         var row = el('div', {
           display: 'table-row',
         }, 'lui-grid-row');
-        for (var rci = 0; rci < rows[ri].length; rci++) {
+        for (var rci = 0; rci < columns.length; rci++) {
           var cell = el('div', {
             display: 'table-cell',
             padding: '7px 12px',
@@ -839,7 +841,7 @@ function makeUi(tokens) {
             borderBottom: '1px solid rgba(255,255,255,.04)',
             whiteSpace: 'nowrap',
           });
-          cell.textContent = String(rows[ri][rci]);
+          cell.textContent = rows[ri][rci] == null ? '' : String(rows[ri][rci]);
           append(row, cell);
         }
         append(table, row);

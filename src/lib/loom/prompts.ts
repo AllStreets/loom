@@ -31,7 +31,7 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
        //   loom.settings.voiceStatus() -> Promise<{ready,whisper,voices,missing_bytes_hint}>
        //   await loom.settings.setup(onPct?) -> void downloads missing models (fires onPct(pct) 0-100)
 
-       // loom.ui — design kit v2 (always available, no permission needed):
+       // loom.ui — design kit (always available, no permission needed):
        //   loom.ui.tokens                           -> { bg, panel, t1, t2, t3, accent, go, warn, danger }
        //   loom.ui.heading(text, sub?)              -> header block (17px t1 + optional 12.5px t2 sub)
        //   loom.ui.card(opts?)                      -> { root, body } glass panel (opts.title = mono eyebrow)
