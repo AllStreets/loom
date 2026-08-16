@@ -119,13 +119,29 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
 
 Rules: complete files only, no placeholders or TODOs; small and focused; real functionality, never filler.`;
 
-export function organSystemPrompt(kind: "manifest" | "code" | "tests" | "edit" | "repair"): string {
+export function organSystemPrompt(
+  kind: "manifest" | "code" | "tests" | "edit" | "repair",
+  opts?: { exemplars?: string; lessons?: string }
+): string {
   const base = `You are the Loom, the build engine inside LOOM, a sovereign offline computer. You write organs.\n\n${ORGAN_CONTRACT}\n\nOutput ONLY the requested file content in a single fenced code block. No prose before or after.`;
+
+  // Build experience injection block
+  let experienceBlock = "";
+  if (opts?.exemplars && opts.exemplars.length > 0) {
+    experienceBlock += `\n\nEXPERIENCE — PAST SUCCESSFUL BUILDS (study these patterns):\n${opts.exemplars}`;
+  }
+  if (opts?.lessons && opts.lessons.length > 0) {
+    experienceBlock += `\n\nLESSONS FROM PAST FAILURES:\n${opts.lessons}`;
+  }
+
+  // Insert experience block between contract (base) and task instruction
+  const baseWithExp = base + experienceBlock;
+
   switch (kind) {
-    case "manifest": return base + `\nNow output manifest.json only. Choose a short kebab-case id and the MINIMAL permissions the request needs.`;
-    case "code": return base + `\nNow output organ.js only. It must match the manifest's id and only use APIs its permissions allow.\nBuild the UI ONLY from loom.ui factories (plus plain layout containers for top-level spacing). Never hand-roll styled divs — use loom.ui.card, loom.ui.heading, loom.ui.button, loom.ui.input, loom.ui.list, loom.ui.listRow, loom.ui.stat, loom.ui.badge, loom.ui.empty, loom.ui.hero, loom.ui.spark, loom.ui.keyval, loom.ui.section, loom.ui.dot, loom.ui.toolbar, etc.\nFor data/metrics organs: open with ui.hero(value, label) as the ONE focal moment, then support detail with ui.keyval or ui.spark for trends.`;
-    case "tests": return base + `\nNow output test.js only: 2-4 meaningful tests that verify the organ's real behavior (not trivial truths).\nABSOLUTE RULES:\n- No import statements anywhere in test.js — use the organ provided in the test context ({ el, loom, assert, organ }). The organ is already rendered into el before each test runs.\n- Each test starts with FRESH empty storage — never assume another test's data exists.\n- Select interactive elements ONLY via [data-action="..."] attributes (they are guaranteed by the organ contract); never by tag order or text.\n- Prefer asserting on loom.storage state over DOM text.\nCANONICAL INTERACTION PATTERNS (follow these exactly — they match the organ's mutation semantics):\n- MULTI-ADD: The input clears after each successful add. To add N items: set input.value = "first", click add, then set input.value = "second", click add again — set the value BEFORE each click, not once at the start.\n- STALE ELEMENTS: Re-query remove buttons and list rows after EVERY mutation. Never hold a NodeList or element reference across a click — use el.querySelectorAll('[data-action="remove"]')[i] freshly each time.\n- COUNT ASSERTIONS: Prefer loom.storage assertions for counts (e.g. loom.storage.get("items", []).length) over counting DOM nodes.`;
-    case "repair": return base + `\nYour previous file FAILED validation. You will be given the file and the exact errors. Output the COMPLETE corrected file in one fenced code block — fix the errors, keep the intended behavior, and follow every contract rule (especially: test.js must contain no import statements).`;
-    case "edit": return base + `\nYou are EDITING one existing file. Output ONLY SEARCH/REPLACE edit blocks in this exact format (no prose, no full file):\n<<<<<<< SEARCH\n(lines copied exactly from the current file)\n=======\n(replacement lines)\n>>>>>>> REPLACE`;
+    case "manifest": return baseWithExp + `\nNow output manifest.json only. Choose a short kebab-case id and the MINIMAL permissions the request needs.`;
+    case "code": return baseWithExp + `\nNow output organ.js only. It must match the manifest's id and only use APIs its permissions allow.\nBuild the UI ONLY from loom.ui factories (plus plain layout containers for top-level spacing). Never hand-roll styled divs — use loom.ui.card, loom.ui.heading, loom.ui.button, loom.ui.input, loom.ui.list, loom.ui.listRow, loom.ui.stat, loom.ui.badge, loom.ui.empty, loom.ui.hero, loom.ui.spark, loom.ui.keyval, loom.ui.section, loom.ui.dot, loom.ui.toolbar, etc.\nFor data/metrics organs: open with ui.hero(value, label) as the ONE focal moment, then support detail with ui.keyval or ui.spark for trends.`;
+    case "tests": return baseWithExp + `\nNow output test.js only: 2-4 meaningful tests that verify the organ's real behavior (not trivial truths).\nABSOLUTE RULES:\n- No import statements anywhere in test.js — use the organ provided in the test context ({ el, loom, assert, organ }). The organ is already rendered into el before each test runs.\n- Each test starts with FRESH empty storage — never assume another test's data exists.\n- Select interactive elements ONLY via [data-action="..."] attributes (they are guaranteed by the organ contract); never by tag order or text.\n- Prefer asserting on loom.storage state over DOM text.\nCANONICAL INTERACTION PATTERNS (follow these exactly — they match the organ's mutation semantics):\n- MULTI-ADD: The input clears after each successful add. To add N items: set input.value = "first", click add, then set input.value = "second", click add again — set the value BEFORE each click, not once at the start.\n- STALE ELEMENTS: Re-query remove buttons and list rows after EVERY mutation. Never hold a NodeList or element reference across a click — use el.querySelectorAll('[data-action="remove"]')[i] freshly each time.\n- COUNT ASSERTIONS: Prefer loom.storage assertions for counts (e.g. loom.storage.get("items", []).length) over counting DOM nodes.`;
+    case "repair": return baseWithExp + `\nYour previous file FAILED validation. You will be given the file and the exact errors. Output the COMPLETE corrected file in one fenced code block — fix the errors, keep the intended behavior, and follow every contract rule (especially: test.js must contain no import statements).`;
+    case "edit": return baseWithExp + `\nYou are EDITING one existing file. Output ONLY SEARCH/REPLACE edit blocks in this exact format (no prose, no full file):\n<<<<<<< SEARCH\n(lines copied exactly from the current file)\n=======\n(replacement lines)\n>>>>>>> REPLACE`;
   }
 }

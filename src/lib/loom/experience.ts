@@ -1,0 +1,138 @@
+// src/lib/loom/experience.ts
+
+export type BuildRecord = {
+  ts: number;
+  kind: "build" | "edit";
+  request: string;
+  organId: string;
+  ok: boolean;
+  stage?: string;
+  repairRounds: number;
+  manifest?: string;
+  code?: string;
+  tests?: string;
+  failedTests?: string[];
+  errors?: string[];
+};
+
+const STORE_KEY = "loom.exp.v1";
+const MAX_RECORDS = 200;
+
+function loadRecords(): BuildRecord[] {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as BuildRecord[];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecords(records: BuildRecord[]): void {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(records));
+  } catch {
+    // swallow storage errors
+  }
+}
+
+export function recordExperience(r: BuildRecord): void {
+  try {
+    const records = loadRecords();
+    records.push(r);
+    // evict oldest if over cap
+    const capped = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
+    saveRecords(capped);
+  } catch {
+    // swallow all errors
+  }
+}
+
+// Keyword/bigram overlap scoring
+function scoreOverlap(a: string, b: string): number {
+  const tokenize = (s: string): string[] =>
+    s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+  const aWords = tokenize(a);
+  const bWords = tokenize(b);
+  // unigrams
+  const aSet = new Set(aWords);
+  const bSet = new Set(bWords);
+  let score = 0;
+  for (const w of aSet) { if (bSet.has(w)) score++; }
+  // bigrams
+  const bigrams = (words: string[]) => words.slice(0, -1).map((w, i) => w + " " + words[i + 1]);
+  const aBigrams = new Set(bigrams(aWords));
+  const bBigrams = new Set(bigrams(bWords));
+  for (const bg of aBigrams) { if (bBigrams.has(bg)) score += 2; }
+  return score;
+}
+
+export function retrieveExemplars(request: string, k: number): string {
+  try {
+    const records = loadRecords().filter((r) => r.ok);
+    if (records.length === 0) return "";
+    const scored = records
+      .map((r) => ({ r, score: scoreOverlap(request, r.request) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, k);
+    if (scored.length === 0) return "";
+    return scored.map(({ r }) => {
+      const rounds = r.repairRounds === 0 ? "0 repair rounds" : `${r.repairRounds} repair round${r.repairRounds === 1 ? "" : "s"}`;
+      const parts = [
+        `PAST SUCCESSFUL BUILD (request: "${r.request}", passed in ${rounds}):`,
+      ];
+      if (r.manifest) parts.push(r.manifest);
+      if (r.code) parts.push(r.code);
+      return parts.join("\n");
+    }).join("\n\n");
+  } catch {
+    return "";
+  }
+}
+
+export function retrieveLessons(request: string, k: number): string {
+  try {
+    const records = loadRecords().filter((r) => !r.ok);
+    if (records.length === 0) return "";
+    const scored = records
+      .map((r) => ({ r, score: scoreOverlap(request, r.request) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, k);
+    if (scored.length === 0) return "";
+    return scored.map(({ r }) => {
+      const stage = r.stage ?? "unknown";
+      const firstError = r.errors?.[0]?.split("\n")[0] ?? "unknown error";
+      return `A similar past build ("${r.request}") failed at stage ${stage} with: ${firstError}. Avoid that failure mode.`;
+    }).join("\n");
+  } catch {
+    return "";
+  }
+}
+
+export function exportCorpus(): string {
+  try {
+    const records = loadRecords();
+    const lines: string[] = [];
+    for (const r of records) {
+      if (r.manifest) {
+        lines.push(JSON.stringify({ prompt: `manifest: ${r.request}`, completion: r.manifest, verdict: r.ok ? "pass" : "fail" }));
+      }
+      if (r.code) {
+        lines.push(JSON.stringify({ prompt: `code: ${r.request}`, completion: r.code, verdict: r.ok ? "pass" : "fail" }));
+      }
+      if (r.tests) {
+        lines.push(JSON.stringify({ prompt: `tests: ${r.request}`, completion: r.tests, verdict: r.ok ? "pass" : "fail" }));
+      }
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// Dev-only export hook
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__loomExportCorpus = exportCorpus;
+}

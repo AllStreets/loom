@@ -531,6 +531,19 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     console.info(`[build-dashboardy-organ] ${passed}/${REPS} passed`);
   });
 
+  it("exemplars-injected: organSystemPrompt with exemplars injects EXPERIENCE block", () => {
+    const withExemplars = organSystemPrompt("code", {
+      exemplars: "PAST SUCCESSFUL BUILD (request: \"track my runs\", passed in 0 repair rounds):\nexport default { id: \"run-tracker\" }",
+      lessons: "A similar past build (\"track my runs\") failed at stage tests with: querySelector returned null. Avoid that failure mode.",
+    });
+    const withoutExemplars = organSystemPrompt("code");
+    expect(withExemplars).toContain("EXPERIENCE — PAST SUCCESSFUL BUILDS");
+    expect(withExemplars).toContain("LESSONS FROM PAST FAILURES");
+    expect(withExemplars).toContain("track my runs");
+    expect(withExemplars.length).toBeGreaterThan(withoutExemplars.length);
+    console.info(`[exemplars-injected] prompt with exemplars is ${withExemplars.length - withoutExemplars.length} chars longer`);
+  });
+
   it("edit-organ: 3 reps — notes seed organ.js heading change", async () => {
     const m = model ?? (await pickBuilder());
 

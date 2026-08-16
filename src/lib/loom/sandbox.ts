@@ -83,7 +83,7 @@ try {
   else {
     const el = document.createElement("div");
     try { await organ.render(el, mockLoom); } catch (e) { fail("render", e && e.message || e); throw e; }
-    const renderedHtml = el.innerHTML.slice(0, 3000);
+    const renderedHtml = el.innerHTML.slice(0, 9000);
     if (PROBE_ONLY) {
       report({ ok: true, stage: "probe", errors: [], testResults: [], renderedHtml });
       throw new Error("probe done");

@@ -2,6 +2,7 @@ import { organSystemPrompt, ctxFor } from "../loom/prompts";
 import { extractCode, applyEditBlocks } from "../loom/edits";
 import { withFlight } from "../loom/flight";
 import { runGateWithRepair } from "../loom/gateRepair";
+import { recordExperience } from "../loom/experience";
 import type { gate } from "../loom/validate";
 import type { organWrite, organRead, OrganFile, Msg, ChatOpts } from "../core";
 import type { BuildEvent, BuildResult } from "../loom/build";
@@ -109,11 +110,18 @@ export async function editOrgan(
     );
 
     if (!gateResult.ok) {
+      recordExperience({
+        ts: Date.now(), kind: "edit", request, organId, ok: false,
+        stage: gateResult.stage, repairRounds: 0,
+        code: newCode, tests,
+        errors: [gateResult.errors],
+      });
       return { ok: false, error: gateResult.errors, stage: gateResult.stage, log };
     }
 
     const finalCode = gateResult.code;
     const finalTests = gateResult.tests;
+    const { repairRounds } = gateResult;
 
     // Manifest is NEVER modified by this path (permissions cannot silently grow)
     const outputFiles: OrganFile[] = [
@@ -138,6 +146,12 @@ export async function editOrgan(
     const commitMsg = `loom: edit ${organId} — ${request.slice(0, 60)}`;
     const sha = await deps.write(organId, outputFiles, commitMsg);
     emit("write", "committed " + sha);
+
+    recordExperience({
+      ts: Date.now(), kind: "edit", request, organId, ok: true,
+      repairRounds,
+      code: finalCode, tests: finalTests,
+    });
 
     return { ok: true, organId, sha, log };
 
