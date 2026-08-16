@@ -41,6 +41,16 @@ export type LoomUiKit = {
   section(title: string): HTMLElement;
   dot(tone?: "accent" | "go" | "warn" | "danger" | "muted"): HTMLElement;
   toolbar(...children: HTMLElement[]): HTMLElement;
+  tabs(labels: string[], opts?: { onTabChange?: (index: number) => void }): { root: HTMLElement; panels: HTMLElement[]; onChange: (index: number) => void };
+  barChart(data: Array<{label: string; value: number}>, opts?: { width?: number; height?: number; color?: string }): SVGSVGElement;
+  lineChart(series: number[], opts?: { width?: number; height?: number }): SVGSVGElement;
+  gauge(value: number, max: number, opts?: { size?: number; label?: string }): SVGSVGElement;
+  heatmap(values: number[], opts?: { cellSize?: number; gap?: number }): HTMLElement;
+  dataGrid(columns: string[], rows: Array<Array<string | number>>): HTMLElement;
+  toggle(label: string, checked: boolean, onChange: (checked: boolean) => void): HTMLElement;
+  select(options: Array<{value: string; label: string} | string>, opts?: { action?: string; onChange?: (value: string) => void }): HTMLSelectElement;
+  spinner(size?: number): HTMLElement;
+  icon(name: string): SVGSVGElement;
 };
 
 export function buildUiKit(tokens: Record<string, string>): LoomUiKit {

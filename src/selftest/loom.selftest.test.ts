@@ -616,6 +616,69 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     }
   });
 
+  it("build-chart-organ: 3 reps — model uses v3 instruments for dashboards", async () => {
+    const m = model ?? (await pickBuilder());
+    const system = organSystemPrompt("code");
+    const CHART_MANIFEST = JSON.stringify({
+      id: "water-intake",
+      name: "Water Intake",
+      description: "Weekly water intake dashboard with daily chart and goal gauge.",
+      version: 1,
+      permissions: ["storage"],
+    });
+    const user = `Manifest:\n${CHART_MANIFEST}\n\nBuild a weekly water intake dashboard with a chart of daily intake and a goal gauge.`;
+
+    let passed = 0;
+    for (let rep = 1; rep <= REPS; rep++) {
+      const t0 = Date.now();
+      const raw = await chat(m, system, user);
+      const code = extractCode(raw);
+      const ms = Date.now() - t0;
+
+      const hasExportDefault = code.includes("export default");
+      const hasRender = code.includes("render");
+
+      // Must reference >= 2 of these v3 instruments
+      const v3Refs = [
+        code.includes("barChart") || code.includes("ui.barChart"),
+        code.includes("lineChart") || code.includes("ui.lineChart"),
+        code.includes("gauge") || code.includes("ui.gauge"),
+        code.includes("heatmap") || code.includes("ui.heatmap"),
+        code.includes("spark") || code.includes("ui.spark"),
+      ].filter(Boolean).length;
+      const hasEnoughV3 = v3Refs >= 2;
+
+      const stripped = code
+        .replace(/^export\s+default\s+/, "const __organ = ")
+        .replace(/\bimport\b[^;]*;?\s*/g, "");
+      let fnOk = false;
+      let fnErr = "";
+      try {
+        new Function(stripped);
+        fnOk = true;
+      } catch (e) {
+        fnErr = String(e);
+      }
+
+      const ok = hasExportDefault && hasRender && fnOk && hasEnoughV3;
+      if (ok) {
+        passed++;
+        console.info(`[build-chart-organ] rep ${rep} PASS (${ms}ms) v3Refs=${v3Refs}`);
+      } else {
+        console.info(
+          `[build-chart-organ] rep ${rep} FAIL (${ms}ms) exportDefault=${hasExportDefault} render=${hasRender} fnOk=${fnOk} v3Refs=${v3Refs}/${2} fnErr=${fnErr}`
+        );
+        console.info(`  code snippet:\n${code.slice(0, 400)}`);
+      }
+
+      expect(hasExportDefault, `rep ${rep}: missing 'export default'`).toBe(true);
+      expect(hasRender, `rep ${rep}: missing 'render'`).toBe(true);
+      expect(fnOk, `rep ${rep}: new Function threw: ${fnErr}`).toBe(true);
+      expect(hasEnoughV3, `rep ${rep}: model did not use >= 2 v3 instruments (barChart/lineChart/gauge/heatmap/spark), refs=${v3Refs}`).toBe(true);
+    }
+    console.info(`[build-chart-organ] ${passed}/${REPS} passed`);
+  });
+
   it("edit-organ: 3 reps — notes seed organ.js heading change", async () => {
     const m = model ?? (await pickBuilder());
 

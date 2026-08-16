@@ -53,22 +53,37 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
        //   loom.ui.section(title)                   -> titled group divider: mono uppercase label + hairline; use to separate logical sections
        //   loom.ui.dot(tone?)                       -> 8px glowing status dot (tones: accent/go/warn/danger/muted)
        //   loom.ui.toolbar(...children)             -> right-aligned action row, gap 6; use for card header action buttons
+       //   --- v3 instruments ---
+       //   loom.ui.tabs(labels, opts?)             -> { root, panels, onChange } pill tab row + panel switcher
+       //   loom.ui.barChart(data, opts?)           -> SVG bar chart (data: [{label, value}], accent fill)
+       //   loom.ui.lineChart(series, opts?)        -> SVG line chart with gradient area fill
+       //   loom.ui.gauge(value, max, opts?)        -> SVG arc gauge with centered stat (strokeDasharray)
+       //   loom.ui.heatmap(values, opts?)          -> 7xN alpha-scaled cell grid (habit/streak patterns)
+       //   loom.ui.dataGrid(columns, rows)         -> div-based grid with sticky header, hover rows
+       //   loom.ui.toggle(label, checked, onChange) -> styled track+thumb switch
+       //   loom.ui.select(options, opts?)          -> styled native select (options: [{value,label}] or strings)
+       //   loom.ui.spinner(size?)                  -> CSS-animated loading ring
+       //   loom.ui.icon(name)                      -> inline SVG icon (check/x/plus/arrow/gear/clock/star/warn/info/copy/trash/refresh)
 
-       // DESIGN LANGUAGE v2:
+       // DESIGN LANGUAGE v3:
        //   Compose loom.ui primitives — never hand-roll styled divs.
        //   Ad-hoc style ONLY for layout spacing (margin/flex gap between sections).
        //   ONE HERO MOMENT PER ORGAN: every data organ earns exactly one focal highlight —
        //     ui.hero (for a key metric), ui.progress (for a goal/quota), or ui.stat (for a compact number).
        //     Never stack two hero moments; choose the single number that matters most.
-       //   TRENDS: when showing a time-series or recent history, ui.spark gives instant visual context.
-       //     Place it beside or below the hero value: ui.row(heroEl, sparkEl).
+       //   TRENDS: numbers over time -> ui.lineChart or ui.spark. Categories/comparisons -> ui.barChart.
+       //   GOALS: progress toward a target -> ui.gauge (arc) or ui.progress (bar).
+       //   HABITS/STREAKS: daily activity patterns over weeks -> ui.heatmap (7-row alpha-scaled grid).
+       //   TABULAR DATA: structured rows/columns -> ui.dataGrid (sticky header, hover rows).
+       //   MULTI-PAGE ORGANS: divide into logical views -> ui.tabs (pill row + panel switcher).
+       //   ACTIONS: use ui.icon(name) on buttons to convey meaning, not decoration. Keep icons purposeful.
        //   SECTIONS: use ui.section(title) to separate logical groups (e.g. "Voice", "Appearance").
-       //     Each section divider contains children appended after it inside a stack/card body.
        //   STATUSES: use ui.dot(tone) inline beside a label to signal live state at a glance.
        //   TOOLBARS: use ui.toolbar(...btns) for card-header action areas — keeps buttons right-aligned.
        //   KEYVAL: use ui.keyval(pairs) for metadata or detail panels — never hand-code label/value rows.
        //   Generous whitespace; small text uses t2/t3; hierarchy = heading -> content -> actions.
        //   Empty states use loom.ui.empty(). Lists use loom.ui.list() + loom.ui.listRow().
+       //   ONE HERO rule still applies: pick one focal number; surround with context via charts/gauges.
      }
    }
    No external imports, no network, no document.cookie, no window.top.
@@ -139,7 +154,7 @@ export function organSystemPrompt(
 
   switch (kind) {
     case "manifest": return baseWithExp + `\nNow output manifest.json only. Choose a short kebab-case id and the MINIMAL permissions the request needs.`;
-    case "code": return baseWithExp + `\nNow output organ.js only. It must match the manifest's id and only use APIs its permissions allow.\nBuild the UI ONLY from loom.ui factories (plus plain layout containers for top-level spacing). Never hand-roll styled divs — use loom.ui.card, loom.ui.heading, loom.ui.button, loom.ui.input, loom.ui.list, loom.ui.listRow, loom.ui.stat, loom.ui.badge, loom.ui.empty, loom.ui.hero, loom.ui.spark, loom.ui.keyval, loom.ui.section, loom.ui.dot, loom.ui.toolbar, etc.\nFor data/metrics organs: open with ui.hero(value, label) as the ONE focal moment, then support detail with ui.keyval or ui.spark for trends.`;
+    case "code": return baseWithExp + `\nNow output organ.js only. It must match the manifest's id and only use APIs its permissions allow.\nBuild the UI ONLY from loom.ui factories (plus plain layout containers for top-level spacing). Never hand-roll styled divs — use loom.ui.card, loom.ui.heading, loom.ui.button, loom.ui.input, loom.ui.list, loom.ui.listRow, loom.ui.stat, loom.ui.badge, loom.ui.empty, loom.ui.hero, loom.ui.spark, loom.ui.keyval, loom.ui.section, loom.ui.dot, loom.ui.toolbar, and v3 instruments: loom.ui.tabs, loom.ui.barChart, loom.ui.lineChart, loom.ui.gauge, loom.ui.heatmap, loom.ui.dataGrid, loom.ui.toggle, loom.ui.select, loom.ui.spinner, loom.ui.icon.\nFor data/metrics organs: open with ui.hero(value, label) as the ONE focal moment, then support detail with ui.keyval or ui.spark for trends. For dashboards with charts: use ui.barChart or ui.lineChart for time-series, ui.gauge for goals, ui.heatmap for daily habits.`;
     case "tests": return baseWithExp + `\nNow output test.js only: 2-4 meaningful tests that verify the organ's real behavior (not trivial truths).\nABSOLUTE RULES:\n- No import statements anywhere in test.js — use the organ provided in the test context ({ el, loom, assert, organ }). The organ is already rendered into el before each test runs.\n- Each test starts with FRESH empty storage — never assume another test's data exists.\n- Select interactive elements ONLY via [data-action="..."] attributes (they are guaranteed by the organ contract); never by tag order or text.\n- Prefer asserting on loom.storage state over DOM text.\nCANONICAL INTERACTION PATTERNS (follow these exactly — they match the organ's mutation semantics):\n- MULTI-ADD: The input clears after each successful add. To add N items: set input.value = "first", click add, then set input.value = "second", click add again — set the value BEFORE each click, not once at the start.\n- STALE ELEMENTS: Re-query remove buttons and list rows after EVERY mutation. Never hold a NodeList or element reference across a click — use el.querySelectorAll('[data-action="remove"]')[i] freshly each time.\n- COUNT ASSERTIONS: Prefer loom.storage assertions for counts (e.g. loom.storage.get("items", []).length) over counting DOM nodes.`;
     case "repair": return baseWithExp + `\nYour previous file FAILED validation. You will be given the file and the exact errors. Output the COMPLETE corrected file in one fenced code block — fix the errors, keep the intended behavior, and follow every contract rule (especially: test.js must contain no import statements).`;
     case "edit": return baseWithExp + `\nYou are EDITING one existing file. Output ONLY SEARCH/REPLACE edit blocks in this exact format (no prose, no full file):\n<<<<<<< SEARCH\n(lines copied exactly from the current file)\n=======\n(replacement lines)\n>>>>>>> REPLACE`;
