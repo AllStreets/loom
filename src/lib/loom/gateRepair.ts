@@ -11,7 +11,7 @@ export type GateRepairDeps = {
 
 export type GateRepairResult =
   | { ok: true; code: string; tests: string; repairRounds: number }
-  | { ok: false; stage: string; errors: string };
+  | { ok: false; stage: string; errors: string; repairRounds: number };
 
 // Error-aware target routing: match error patterns before falling back to fixed sequence.
 // Quick-win 2: priorAttempts memory
@@ -91,20 +91,30 @@ export async function runGateWithRepair(
     ], { numCtx: ctxFor(repairSystem.length + repairUser.length), temperature: 0.0 });
     const repaired = extractCode(repairRaw);
 
-    // Record a compact summary of this attempt for future rounds
-    const errorFirstLine = errors.split(/[;\n]/)[0]?.trim() ?? errors;
-    priorAttempts.push(`Round ${round}: fixed ${target} for error "${errorFirstLine}"`);
-
     if (target === "test.js") tests = repaired; else code = repaired;
     emit("repair", `${target} rewritten — revalidating...`);
     gateResult = await gate({ manifest, code, tests }, organId);
+
+    // Record compact before/after for priorAttempts memory
+    const beforeLines = errors.split(/[;\n]/).map((l) => l.trim()).filter(Boolean).slice(0, 2);
+    const afterErrors = !gateResult.ok
+      ? (gateResult.verdict?.errors?.join("; ") ?? gateResult.error ?? "gate failed")
+      : null;
+    const afterLines = afterErrors
+      ? afterErrors.split(/[;\n]/).map((l) => l.trim()).filter(Boolean).slice(0, 2)
+      : ["resolved"];
+    priorAttempts.push(
+      `Round ${round}: fixed ${target}\n` +
+      `  before: ${beforeLines.join(" | ")}\n` +
+      `  after:  ${afterLines.join(" | ")}`
+    );
   }
 
   if (!gateResult.ok) {
     const stage = gateResult.verdict?.stage ?? "gate";
     const errors = gateResult.verdict?.errors?.join("; ") ?? gateResult.error ?? "gate failed";
     emit("gate", `failed after ${round} repair round${round === 1 ? "" : "s"} at ${stage}: ${errors}`);
-    return { ok: false, stage, errors };
+    return { ok: false, stage, errors, repairRounds: round };
   }
 
   emit("gate", "passed");

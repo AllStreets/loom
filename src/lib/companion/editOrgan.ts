@@ -112,7 +112,7 @@ export async function editOrgan(
     if (!gateResult.ok) {
       recordExperience({
         ts: Date.now(), kind: "edit", request, organId, ok: false,
-        stage: gateResult.stage, repairRounds: 0,
+        stage: gateResult.stage, repairRounds: gateResult.repairRounds,
         code: newCode, tests,
         errors: [gateResult.errors],
       });

@@ -1,5 +1,17 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildOrgan } from "./build";
+import * as experienceModule from "./experience";
+
+// Minimal localStorage mock so experience.ts can operate
+const _lsStore: Record<string, string> = {};
+const _lsMock = {
+  getItem: (k: string) => _lsStore[k] ?? null,
+  setItem: (k: string, v: string) => { _lsStore[k] = v; },
+  removeItem: (k: string) => { delete _lsStore[k]; },
+  clear: () => { for (const k of Object.keys(_lsStore)) delete _lsStore[k]; },
+};
+vi.stubGlobal("localStorage", _lsMock);
+vi.stubGlobal("window", { __loomExportCorpus: undefined });
 
 const MANIFEST = JSON.stringify({ id: "runs", name: "Runs", description: "d", version: 1, permissions: ["storage"] });
 const RENDERED_HTML = `<div data-action="new-item"><input data-action="new-item"></div><button data-action="add">Add</button><ul></ul>`;
@@ -211,5 +223,105 @@ describe("buildOrgan", () => {
     expect(second.ok).toBe(false);
     expect(second.error).toMatch(/already running/i);
     await first;
+  });
+
+  // ── Experience recording tests ──────────────────────────────────────────────
+
+  describe("experience recording", () => {
+    beforeEach(() => { _lsMock.clear(); });
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it("recordExperience is called on build success", async () => {
+      const spy = vi.spyOn(experienceModule, "recordExperience");
+      const deps = mkDeps();
+      const r = await buildOrgan("track my runs", deps);
+      expect(r.ok).toBe(true);
+      expect(spy).toHaveBeenCalledOnce();
+      const [record] = spy.mock.calls[0];
+      expect(record.ok).toBe(true);
+      expect(record.organId).toBe("runs");
+    });
+
+    it("recordExperience is called on gate failure", async () => {
+      const spy = vi.spyOn(experienceModule, "recordExperience");
+      const failGate = vi.fn().mockResolvedValue({
+        ok: false,
+        verdict: { ok: false, stage: "tests", errors: ["boom"], testResults: [], renderedHtml: RENDERED_HTML },
+      });
+      const deps = mkDeps({ gate: failGate });
+      deps.chat
+        .mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='r1'; } }\n```")
+        .mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='r2'; } }\n```")
+        .mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='r3'; } }\n```");
+      const r = await buildOrgan("track my runs", deps);
+      expect(r.ok).toBe(false);
+      expect(spy).toHaveBeenCalledOnce();
+      const [record] = spy.mock.calls[0];
+      expect(record.ok).toBe(false);
+      expect(record.repairRounds).toBe(3);
+    });
+
+    it("recordExperience is called on probe (render) failure", async () => {
+      const spy = vi.spyOn(experienceModule, "recordExperience");
+      const renderProbe = vi.fn()
+        .mockResolvedValueOnce({ ok: false, error: "render crashed" })
+        .mockResolvedValueOnce({ ok: false, error: "still broken" });
+      const deps = mkDeps({ renderProbe });
+      deps.chat.mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='fix'; } }\n```");
+      const r = await buildOrgan("track my runs", deps);
+      expect(r.ok).toBe(false);
+      expect(r.stage).toBe("render");
+      expect(spy).toHaveBeenCalledOnce();
+      const [record] = spy.mock.calls[0];
+      expect(record.ok).toBe(false);
+      expect(record.stage).toBe("render");
+    });
+
+    it("retrieveExemplars is called before code gen and exemplar block appears in code-phase system prompt", async () => {
+      // Seed one successful build record so retrieveExemplars returns something
+      experienceModule.recordExperience({
+        ts: Date.now(), kind: "build", request: "track my runs", organId: "runs", ok: true,
+        repairRounds: 0,
+        manifest: MANIFEST,
+        code: 'export default { id: "runs", render(el){ el.textContent = "hi"; } }',
+      });
+      const retrieveSpy = vi.spyOn(experienceModule, "retrieveExemplars");
+      const deps = mkDeps();
+      await buildOrgan("track my runs", deps);
+      // retrieveExemplars must be called before code generation
+      expect(retrieveSpy).toHaveBeenCalled();
+      // The 2nd chat call is code generation (index 1); its system message must contain the EXPERIENCE block
+      const codeCall = deps.chat.mock.calls[1];
+      const codeSystemMsg = codeCall[1][0].content as string;
+      expect(codeSystemMsg).toContain("EXPERIENCE — PAST SUCCESSFUL BUILDS");
+    });
+
+    it("QW-1: invalid manifest → one repair chat → valid → build continues", async () => {
+      const INVALID_MANIFEST = "not json";
+      const deps = mkDeps({
+        chat: vi.fn()
+          .mockResolvedValueOnce("```json\n" + INVALID_MANIFEST + "\n```")   // first attempt — bad
+          .mockResolvedValueOnce("```json\n" + MANIFEST + "\n```")            // repair — good
+          .mockResolvedValueOnce("```js\nexport default { id: 'runs', render(el){ el.textContent='hi'; } }\n```")
+          .mockResolvedValueOnce("```js\nexport const tests = [];\n```"),
+      });
+      const r = await buildOrgan("track my runs", deps);
+      expect(r.ok).toBe(true);
+      expect(r.organId).toBe("runs");
+      // Repair call must be temperature 0.0
+      const repairCall = deps.chat.mock.calls[1];
+      expect(repairCall[2]).toMatchObject({ temperature: 0.0 });
+    });
+
+    it("QW-1: invalid manifest → repair → still invalid → hard fail", async () => {
+      const deps = mkDeps({
+        chat: vi.fn()
+          .mockResolvedValueOnce("```json\nnot json\n```")   // bad
+          .mockResolvedValueOnce("```json\nstill bad\n```"), // repair — still bad
+      });
+      const r = await buildOrgan("track my runs", deps);
+      expect(r.ok).toBe(false);
+      expect(deps.write).not.toHaveBeenCalled();
+    });
   });
 });

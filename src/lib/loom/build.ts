@@ -61,7 +61,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
       const repairRaw = await deps.chat("builder", [
         { role: "system", content: repairSystem },
         { role: "user", content: repairUser },
-      ], { numCtx: ctxFor(repairSystem.length + repairUser.length), temperature: 0.2 });
+      ], { numCtx: ctxFor(repairSystem.length + repairUser.length), temperature: 0.0 });
       const repairedManifestCode = extractCode(repairRaw);
       manifestResult = manifestGuard(repairedManifestCode);
       if (!manifestResult.ok) {
@@ -78,8 +78,8 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
 
     // Phase 2: organ.js — retrieve exemplars and lessons before code gen
     emit("code", "generating organ.js...");
-    const exemplars = retrieveExemplars(request, 3);
-    const lessons = retrieveLessons(request, 3);
+    const exemplars = retrieveExemplars(request, 2);
+    const lessons = retrieveLessons(request, 2);
     const codeSystem = organSystemPrompt("code", { exemplars, lessons });
     const codeUser = `Request: ${request}\n\nManifest:\n${finalManifestCode}`;
     const codeMessages: Msg[] = [
@@ -108,7 +108,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
       const repairRaw = await deps.chat("builder", [
         { role: "system", content: repairSystem },
         { role: "user", content: repairUser },
-      ], { numCtx: ctxFor(repairSystem.length + repairUser.length), temperature: 0.2 });
+      ], { numCtx: ctxFor(repairSystem.length + repairUser.length), temperature: 0.0 });
       codeContent = extractCode(repairRaw);
       probeResult = await probe({ manifest: finalManifestCode, code: codeContent, tests: "export const tests = [];" }, organId);
       if (!probeResult.ok) {
@@ -168,7 +168,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
       const reaskRaw = await deps.chat("builder", [
         { role: "system", content: testsSystem },
         { role: "user", content: reaskUser },
-      ], { numCtx: ctxFor(testsSystem.length + reaskUser.length), temperature: 0.2 });
+      ], { numCtx: ctxFor(testsSystem.length + reaskUser.length), temperature: 0.0 });
       testsContent = extractCode(reaskRaw);
       emit("tests", "selector re-ask done");
     }
@@ -182,7 +182,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     if (!gateResult.ok) {
       recordExperience({
         ts: Date.now(), kind: "build", request, organId, ok: false,
-        stage: gateResult.stage, repairRounds: 0,
+        stage: gateResult.stage, repairRounds: gateResult.repairRounds,
         manifest: finalManifestCode, code: codeContent, tests: testsContent,
         errors: [gateResult.errors],
       });

@@ -17,6 +17,10 @@ export type BuildRecord = {
 
 const STORE_KEY = "loom.exp.v1";
 const MAX_RECORDS = 200;
+/** Max bytes for a single record's manifest+code+tests combined. */
+const MAX_RECORD_PAYLOAD_BYTES = 16 * 1024; // 16 KB
+/** Max bytes for the full serialized store. */
+const MAX_STORE_BYTES = 1.5 * 1024 * 1024; // 1.5 MB
 
 function loadRecords(): BuildRecord[] {
   try {
@@ -28,9 +32,29 @@ function loadRecords(): BuildRecord[] {
   }
 }
 
+/** Trim a single record's payload if manifest+code+tests exceeds MAX_RECORD_PAYLOAD_BYTES. */
+function trimRecord(r: BuildRecord): BuildRecord {
+  const size = (r.manifest?.length ?? 0) + (r.code?.length ?? 0) + (r.tests?.length ?? 0);
+  if (size <= MAX_RECORD_PAYLOAD_BYTES) return r;
+  // Drop tests first
+  const withoutTests = { ...r, tests: undefined };
+  const size2 = (withoutTests.manifest?.length ?? 0) + (withoutTests.code?.length ?? 0);
+  if (size2 <= MAX_RECORD_PAYLOAD_BYTES) return withoutTests;
+  // Drop code too, keep manifest + metadata
+  return { ...withoutTests, code: undefined };
+}
+
 function saveRecords(records: BuildRecord[]): void {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(records));
+    // Trim oversized individual records
+    let trimmed = records.map(trimRecord);
+    // Evict oldest until serialized size is under MAX_STORE_BYTES
+    while (trimmed.length > 0) {
+      const serialized = JSON.stringify(trimmed);
+      if (serialized.length <= MAX_STORE_BYTES) break;
+      trimmed = trimmed.slice(1); // drop oldest
+    }
+    localStorage.setItem(STORE_KEY, JSON.stringify(trimmed));
   } catch {
     // swallow storage errors
   }

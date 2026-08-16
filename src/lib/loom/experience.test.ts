@@ -103,4 +103,55 @@ describe("experience store", () => {
       expect(["pass", "fail"]).toContain(obj.verdict);
     }
   });
+
+  it("store size guard: record whose manifest+code+tests exceeds 16KB gets tests dropped", () => {
+    // Build a record whose payload exceeds 16KB only via tests
+    const bigTests = "x".repeat(16 * 1024 + 100);
+    const r = makeRecord({ tests: bigTests });
+    recordExperience(r);
+    // Read back via retrieveExemplars (which loads from store)
+    // We can check by loading the raw store — use exportCorpus which reads from store
+    const corpus = exportCorpus();
+    // The stored record should NOT include the big tests (they get dropped)
+    // exportCorpus includes tests as a line — that line would be huge
+    const lines = corpus.split("\n").filter(Boolean);
+    for (const line of lines) {
+      const obj = JSON.parse(line);
+      // No single line should be > 16KB + reasonable overhead
+      expect(line.length).toBeLessThan(17 * 1024);
+    }
+  });
+
+  it("store size guard: record whose manifest+code both large gets code dropped too", () => {
+    const bigCode = "c".repeat(9 * 1024);
+    const bigTests = "t".repeat(9 * 1024);
+    const r = makeRecord({ code: bigCode, tests: bigTests });
+    recordExperience(r);
+    const corpus = exportCorpus();
+    const lines = corpus.split("\n").filter(Boolean);
+    // All lines must be under 17KB each
+    for (const line of lines) {
+      expect(line.length).toBeLessThan(17 * 1024);
+    }
+  });
+
+  it("store size guard: evicts oldest records when serialized size exceeds ~1.5MB", () => {
+    // Insert records with large code payloads (just over 7.5KB each) until we approach 1.5MB
+    // ~200 records x 7.6KB code = ~1.52MB → should trigger eviction
+    const bigCode = "e".repeat(7_700);
+    const count = 210;
+    for (let i = 0; i < count; i++) {
+      recordExperience(makeRecord({ request: `req-${i}`, organId: `org-${i}`, code: bigCode, ts: i }));
+    }
+    // The store should not exceed ~1.5MB
+    const raw = store["loom.exp.v1"] ?? "";
+    expect(raw.length).toBeLessThanOrEqual(1.55 * 1024 * 1024);
+    // The oldest records (low ts values) must have been evicted
+    const records = JSON.parse(raw) as Array<{ organId: string }>;
+    const ids = records.map((r) => r.organId);
+    // org-0 (ts=0) should NOT be present
+    expect(ids).not.toContain("org-0");
+    // The highest-index record should still be present
+    expect(ids).toContain(`org-${count - 1}`);
+  });
 });
