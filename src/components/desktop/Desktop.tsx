@@ -253,7 +253,7 @@ export default function Desktop() {
           <motion.div
             initial={rm ? false : { opacity: 0, scale: 0.96, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={rm ? false : { opacity: 0, scale: 0.96, y: 12 }}
+            exit={rm ? undefined : { opacity: 0, scale: 0.96, y: 12 }}
             transition={rm ? {} : { type: "spring", stiffness: 400, damping: 30 }}
             style={{
               background: "var(--glass)",
