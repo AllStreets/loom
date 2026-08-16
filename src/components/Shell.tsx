@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Orb } from "./orb/Orb";
+import FleetHUD from "./FleetHUD";
 import Companion from "./Companion";
 import Desktop from "./desktop/Desktop";
 import Field from "./ambient/Field";
@@ -261,8 +262,10 @@ export default function Shell() {
 
   // ----- ambient glow color -----
   const moodColor = MOOD_TARGETS[mood].color;
-  // 0x12 ≈ 7% alpha — the room shifts with the orb's mood, subtly
-  const ambientBg = `radial-gradient(900px at 50% 220px, ${moodColor}12, transparent 70%)`;
+  // 0x1e ≈ 12% alpha (idle), 0x2a ≈ 16% alpha (active) — the room shifts with the orb's mood
+  const isActiveMood = ACTIVE_MOODS.has(mood);
+  const glowAlpha = isActiveMood ? "2a" : "1e";
+  const ambientBg = `radial-gradient(900px at 50% 220px, ${moodColor}${glowAlpha}, transparent 70%)`;
 
   // ----- panel animation props -----
   const motionProps = reducedMotion
@@ -303,6 +306,15 @@ export default function Shell() {
         transition: `opacity ${ignitionDuration} ease`,
       } as React.CSSProperties}
     >
+      {/* Shell micro-interaction styles */}
+      <style>{`
+        details[open] .loom-timeline-chevron { transform: rotate(90deg); }
+        @keyframes loom-row-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        @media (prefers-reduced-motion: reduce) {
+          .loom-timeline-chevron { transition: none !important; }
+        }
+      `}</style>
+
       {/* Ambient particle field — behind everything, zIndex:1 */}
       <Field />
 
@@ -329,7 +341,7 @@ export default function Shell() {
             position: "fixed",
             inset: 0,
             background:
-              "radial-gradient(600px at var(--mx, 50%) var(--my, 30%), rgba(34,211,238,.05), transparent)",
+              "radial-gradient(600px at var(--mx, 50%) var(--my, 30%), rgba(34,211,238,.08), transparent)",
             pointerEvents: "none",
             zIndex: 1,
           }}
@@ -351,34 +363,18 @@ export default function Shell() {
           padding: "20px 24px 16px",
           position: "relative",
           zIndex: 10,
+          borderBottom: reducedMotion ? undefined : `1px solid ${moodColor}20`,
+          transition: reducedMotion ? undefined : "border-color 1.2s ease",
           ...staggerStyle,
         }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <b style={{ letterSpacing: ".4em", fontSize: 20, color: "var(--t1)" }}>LOOM</b>
+          <b style={{ letterSpacing: ".4em", fontSize: 20, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
           <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)" }}>sovereign console</small>
         </div>
 
-        {/* Fleet role dots */}
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {roles.map((r) => (
-            <div key={r.role} style={{ display: "flex", gap: 5, alignItems: "center" }}>
-              <span
-                title={`${r.role}: ${r.model || "absent"}`}
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  background: r.present ? "var(--go)" : "var(--danger)",
-                  flexShrink: 0,
-                }}
-              />
-              <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--t3)" }}>
-                {r.role}
-              </span>
-            </div>
-          ))}
-        </div>
+        {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
+        <FleetHUD roles={roles} />
       </header>
 
       {/* ── Zone B: Orb band (fixed height, always visible, never scrolls) ── */}
@@ -392,6 +388,10 @@ export default function Shell() {
           padding: "0 24px 8px",
           position: "relative",
           zIndex: 10,
+          // Composites the orb canvas's black clear as pure light over the page
+          // backdrop (see OrbGL.tsx) — must live at band level: orb-hero's transform
+          // and this band's z-index isolate any deeper blend from the backdrop.
+          mixBlendMode: "screen",
         }}
       >
         {/* Orb hero */}
@@ -524,7 +524,7 @@ export default function Shell() {
                 gap: 6,
               }}
             >
-              <span style={{ fontSize: 10, opacity: 0.6 }}>+</span>
+              <span className="loom-timeline-chevron" aria-hidden style={{ fontSize: 10, opacity: 0.6, display: "inline-block", transition: "transform 0.2s ease" }}>›</span>
               Timeline
             </summary>
             <div style={{ marginTop: 10 }}>
@@ -532,11 +532,34 @@ export default function Shell() {
                 <div style={{ color: "var(--t3)", fontSize: 13 }}>No commits yet.</div>
               )}
               {commits.map((c) => (
-                <div key={c.sha} style={{ fontSize: 13, padding: "3px 0" }}>
-                  <span style={{ fontFamily: "var(--f-mono)", color: "var(--t3)" }}>
+                <div
+                  key={c.sha}
+                  style={{
+                    fontSize: 13,
+                    padding: "3px 0",
+                    display: "flex",
+                    gap: 6,
+                    minWidth: 0,
+                    animation: reducedMotion ? undefined : "loom-row-fade 0.25s ease both",
+                  }}
+                >
+                  <span
+                    style={{ fontFamily: "var(--f-mono)", color: "var(--t3)", flexShrink: 0 }}
+                  >
                     {c.sha.slice(0, 7)}
-                  </span>{" "}
-                  <span style={{ color: "var(--t1)" }}>{c.message}</span>
+                  </span>
+                  <span
+                    title={c.message}
+                    style={{
+                      color: "var(--t1)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      minWidth: 0,
+                    }}
+                  >
+                    {c.message}
+                  </span>
                 </div>
               ))}
             </div>

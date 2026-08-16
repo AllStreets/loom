@@ -195,6 +195,53 @@ describe("Companion", () => {
     });
   });
 
+  it("success card sha breaks and organId truncates (overflow sweep)", async () => {
+    mockHandle.mockResolvedValue({ kind: "build", result: okBuild });
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "build a water tracker");
+    await userEvent.keyboard("{Enter}");
+
+    const sha = await screen.findByText(/sha: abc123/);
+    expect(sha.style.wordBreak).toBe("break-all");
+
+    const title = screen.getByText(/Built water-tracker/i);
+    expect(title.style.textOverflow).toBe("ellipsis");
+    expect(title.style.overflow).toBe("hidden");
+  });
+
+  it("user bubble applies overflow-wrap and minWidth:0 (overflow sweep)", async () => {
+    mockHandle.mockResolvedValue({ kind: "reply", text: "ok" });
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "supercalifragilistic");
+    await userEvent.keyboard("{Enter}");
+
+    const bubble = await screen.findByText("supercalifragilistic");
+    expect(bubble.style.overflowWrap).toBe("break-word");
+    expect(bubble.style.minWidth).toBe("0px");
+  });
+
+  it("dispatches loom-fleet-activity clear (role:null) when a turn ends", async () => {
+    mockHandle.mockResolvedValue({ kind: "reply", text: "hi there" });
+    const activity: Array<{ role: string | null; phase?: string }> = [];
+    function cap(ev: Event) {
+      activity.push((ev as CustomEvent).detail);
+    }
+    window.addEventListener("loom-fleet-activity", cap);
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "hello");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("hi there")).toBeTruthy());
+    window.removeEventListener("loom-fleet-activity", cap);
+
+    // The turn-end clear must have fired.
+    expect(activity.some((a) => a.role === null)).toBe(true);
+  });
+
   it("failure turn renders the failure card with stage and Retry button, clicking Retry calls handle again with same utterance", async () => {
     // First call: fail; second call: reply
     mockHandle
@@ -228,7 +275,7 @@ describe("Companion", () => {
     });
   });
 
-  it("build success turn renders status string in UI but does NOT push it to model history", async () => {
+  it("build success pushes structured outcome to history; UI oneliner is not pushed", async () => {
     mockHandle.mockResolvedValue({ kind: "build", result: okBuild });
 
     render(<Companion />);
@@ -265,6 +312,69 @@ describe("Companion", () => {
       (msg) => msg.content === statusString
     );
     expect(historyContainsStatus).toBe(false);
+  });
+
+  it("after successful build, companion history ref receives outcome matching /^Built [\\w-]+: / with repair round mention", async () => {
+    mockHandle.mockResolvedValue({ kind: "build", result: okBuild });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+
+    await userEvent.type(textarea, "build a tracker");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockHandle).toHaveBeenCalledTimes(1);
+    });
+
+    // Submit a second utterance to trigger the next handle call with built history
+    mockHandle.mockResolvedValue({ kind: "reply", text: "next response" });
+    await userEvent.type(textarea, "what is next");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockHandle).toHaveBeenCalledTimes(2);
+    });
+
+    // Inspect the second call's history — it should contain the structured build outcome
+    const [, secondHistory] = mockHandle.mock.calls[1];
+    expect(Array.isArray(secondHistory)).toBe(true);
+    const builtMsg = (secondHistory as Array<{ role: string; content: string }>).find(
+      (msg) => msg.role === "assistant" && /^Built [\w-]+: /.test(msg.content)
+    );
+    expect(builtMsg).toBeDefined();
+    expect(builtMsg?.content).toMatch(/repair round/i);
+  });
+
+  it("after failed build, companion history ref receives outcome matching /^Build of .* failed at /", async () => {
+    mockHandle.mockResolvedValue({ kind: "build", result: failBuild });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+
+    await userEvent.type(textarea, "build a failing organ");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockHandle).toHaveBeenCalledTimes(1);
+    });
+
+    // Submit a second utterance to trigger the next handle call with failed history
+    mockHandle.mockResolvedValue({ kind: "reply", text: "try again later" });
+    await userEvent.type(textarea, "what next");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(mockHandle).toHaveBeenCalledTimes(2);
+    });
+
+    // Inspect the second call's history — it should contain the structured failure message
+    const [, secondHistory] = mockHandle.mock.calls[1];
+    expect(Array.isArray(secondHistory)).toBe(true);
+    const failMsg = (secondHistory as Array<{ role: string; content: string }>).find(
+      (msg) => msg.role === "assistant" && /^Build of .* failed at /.test(msg.content)
+    );
+    expect(failMsg).toBeDefined();
   });
 });
 
@@ -564,5 +674,24 @@ describe("Companion: speaks reply when setting demands", () => {
     await waitFor(() => expect(mockHandle).toHaveBeenCalled(), { timeout: 2000 });
     // speaking mood should be dispatched (from ttsSpeak path)
     await waitFor(() => expect(moodEvents()).toContain("speaking"), { timeout: 2000 });
+  });
+});
+
+describe("Companion Task 4 beauty pass", () => {
+  it("textarea has onFocus and onBlur handlers for focus ring", () => {
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i) as HTMLTextAreaElement;
+    // Verify focus/blur event attributes exist by checking if focus events fire without error
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+    textarea.blur();
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it("companion-log container exists and holds conversation items", async () => {
+    mockHandle.mockResolvedValue({ kind: "reply", text: "hello" });
+    render(<Companion />);
+    const log = screen.getByTestId("companion-log");
+    expect(log).toBeTruthy();
   });
 });

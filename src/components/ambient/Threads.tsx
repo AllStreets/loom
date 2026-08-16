@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { subscribe } from "../../lib/ambient/ambientLoop";
 import { windowRegistry } from "../../lib/ambient/windowRegistry";
+import { MOOD_TARGETS, hexToRgb } from "../../lib/orb/state";
 
 export interface ThreadPathOut {
   cp1x: number;
@@ -52,9 +53,12 @@ export function threadPath(
   out.cp2y = midY * 0.5 + toY * 0.5 + ny * amp2;
 }
 
-const THREAD_ALPHA_IDLE = 0.12;
-const THREAD_ALPHA_FOCUS = 0.40;
+export const THREAD_ALPHA_IDLE = 0.12;
+export const THREAD_ALPHA_FOCUS = 0.40;
+export const THREAD_FOCUSED_WIDTH = 2.5;
+export const THREAD_SHADOW_BLUR = 14;
 const FOCUS_FADE_SPEED = 3.0; // alpha decay rate per second toward idle
+let _threadRgb = "34,211,238";
 
 interface ThreadState {
   id: string;
@@ -79,6 +83,19 @@ export default function Threads() {
     function onChange(e: MediaQueryListEvent) { setReducedMotion(e.matches); }
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    function onMood(ev: Event) {
+      const detail = (ev as CustomEvent<{ mood: string }>).detail;
+      if (!detail?.mood) return;
+      const target = MOOD_TARGETS[detail.mood as keyof typeof MOOD_TARGETS];
+      if (!target) return;
+      const [r, g, b] = hexToRgb(target.color);
+      _threadRgb = `${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)}`;
+    }
+    window.addEventListener("loom-mood", onMood);
+    return () => window.removeEventListener("loom-mood", onMood);
   }, []);
 
   useEffect(() => {
@@ -160,7 +177,7 @@ export default function Threads() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         if (!getOrbAnchor()) return;
         const wins = windowRegistry.getAll();
-        ctx.strokeStyle = `rgba(34,211,238,${THREAD_ALPHA_IDLE})`;
+        ctx.strokeStyle = `rgba(${_threadRgb},${THREAD_ALPHA_IDLE})`;
         ctx.lineWidth = 1 * dpr;
         for (const rect of wins.values()) {
           getWindowTitleBarAnchor(rect);
@@ -216,11 +233,13 @@ export default function Threads() {
         threadPath(orbAnchor.x, orbAnchor.y, winAnchor.x, winAnchor.y, t, cpOut);
 
         // Draw luminous thread with glow
+        const idleAlpha = 0.10 + 0.08 * Math.sin(t * 0.5);
+        const alpha = state.alpha > THREAD_ALPHA_IDLE ? state.alpha : idleAlpha;
         ctx.save();
-        ctx.lineWidth = 1.5 * dpr;
-        ctx.strokeStyle = `rgba(34,211,238,${state.alpha})`;
-        ctx.shadowColor = "rgba(34,211,238,0.6)";
-        ctx.shadowBlur = 8 * dpr;
+        ctx.lineWidth = (state.alpha > THREAD_ALPHA_IDLE ? 2.5 : 1.5) * dpr;
+        ctx.strokeStyle = `rgba(${_threadRgb},${alpha})`;
+        ctx.shadowColor = `rgba(${_threadRgb},0.6)`;
+        ctx.shadowBlur = 14 * dpr;
         ctx.beginPath();
         ctx.moveTo(orbAnchor.x, orbAnchor.y);
         ctx.bezierCurveTo(cpOut.cp1x, cpOut.cp1y, cpOut.cp2x, cpOut.cp2y, winAnchor.x, winAnchor.y);

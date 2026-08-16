@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { subscribe } from "../../lib/ambient/ambientLoop";
+import { MOOD_TARGETS, hexToRgb } from "../../lib/orb/state";
 
 const MAX_PARTICLES = 90;
 const REDUCED_PARTICLES = 45;
@@ -57,6 +58,8 @@ function createColorStrings(particles: Particle[]): string[] {
 
 export default function Field() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const aurora1Ref = useRef<HTMLDivElement | null>(null);
+  const aurora2Ref = useRef<HTMLDivElement | null>(null);
   const [reducedMotion, setReducedMotion] = useState<boolean>(() =>
     typeof window !== "undefined"
       ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -70,6 +73,26 @@ export default function Field() {
     function onChange(e: MediaQueryListEvent) { setReducedMotion(e.matches); }
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    function onMood(ev: Event) {
+      const detail = (ev as CustomEvent<{ mood: string }>).detail;
+      if (!detail?.mood) return;
+      const target = MOOD_TARGETS[detail.mood as keyof typeof MOOD_TARGETS];
+      if (!target) return;
+      const col = target.color;
+      const [r, g, b] = hexToRgb(col);
+      const ri = Math.round(r * 255);
+      const gi = Math.round(g * 255);
+      const bi = Math.round(b * 255);
+      const bg1 = `radial-gradient(ellipse 60% 40% at 30% 30%, rgba(${ri},${gi},${bi},0.12) 0%, transparent 70%)`;
+      const bg2 = `radial-gradient(ellipse 50% 35% at 70% 65%, rgba(${ri},${gi},${bi},0.08) 0%, transparent 65%)`;
+      if (aurora1Ref.current) aurora1Ref.current.style.background = bg1;
+      if (aurora2Ref.current) aurora2Ref.current.style.background = bg2;
+    }
+    window.addEventListener("loom-mood", onMood);
+    return () => window.removeEventListener("loom-mood", onMood);
   }, []);
 
   const count = reducedMotion ? REDUCED_PARTICLES : MAX_PARTICLES;
@@ -183,6 +206,7 @@ export default function Field() {
         }}
       >
         <div
+          ref={aurora1Ref}
           style={{
             position: "absolute",
             width: "120%",
@@ -190,11 +214,12 @@ export default function Field() {
             top: "-10%",
             left: "-10%",
             background:
-              "radial-gradient(ellipse 60% 40% at 30% 30%, rgba(34,211,238,0.07) 0%, transparent 70%)",
+              "radial-gradient(ellipse 60% 40% at 30% 30%, rgba(34,211,238,0.12) 0%, transparent 70%)",
             animation: reducedMotion ? "none" : "aurora-drift-a 180s linear infinite",
           }}
         />
         <div
+          ref={aurora2Ref}
           style={{
             position: "absolute",
             width: "120%",
@@ -202,7 +227,7 @@ export default function Field() {
             top: "-10%",
             left: "-10%",
             background:
-              "radial-gradient(ellipse 50% 35% at 70% 65%, rgba(34,211,238,0.05) 0%, transparent 65%)",
+              "radial-gradient(ellipse 50% 35% at 70% 65%, rgba(34,211,238,0.08) 0%, transparent 65%)",
             animation: reducedMotion ? "none" : "aurora-drift-b 240s linear infinite",
           }}
         />

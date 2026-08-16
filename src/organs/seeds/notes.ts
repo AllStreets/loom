@@ -22,6 +22,11 @@ const ORGAN_JS = `export default {
     heroRow.style.justifyContent = "space-between";
     heroRow.style.alignItems = "flex-end";
 
+    // weekly activity heatmap (7 weeks = 49 days)
+    var heatmapSection = ui.section("7-Week Activity");
+    var heatmapEl = ui.heatmap(new Array(49).fill(0), { cellSize: 10, gap: 2 });
+    heatmapEl.setAttribute("data-role", "activity-heatmap");
+
     var heading = ui.heading("Quick Capture", "Jot a thought, keep it forever.");
     var input = ui.input({ placeholder: "New note...", action: "new-note", onEnter: addNote });
     var addBtn = ui.button("Add", { variant: "primary", action: "add" });
@@ -31,6 +36,8 @@ const ORGAN_JS = `export default {
     var noteList = ui.list();
 
     body.appendChild(heroRow);
+    body.appendChild(heatmapSection);
+    body.appendChild(heatmapEl);
     body.appendChild(heading);
     body.appendChild(inputRow);
     body.appendChild(noteList.root);
@@ -41,6 +48,22 @@ const ORGAN_JS = `export default {
       var DAY = 86400000;
       var counts = [];
       for (var d = 6; d >= 0; d--) {
+        var dayStart = now - (d + 1) * DAY;
+        var dayEnd = now - d * DAY;
+        var count = 0;
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].t >= dayStart && items[i].t < dayEnd) count++;
+        }
+        counts.push(count);
+      }
+      return counts;
+    }
+
+    function last49DayCounts(items) {
+      var now = Date.now();
+      var DAY = 86400000;
+      var counts = [];
+      for (var d = 48; d >= 0; d--) {
         var dayStart = now - (d + 1) * DAY;
         var dayEnd = now - d * DAY;
         var count = 0;
@@ -75,6 +98,14 @@ const ORGAN_JS = `export default {
       }
       heroEl._valNode.textContent = String(items.length);
       sparkEl.update(last7DayCounts(items));
+      // update heatmap cells with 49-day activity counts
+      var dayCounts = last49DayCounts(items);
+      var maxCount = dayCounts.reduce(function(m, v) { return Math.max(m, v); }, 0) || 1;
+      var cells = heatmapEl.children;
+      for (var ci = 0; ci < cells.length && ci < dayCounts.length; ci++) {
+        var alpha = dayCounts[ci] > 0 ? (0.15 + 0.85 * (dayCounts[ci] / maxCount)).toFixed(2) : "0.06";
+        cells[ci].style.background = "rgba(34,211,238," + alpha + ")";
+      }
     }
 
     function addNote() {

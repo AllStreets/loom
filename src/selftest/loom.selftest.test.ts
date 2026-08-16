@@ -5,6 +5,8 @@ import { extractCode, applyEditBlocks } from "../lib/loom/edits";
 import { manifestGuard } from "../lib/loom/validate";
 import { classifyByRules, classifyIntent } from "../lib/compiler/intent";
 import { files as noteFiles } from "../organs/seeds/notes";
+import { recordExperience, retrieveExemplars } from "../lib/loom/experience";
+import type { BuildRecord } from "../lib/loom/experience";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -287,10 +289,13 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     const utterance = "hmm what about the thing from yesterday";
 
     // Wire askModel to the real rewriter via Ollama /api/chat directly
-    async function askModel(prompt: string): Promise<string> {
+    async function askModel(system: string, prompt: string): Promise<string> {
       const body = JSON.stringify({
         model: "qwen3:1.7b",
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ],
         stream: false,
         options: { temperature: 0.1, num_ctx: 2048 },
       });
@@ -529,6 +534,149 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
       expect(hasHeroPattern, `rep ${rep}: organ does not use a hero pattern (ui.hero / ui.progress / ui.stat)`).toBe(true);
     }
     console.info(`[build-dashboardy-organ] ${passed}/${REPS} passed`);
+  });
+
+  it("exemplars-injected: organSystemPrompt with exemplars injects EXPERIENCE block", () => {
+    const withExemplars = organSystemPrompt("code", {
+      exemplars: "PAST SUCCESSFUL BUILD (request: \"track my runs\", passed in 0 repair rounds):\nexport default { id: \"run-tracker\" }",
+      lessons: "A similar past build (\"track my runs\") failed at stage tests with: querySelector returned null. Avoid that failure mode.",
+    });
+    const withoutExemplars = organSystemPrompt("code");
+    expect(withExemplars).toContain("EXPERIENCE — PAST SUCCESSFUL BUILDS");
+    expect(withExemplars).toContain("LESSONS FROM PAST FAILURES");
+    expect(withExemplars).toContain("track my runs");
+    expect(withExemplars.length).toBeGreaterThan(withoutExemplars.length);
+    console.info(`[exemplars-injected] prompt with exemplars is ${withExemplars.length - withoutExemplars.length} chars longer`);
+  });
+
+  it("exemplars-store-growth: seeded record is retrievable; recordExperience grows the store", () => {
+    // Selftest runs in Node where localStorage does not exist — install a minimal
+    // in-memory shim for this test so the store assertions run for real instead of
+    // silently skipping. Removed in finally.
+    const mem = new Map<string, string>();
+    // @ts-expect-error minimal shim for the Node selftest environment
+    globalThis.localStorage = {
+      getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
+      setItem: (k: string, v: string) => { mem.set(k, String(v)); },
+      removeItem: (k: string) => { mem.delete(k); },
+      clear: () => { mem.clear(); },
+    };
+    try {
+
+    // Seed a successful counter-organ record
+    const COUNTER_RECORD: BuildRecord = {
+      ts: Date.now() - 1000,
+      kind: "build",
+      request: "build a counter organ that increments a number",
+      organId: "counter",
+      ok: true,
+      repairRounds: 0,
+      manifest: JSON.stringify({ id: "counter", name: "Counter", description: "Increment a number.", version: 1, permissions: ["storage"] }),
+      code: `export default { id: "counter", render(el, loom) { const ui = loom.ui; const count = loom.storage.get("count", 0); const stat = ui.stat("count", count); const btn = ui.button("Increment", { action: "increment", onClick: () => { const c = loom.storage.get("count", 0) + 1; loom.storage.set("count", c); ui.setStat(stat, c); } }); el.appendChild(stat); el.appendChild(btn); } }`,
+      tests: `export const tests = [{ name: "renders", fn: async ({el, assert}) => { assert(el.textContent.length > 0, "renders"); } }]`,
+    };
+
+    recordExperience(COUNTER_RECORD);
+
+    // The store must now contain the seeded record — verify via retrieval (hard assertion:
+    // the shim guarantees a working store)
+    const exemplars = retrieveExemplars("counter organ increment", 5);
+    expect(exemplars, "seeded counter record must be retrievable").toContain("counter");
+    console.info("[exemplars-store-growth] seeded counter record is retrievable from store");
+
+    // Now record a second (synthetic) success and verify store count grew
+    const before = (() => {
+      const raw = localStorage.getItem("loom.exp.v1");
+      if (!raw) return 0;
+      return (JSON.parse(raw) as unknown[]).length;
+    })();
+    expect(before, "store must contain the seeded record").toBeGreaterThanOrEqual(1);
+
+    recordExperience({
+      ts: Date.now(),
+      kind: "build",
+      request: "build a counter organ that increments a number",
+      organId: "counter-v2",
+      ok: true,
+      repairRounds: 0,
+    });
+
+    const after = (() => {
+      const raw = localStorage.getItem("loom.exp.v1");
+      if (!raw) return 0;
+      return (JSON.parse(raw) as unknown[]).length;
+    })();
+
+    // The store MUST have grown by >= 1 (hard assertion — no environment skip)
+    expect(after).toBeGreaterThanOrEqual(before + 1);
+    console.info(`[exemplars-store-growth] store grew from ${before} to ${after} records`);
+    } finally {
+      // Remove the shim so no other selftest task sees a fake localStorage
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  });
+
+  it("build-chart-organ: 3 reps — model uses v3 instruments for dashboards", async () => {
+    const m = model ?? (await pickBuilder());
+    const system = organSystemPrompt("code");
+    const CHART_MANIFEST = JSON.stringify({
+      id: "water-intake",
+      name: "Water Intake",
+      description: "Weekly water intake dashboard with daily chart and goal gauge.",
+      version: 1,
+      permissions: ["storage"],
+    });
+    const user = `Manifest:\n${CHART_MANIFEST}\n\nBuild a weekly water intake dashboard with a chart of daily intake and a goal gauge.`;
+
+    let passed = 0;
+    for (let rep = 1; rep <= REPS; rep++) {
+      const t0 = Date.now();
+      const raw = await chat(m, system, user);
+      const code = extractCode(raw);
+      const ms = Date.now() - t0;
+
+      const hasExportDefault = code.includes("export default");
+      const hasRender = code.includes("render");
+
+      // Must reference >= 2 of these v3 instruments
+      const v3Refs = [
+        code.includes("barChart") || code.includes("ui.barChart"),
+        code.includes("lineChart") || code.includes("ui.lineChart"),
+        code.includes("gauge") || code.includes("ui.gauge"),
+        code.includes("heatmap") || code.includes("ui.heatmap"),
+        code.includes("spark") || code.includes("ui.spark"),
+      ].filter(Boolean).length;
+      const hasEnoughV3 = v3Refs >= 2;
+
+      const stripped = code
+        .replace(/^export\s+default\s+/, "const __organ = ")
+        .replace(/\bimport\b[^;]*;?\s*/g, "");
+      let fnOk = false;
+      let fnErr = "";
+      try {
+        new Function(stripped);
+        fnOk = true;
+      } catch (e) {
+        fnErr = String(e);
+      }
+
+      const ok = hasExportDefault && hasRender && fnOk && hasEnoughV3;
+      if (ok) {
+        passed++;
+        console.info(`[build-chart-organ] rep ${rep} PASS (${ms}ms) v3Refs=${v3Refs}`);
+      } else {
+        console.info(
+          `[build-chart-organ] rep ${rep} FAIL (${ms}ms) exportDefault=${hasExportDefault} render=${hasRender} fnOk=${fnOk} v3Refs=${v3Refs}/${2} fnErr=${fnErr}`
+        );
+        console.info(`  code snippet:\n${code.slice(0, 400)}`);
+      }
+
+      expect(hasExportDefault, `rep ${rep}: missing 'export default'`).toBe(true);
+      expect(hasRender, `rep ${rep}: missing 'render'`).toBe(true);
+      expect(fnOk, `rep ${rep}: new Function threw: ${fnErr}`).toBe(true);
+      expect(hasEnoughV3, `rep ${rep}: model did not use >= 2 v3 instruments (barChart/lineChart/gauge/heatmap/spark), refs=${v3Refs}`).toBe(true);
+    }
+    console.info(`[build-chart-organ] ${passed}/${REPS} passed`);
   });
 
   it("edit-organ: 3 reps — notes seed organ.js heading change", async () => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useOrgans, type OrganState } from "../../lib/organs/host";
 import OrganWindow from "./OrganWindow";
 import Dock from "./Dock";
@@ -27,6 +28,7 @@ type WindowInfo = {
 };
 
 export default function Desktop() {
+  const rm = useReducedMotion() ?? false;
   const { organs, approve, reload } = useOrgans();
   const [windowStates, setWindowStates] = useState<Record<string, WindowInfo>>({});
   const [zOrder, setZOrder] = useState<string[]>([]);
@@ -233,6 +235,7 @@ export default function Desktop() {
       })}
 
       {/* Permission modal */}
+      <AnimatePresence>
       {modalOrgan && (
         <div
           style={{
@@ -247,7 +250,11 @@ export default function Desktop() {
           }}
           onClick={(e) => { if (e.target === e.currentTarget) setModalOrganId(null); }}
         >
-          <div
+          <motion.div
+            initial={rm ? false : { opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={rm ? undefined : { opacity: 0, scale: 0.96, y: 12 }}
+            transition={rm ? {} : { type: "spring", stiffness: 400, damping: 30 }}
             style={{
               background: "var(--glass)",
               backdropFilter: "blur(var(--blur))",
@@ -263,26 +270,38 @@ export default function Desktop() {
             <div style={{ fontWeight: 700, fontSize: 16, color: "var(--t1)", marginBottom: 6 }}>
               {modalOrgan.manifest.name}
             </div>
-            <div style={{ color: "var(--t2)", fontSize: 13, marginBottom: 16 }}>
+            <div
+              style={{
+                color: "var(--t2)",
+                fontSize: 13,
+                marginBottom: 16,
+                maxHeight: 160,
+                overflowY: "auto",
+                overflowWrap: "break-word",
+              }}
+            >
               {modalOrgan.manifest.description}
             </div>
             <div style={{ marginBottom: 16 }}>
               <div style={{ color: "var(--t3)", fontSize: 12, marginBottom: 6 }}>
                 Requested permissions:
               </div>
-              {modalOrgan.manifest.permissions.map((p) => (
-                <div
-                  key={p}
-                  style={{
-                    fontFamily: "var(--f-mono)",
-                    fontSize: 12,
-                    color: "var(--t2)",
-                    padding: "2px 0",
-                  }}
-                >
-                  {p}
-                </div>
-              ))}
+              <div style={{ maxHeight: 140, overflowY: "auto" }}>
+                {modalOrgan.manifest.permissions.map((p) => (
+                  <div
+                    key={p}
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 12,
+                      color: "var(--t2)",
+                      padding: "2px 0",
+                      overflowWrap: "break-word",
+                    }}
+                  >
+                    {p}
+                  </div>
+                ))}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button
@@ -318,9 +337,10 @@ export default function Desktop() {
                 Not now
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
 
       <Dock organs={organs} windowStates={windowStates} onTileClick={handleDockClick} />
     </div>

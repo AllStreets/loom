@@ -1,4 +1,5 @@
 import { type OrganState } from "../../lib/organs/host";
+import { motion, useReducedMotion } from "framer-motion";
 
 type WindowInfo = { minimized: boolean; focused: boolean };
 
@@ -14,6 +15,7 @@ function getInitials(name: string): string {
 }
 
 export default function Dock({ organs, windowStates, onTileClick }: Props) {
+  const rm = useReducedMotion() ?? false;
   const dockStyle: React.CSSProperties = {
     position: "fixed",
     bottom: 16,
@@ -32,7 +34,20 @@ export default function Dock({ organs, windowStates, onTileClick }: Props) {
   };
 
   return (
-    <div style={dockStyle}>
+    <>
+      <style>{`
+        @keyframes loom-dot-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(1.5); }
+        }
+        .loom-unapproved-dot {
+          animation: loom-dot-pulse 2s ease-in-out infinite;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .loom-unapproved-dot { animation: none; }
+        }
+      `}</style>
+      <div style={dockStyle}>
       {organs.map((organ) => {
         const id = organ.entry.id;
         const ws = windowStates[id];
@@ -62,15 +77,18 @@ export default function Dock({ organs, windowStates, onTileClick }: Props) {
         };
 
         return (
-          <div
+          <motion.div
             key={id}
             style={tileStyle}
             title={organ.manifest.name}
             onClick={() => onTileClick(id)}
+            whileHover={rm ? undefined : { scale: 1.18 }}
+            whileTap={rm ? undefined : { scale: 0.92 }}
           >
             {getInitials(organ.manifest.name)}
             {!organ.approved && (
               <span
+                className="loom-unapproved-dot"
                 style={{
                   position: "absolute",
                   top: -2,
@@ -83,9 +101,10 @@ export default function Dock({ organs, windowStates, onTileClick }: Props) {
                 }}
               />
             )}
-          </div>
+          </motion.div>
         );
       })}
     </div>
+    </>
   );
 }

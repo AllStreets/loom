@@ -726,6 +726,26 @@ describe("Desktop", () => {
     }
   });
 
+  it("resize grip has data-testid='resize-grip' and is present when window is not collapsed", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'notes', render(el){ el.textContent = 'ok'; } }";
+      return null;
+    });
+
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+    });
+
+    // Resize grip should be present and have the correct data-testid
+    const resizeGrip = screen.getByTestId("resize-grip");
+    expect(resizeGrip).toBeInTheDocument();
+    expect(resizeGrip.style.cursor).toBe("se-resize");
+  });
+
   it("viewport-resize listener re-clamps an open window that would be off-screen after shrink", async () => {
     // Start with a wide viewport
     Object.defineProperty(window, "innerWidth",  { configurable: true, writable: true, value: 1280 });

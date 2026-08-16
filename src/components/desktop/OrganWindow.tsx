@@ -287,8 +287,9 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     top: pos.y,
     width: Math.min(pos.w, typeof window !== "undefined" && window.innerWidth > 0 ? window.innerWidth : pos.w),
     boxShadow: focused
-      ? "0 0 0 1px rgba(34,211,238,.35), 0 8px 32px rgba(0,0,0,.4)"
-      : "0 4px 16px rgba(0,0,0,.3)",
+      ? "var(--shadow-3), var(--shadow-2)"
+      : "var(--shadow-1)",
+    transition: "box-shadow var(--dur-fast) var(--ease-out)",
     userSelect: "none",
     background: "var(--glass)",
     backdropFilter: "blur(var(--blur))",
@@ -361,16 +362,26 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
       {!pos.collapsed && (
         <div
           onPointerDown={handleResizePointerDown}
+          data-testid="resize-grip"
           style={{
             position: "absolute",
-            right: 0,
-            bottom: 0,
+            right: 4,
+            bottom: 4,
             width: 14,
             height: 14,
             cursor: "se-resize",
-            background: "transparent",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: 0.4,
           }}
-        />
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+            {[0, 1, 2].map((i) => (
+              <span key={i} style={{ width: 2, height: 2, borderRadius: "50%", background: "var(--t3)", display: "block" }} />
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

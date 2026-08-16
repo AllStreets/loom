@@ -90,7 +90,8 @@ export function makeLoomApi(
       },
       set(k, v) {
         need("storage");
-        localStorage.setItem(key(k), JSON.stringify(v));
+        // Quota exhaustion must not throw into organ render/handler code
+        try { localStorage.setItem(key(k), JSON.stringify(v)); } catch { /* full quota */ }
       },
       del(k) {
         need("storage");

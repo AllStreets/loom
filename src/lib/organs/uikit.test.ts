@@ -12,7 +12,7 @@ const TOKENS = {
   t3: "#5f6f8c",
   accent: "#22d3ee",
   go: "#4ade80",
-  warn: "#fbbf24",
+  warn: "#f97316",
   danger: "#f87171",
 };
 
@@ -530,6 +530,184 @@ describe("buildUiKit — v2 factory presence", () => {
     expect(typeof ui.section).toBe("function");
     expect(typeof ui.dot).toBe("function");
     expect(typeof ui.toolbar).toBe("function");
+  });
+});
+
+describe("kit v3 factories", () => {
+  it("tabs: tab switch changes visible panel", () => {
+    const ui = buildUiKit(TOKENS);
+    const { root, panels } = ui.tabs(["A", "B", "C"]);
+    document.body.appendChild(root);
+    // Initially first panel is visible
+    expect(panels[0].style.display).toBe("block");
+    expect(panels[1].style.display).toBe("none");
+    // Click second tab button
+    const tabBar = root.children[0] as HTMLElement;
+    const secondBtn = tabBar.children[1] as HTMLButtonElement;
+    secondBtn.click();
+    expect(panels[0].style.display).toBe("none");
+    expect(panels[1].style.display).toBe("block");
+  });
+
+  it("barChart: returns SVG with correct number of rect elements", () => {
+    const ui = buildUiKit(TOKENS);
+    const data = [{ label: "Mon", value: 5 }, { label: "Tue", value: 10 }, { label: "Wed", value: 3 }];
+    const svg = ui.barChart(data);
+    expect(svg.tagName.toLowerCase()).toBe("svg");
+    const rects = svg.querySelectorAll("rect");
+    expect(rects.length).toBe(data.length);
+  });
+
+  it("lineChart: returns SVG with a polyline element", () => {
+    const ui = buildUiKit(TOKENS);
+    const svg = ui.lineChart([1, 5, 3, 8, 2]);
+    expect(svg.tagName.toLowerCase()).toBe("svg");
+    const polyline = svg.querySelector("polyline");
+    expect(polyline).toBeTruthy();
+  });
+
+  it("lineChart: two lineCharts in one document have distinct gradient ids", () => {
+    const ui = buildUiKit(TOKENS);
+    const svg1 = ui.lineChart([1, 5, 3, 8, 2]);
+    const svg2 = ui.lineChart([2, 4, 6, 3, 7]);
+
+    // Extract gradient IDs from fill attributes
+    const area1 = svg1.querySelector("polygon");
+    const area2 = svg2.querySelector("polygon");
+    expect(area1).toBeTruthy();
+    expect(area2).toBeTruthy();
+
+    const fill1 = area1!.getAttribute("fill");
+    const fill2 = area2!.getAttribute("fill");
+
+    // Both should have url(#...) pattern but different IDs
+    expect(fill1).toMatch(/^url\(#lui-lg-\d+\)$/);
+    expect(fill2).toMatch(/^url\(#lui-lg-\d+\)$/);
+    expect(fill1).not.toBe(fill2);
+  });
+
+  it("gauge: arc dasharray changes with different values", () => {
+    const ui = buildUiKit(TOKENS);
+    const g1 = ui.gauge(25, 100);
+    const g2 = ui.gauge(75, 100);
+    // Both must be SVGs
+    expect(g1.tagName.toLowerCase()).toBe("svg");
+    expect(g2.tagName.toLowerCase()).toBe("svg");
+    // The arc circles (second circle) must have different stroke-dasharray
+    const circles1 = g1.querySelectorAll("circle");
+    const circles2 = g2.querySelectorAll("circle");
+    expect(circles1.length).toBeGreaterThanOrEqual(2);
+    expect(circles2.length).toBeGreaterThanOrEqual(2);
+    const arc1 = circles1[1].getAttribute("stroke-dasharray");
+    const arc2 = circles2[1].getAttribute("stroke-dasharray");
+    expect(arc1).not.toBe(arc2);
+  });
+
+  it("heatmap: cell count equals values.length; alpha scales with value", () => {
+    const ui = buildUiKit(TOKENS);
+    const values = [0, 1, 2, 3, 4, 5, 6];
+    const hm = ui.heatmap(values);
+    expect(hm.children.length).toBe(values.length);
+    // Cell with value 0 should have lower alpha than cell with value 5
+    const cell0 = hm.children[0] as HTMLElement;
+    const cell5 = hm.children[5] as HTMLElement;
+    // Both should have rgba background
+    expect(cell0.style.background).toContain("rgba");
+    expect(cell5.style.background).toContain("rgba");
+  });
+
+  it("dataGrid: correct row count (header + data rows); correct column count", () => {
+    const ui = buildUiKit(TOKENS);
+    const columns = ["Name", "Value", "Status"];
+    const rows = [["Alpha", 1, "ok"], ["Beta", 2, "warn"], ["Gamma", 3, "error"]];
+    const grid = ui.dataGrid(columns, rows);
+    // The inner table div
+    const table = grid.firstChild as HTMLElement;
+    expect(table.children.length).toBe(1 + rows.length); // header + data rows
+    // Header has correct column count
+    const header = table.children[0] as HTMLElement;
+    expect(header.children.length).toBe(columns.length);
+    // First data row has correct column count
+    const firstRow = table.children[1] as HTMLElement;
+    expect(firstRow.children.length).toBe(columns.length);
+  });
+
+  it("dataGrid: short row still renders columns.length cells per row", () => {
+    const ui = buildUiKit(TOKENS);
+    const columns = ["Name", "Value", "Status"];
+    // Second and third rows are shorter than columns.length
+    const rows = [["Alpha", 1, "ok"], ["Beta", 2], ["Gamma"]];
+    const grid = ui.dataGrid(columns, rows);
+    const table = grid.firstChild as HTMLElement;
+
+    // All three data rows should have exactly columns.length cells
+    for (let i = 0; i < rows.length; i++) {
+      const row = table.children[i + 1] as HTMLElement;
+      expect(row.children.length).toBe(columns.length);
+    }
+
+    // Short row cells should render as empty strings for missing values
+    const shortRow = table.children[2] as HTMLElement; // ["Beta", 2]
+    expect(shortRow.children[2].textContent).toBe(""); // Third cell should be empty
+  });
+
+  it("toggle: flips checked state and calls onChange with new value", () => {
+    const ui = buildUiKit(TOKENS);
+    const calls: boolean[] = [];
+    const tog = ui.toggle("Enable feature", false, (v) => calls.push(v));
+    document.body.appendChild(tog);
+    tog.click();
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toBe(true);
+    tog.click();
+    expect(calls[1]).toBe(false);
+  });
+
+  it("select: correct number of options", () => {
+    const ui = buildUiKit(TOKENS);
+    const options = [
+      { value: "a", label: "Alpha" },
+      { value: "b", label: "Beta" },
+      { value: "c", label: "Gamma" },
+    ];
+    const sel = ui.select(options);
+    expect(sel.tagName.toLowerCase()).toBe("select");
+    expect(sel.options.length).toBe(options.length);
+    expect(sel.options[0].value).toBe("a");
+    expect(sel.options[1].label).toBe("Beta");
+  });
+
+  it("spinner: has animation style containing 'spin'", () => {
+    const ui = buildUiKit(TOKENS);
+    const sp = ui.spinner(32);
+    expect(sp).toBeTruthy();
+    const anim = sp.style.animation || sp.style.animationName;
+    expect(anim).toBeTruthy();
+    expect(anim.toLowerCase()).toContain("spin");
+  });
+
+  it("icon: returns SVG element with correct tagName", () => {
+    const ui = buildUiKit(TOKENS);
+    const ic = ui.icon("check");
+    expect(ic.tagName.toLowerCase()).toBe("svg");
+    const path = ic.querySelector("path");
+    expect(path).toBeTruthy();
+  });
+});
+
+describe("buildUiKit — v3 factory presence", () => {
+  it("returns all v3 factories", () => {
+    const ui = buildUiKit(TOKENS);
+    expect(typeof ui.tabs).toBe("function");
+    expect(typeof ui.barChart).toBe("function");
+    expect(typeof ui.lineChart).toBe("function");
+    expect(typeof ui.gauge).toBe("function");
+    expect(typeof ui.heatmap).toBe("function");
+    expect(typeof ui.dataGrid).toBe("function");
+    expect(typeof ui.toggle).toBe("function");
+    expect(typeof ui.select).toBe("function");
+    expect(typeof ui.spinner).toBe("function");
+    expect(typeof ui.icon).toBe("function");
   });
 });
 

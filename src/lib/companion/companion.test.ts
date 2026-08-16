@@ -272,3 +272,92 @@ describe("handle — act", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 2: COMPANION_SYSTEM session reference line
+// ---------------------------------------------------------------------------
+
+describe("COMPANION_SYSTEM — session memory line", () => {
+  it("mentions referencing organs built earlier in the session", () => {
+    expect(COMPANION_SYSTEM).toMatch(/built or edited earlier in this session/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 2: history forwarded to compile (anaphora via runtime)
+// ---------------------------------------------------------------------------
+
+describe("handle — anaphora resolution via history", () => {
+  it("resolves 'make it blue' to edit_organ on water-tracker using history", async () => {
+    const deps = makeDeps({
+      organIds: vi.fn().mockResolvedValue([]),
+      edit: vi.fn().mockResolvedValue({
+        ok: true, organId: "water-tracker", sha: "def", log: [],
+      }),
+    });
+    // History contains the build outcome message that Companion would push
+    const history: Msg[] = [
+      { role: "assistant", content: "Built water-tracker: organ ready. Passed in 0 repair round(s)." },
+    ];
+    const turn = await handle("make it blue", history, deps);
+    expect(turn.kind).toBe("edit");
+    if (turn.kind === "edit") {
+      expect(turn.organId).toBe("water-tracker");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 2: handle returns correct result for history push verification
+// ---------------------------------------------------------------------------
+
+describe("handle — build/edit results for history push", () => {
+  it("build success returns kind 'build' with ok result containing organId", async () => {
+    const buildResult: BuildResult = {
+      ok: true, organId: "sleep-log", sha: "sha1",
+      log: [{ ts: 1, phase: "repair", detail: "round 1" }],
+    };
+    const deps = makeDeps({
+      organIds: vi.fn().mockResolvedValue([]),
+      build: vi.fn().mockResolvedValue(buildResult),
+    });
+    const turn = await handle("build me a sleep log", [], deps);
+    expect(turn.kind).toBe("build");
+    if (turn.kind === "build") {
+      expect(turn.result.ok).toBe(true);
+      expect(turn.result.organId).toBe("sleep-log");
+      // Repair round count derivable from log
+      expect(turn.result.log.filter((e) => e.phase === "repair")).toHaveLength(1);
+    }
+  });
+
+  it("build failure returns kind 'build' with !ok result containing stage", async () => {
+    const buildResult: BuildResult = {
+      ok: false, stage: "gate", error: "assertion failed", log: [],
+    };
+    const deps = makeDeps({
+      organIds: vi.fn().mockResolvedValue([]),
+      build: vi.fn().mockResolvedValue(buildResult),
+    });
+    const turn = await handle("build me a broken thing", [], deps);
+    expect(turn.kind).toBe("build");
+    if (turn.kind === "build") {
+      expect(turn.result.ok).toBe(false);
+      expect(turn.result.stage).toBe("gate");
+    }
+  });
+
+  it("edit success returns kind 'edit' with ok result", async () => {
+    const editResult: BuildResult = { ok: true, organId: "water-tracker", sha: "sha2", log: [] };
+    const deps = makeDeps({
+      organIds: vi.fn().mockResolvedValue(["water-tracker"]),
+      edit: vi.fn().mockResolvedValue(editResult),
+    });
+    const turn = await handle("add a delete button to the water tracker", [], deps);
+    expect(turn.kind).toBe("edit");
+    if (turn.kind === "edit") {
+      expect(turn.result.ok).toBe(true);
+      expect(turn.organId).toBe("water-tracker");
+    }
+  });
+});

@@ -29,6 +29,22 @@ const ORGAN_JS = `export default {
     ]);
     body.appendChild(principles);
 
+    // Recent commits section
+    var commitsSection = ui.section("Recent Commits");
+    body.appendChild(commitsSection);
+
+    var commitGrid = ui.dataGrid(
+      ["commit", "organ", "type", "when"],
+      [
+        ["ae5a475", "loom-panel", "polish", "2 hours ago"],
+        ["b65fe28", "hermes", "icons", "1 day ago"],
+        ["074ce55", "bridge", "fix", "2 days ago"],
+        ["6a27cf2", "router", "fix", "3 days ago"],
+        ["48d461e", "zeus", "fix", "4 days ago"],
+      ]
+    );
+    body.appendChild(commitGrid);
+
     // Status section
     var statusSection = ui.section("System");
     body.appendChild(statusSection);

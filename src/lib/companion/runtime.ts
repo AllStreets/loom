@@ -8,7 +8,7 @@ export type CompanionDeps = {
   build: (request: string) => Promise<BuildResult>;
   edit: (organId: string, request: string) => Promise<BuildResult>;
   organIds: () => Promise<string[]>;
-  askModel: (p: string) => Promise<string>;
+  askModel: (system: string, prompt: string) => Promise<string>;
 };
 
 export type CompanionTurn =
@@ -23,7 +23,7 @@ export async function handle(
   deps: CompanionDeps
 ): Promise<CompanionTurn> {
   const ids = await deps.organIds();
-  const c = await compile(utterance, ids, deps.askModel);
+  const c = await compile(utterance, ids, deps.askModel, history);
 
   switch (c.intent) {
     case "converse": {
