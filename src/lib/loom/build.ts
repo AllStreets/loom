@@ -67,6 +67,11 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
       manifestResult = manifestGuard(repairedManifestCode);
       if (!manifestResult.ok) {
         emit("manifest", "failed after repair: " + manifestResult.error);
+        recordExperience({
+          ts: Date.now(), kind: "build", request, organId: "", ok: false,
+          stage: "manifest", repairRounds: 1,
+          errors: [manifestResult.error],
+        });
         return { ok: false, error: manifestResult.error, log };
       }
       // Use the repaired manifest code for all downstream phases
