@@ -287,8 +287,8 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     top: pos.y,
     width: Math.min(pos.w, typeof window !== "undefined" && window.innerWidth > 0 ? window.innerWidth : pos.w),
     boxShadow: focused
-      ? "0 0 0 1px rgba(34,211,238,.35), 0 8px 32px rgba(0,0,0,.4)"
-      : "0 4px 16px rgba(0,0,0,.3)",
+      ? "var(--shadow-3), var(--shadow-2)"
+      : "var(--shadow-1)",
     userSelect: "none",
     background: "var(--glass)",
     backdropFilter: "blur(var(--blur))",

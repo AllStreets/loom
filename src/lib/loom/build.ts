@@ -7,7 +7,7 @@ import { isBusy as _isBusy, withFlight } from "./flight";
 import { runGateWithRepair } from "./gateRepair";
 import { recordExperience, retrieveExemplars, retrieveLessons } from "./experience";
 
-export type BuildEvent = { ts: number; phase: string; detail: string };
+export type BuildEvent = { ts: number; phase: string; detail: string; role?: "builder" | "companion" | "rewriter" };
 export type BuildResult = { ok: boolean; organId?: string; sha?: string; error?: string; stage?: string; log: BuildEvent[] };
 export type BuildDeps = {
   chat: (role: string, messages: Msg[], opts?: ChatOpts) => Promise<string>;
@@ -30,7 +30,8 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     const log: BuildEvent[] = [];
 
     function emit(phase: string, detail: string): void {
-      const e: BuildEvent = { ts: Date.now(), phase, detail };
+      // Every phase of a build is performed by the builder role.
+      const e: BuildEvent = { ts: Date.now(), phase, detail, role: "builder" };
       log.push(e);
       deps.onEvent?.(e);
     }

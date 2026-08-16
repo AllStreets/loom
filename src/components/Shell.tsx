@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Orb } from "./orb/Orb";
+import FleetHUD from "./FleetHUD";
 import Companion from "./Companion";
 import Desktop from "./desktop/Desktop";
 import Field from "./ambient/Field";
@@ -359,26 +360,8 @@ export default function Shell() {
           <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)" }}>sovereign console</small>
         </div>
 
-        {/* Fleet role dots */}
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {roles.map((r) => (
-            <div key={r.role} style={{ display: "flex", gap: 5, alignItems: "center" }}>
-              <span
-                title={`${r.role}: ${r.model || "absent"}`}
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  background: r.present ? "var(--go)" : "var(--danger)",
-                  flexShrink: 0,
-                }}
-              />
-              <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--t3)" }}>
-                {r.role}
-              </span>
-            </div>
-          ))}
-        </div>
+        {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
+        <FleetHUD roles={roles} />
       </header>
 
       {/* ── Zone B: Orb band (fixed height, always visible, never scrolls) ── */}
@@ -532,11 +515,27 @@ export default function Shell() {
                 <div style={{ color: "var(--t3)", fontSize: 13 }}>No commits yet.</div>
               )}
               {commits.map((c) => (
-                <div key={c.sha} style={{ fontSize: 13, padding: "3px 0" }}>
-                  <span style={{ fontFamily: "var(--f-mono)", color: "var(--t3)" }}>
+                <div
+                  key={c.sha}
+                  style={{ fontSize: 13, padding: "3px 0", display: "flex", gap: 6, minWidth: 0 }}
+                >
+                  <span
+                    style={{ fontFamily: "var(--f-mono)", color: "var(--t3)", flexShrink: 0 }}
+                  >
                     {c.sha.slice(0, 7)}
-                  </span>{" "}
-                  <span style={{ color: "var(--t1)" }}>{c.message}</span>
+                  </span>
+                  <span
+                    title={c.message}
+                    style={{
+                      color: "var(--t1)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      minWidth: 0,
+                    }}
+                  >
+                    {c.message}
+                  </span>
                 </div>
               ))}
             </div>

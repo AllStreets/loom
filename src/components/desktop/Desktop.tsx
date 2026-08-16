@@ -263,26 +263,38 @@ export default function Desktop() {
             <div style={{ fontWeight: 700, fontSize: 16, color: "var(--t1)", marginBottom: 6 }}>
               {modalOrgan.manifest.name}
             </div>
-            <div style={{ color: "var(--t2)", fontSize: 13, marginBottom: 16 }}>
+            <div
+              style={{
+                color: "var(--t2)",
+                fontSize: 13,
+                marginBottom: 16,
+                maxHeight: 160,
+                overflowY: "auto",
+                overflowWrap: "break-word",
+              }}
+            >
               {modalOrgan.manifest.description}
             </div>
             <div style={{ marginBottom: 16 }}>
               <div style={{ color: "var(--t3)", fontSize: 12, marginBottom: 6 }}>
                 Requested permissions:
               </div>
-              {modalOrgan.manifest.permissions.map((p) => (
-                <div
-                  key={p}
-                  style={{
-                    fontFamily: "var(--f-mono)",
-                    fontSize: 12,
-                    color: "var(--t2)",
-                    padding: "2px 0",
-                  }}
-                >
-                  {p}
-                </div>
-              ))}
+              <div style={{ maxHeight: 140, overflowY: "auto" }}>
+                {modalOrgan.manifest.permissions.map((p) => (
+                  <div
+                    key={p}
+                    style={{
+                      fontFamily: "var(--f-mono)",
+                      fontSize: 12,
+                      color: "var(--t2)",
+                      padding: "2px 0",
+                      overflowWrap: "break-word",
+                    }}
+                  >
+                    {p}
+                  </div>
+                ))}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button

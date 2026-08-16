@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fleetChat, organWrite, organRead, organList, ttsSpeak, type OrganFile, type Msg } from "../lib/core";
+import { fleetChat, organWrite, organRead, organList, ttsSpeak, type OrganFile, type Msg, type ChatOpts } from "../lib/core";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
@@ -99,12 +99,14 @@ function UserBubble({ text }: { text: string }) {
           ...panelBase,
           padding: "10px 14px",
           maxWidth: "72%",
+          minWidth: 0,
           color: "var(--t1)",
           fontSize: 14,
           lineHeight: 1.5,
           borderRadius: 10,
           background: "rgba(255,255,255,0.05)",
           border: "1px solid rgba(255,255,255,0.08)",
+          overflowWrap: "break-word",
         }}
       >
         {text}
@@ -122,15 +124,142 @@ function AssistantBubble({ text }: { text: string }) {
           ...panelBase,
           padding: "10px 14px",
           maxWidth: "80%",
+          minWidth: 0,
           color: "var(--t1)",
           fontSize: 14,
           lineHeight: 1.5,
           borderRadius: 10,
           flex: 1,
+          overflowWrap: "break-word",
         }}
       >
         {text}
       </div>
+    </div>
+  );
+}
+
+// Canonical ordered build phases for the stepper.
+const STEPPER_PHASES = [
+  "manifest",
+  "code",
+  "probe",
+  "tests",
+  "gate",
+  "review",
+  "write",
+] as const;
+type StepperPhase = (typeof STEPPER_PHASES)[number];
+
+// Per-phase accent colors for the mono detail log. Phases not listed fall
+// back to --t2. Kept mood-agnostic and yellow-free.
+const PHASE_COLORS: Record<string, string> = {
+  manifest: "#7dd3fc",
+  code: "#22d3ee",
+  probe: "#a78bfa",
+  tests: "#4ade80",
+  gate: "#22d3ee",
+  repair: "#f97316",
+  review: "#a78bfa",
+  write: "#4ade80",
+  error: "var(--danger)",
+};
+
+function phaseColor(phase: string): string {
+  return PHASE_COLORS[phase] ?? "var(--t2)";
+}
+
+type StepState = "pending" | "done" | "current" | "error";
+
+/**
+ * Derive the visual state of each ordered step from the raw BuildEvent stream.
+ * - The last event's phase is the "current" step (unless it's an error).
+ * - Every canonical phase that has appeared earlier than the current one is "done".
+ * - An "error" event marks the current step (or the last non-error phase) as error.
+ */
+export function deriveStepStates(events: BuildEvent[]): Record<StepperPhase, StepState> {
+  const states = Object.fromEntries(
+    STEPPER_PHASES.map((p) => [p, "pending" as StepState]),
+  ) as Record<StepperPhase, StepState>;
+
+  if (events.length === 0) return states;
+
+  const hasError = events.some((e) => e.phase === "error");
+  // The most recent canonical phase seen in the stream.
+  let lastCanonical: StepperPhase | null = null;
+  const seen = new Set<StepperPhase>();
+  for (const e of events) {
+    if ((STEPPER_PHASES as readonly string[]).includes(e.phase)) {
+      const p = e.phase as StepperPhase;
+      seen.add(p);
+      lastCanonical = p;
+    }
+  }
+
+  if (lastCanonical === null) return states;
+
+  const currentIdx = STEPPER_PHASES.indexOf(lastCanonical);
+  for (let i = 0; i < STEPPER_PHASES.length; i++) {
+    const p = STEPPER_PHASES[i];
+    if (!seen.has(p)) continue;
+    if (i < currentIdx) states[p] = "done";
+    else if (i === currentIdx) states[p] = hasError ? "error" : "current";
+  }
+  // If an error occurred, mark the current step as error explicitly.
+  if (hasError) states[lastCanonical] = "error";
+
+  return states;
+}
+
+function PhaseStepper({ events }: { events: BuildEvent[] }) {
+  const states = deriveStepStates(events);
+
+  return (
+    <div
+      data-testid="phase-stepper"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        flexWrap: "wrap",
+        marginBottom: 6,
+      }}
+    >
+      {STEPPER_PHASES.map((phase, i) => {
+        const state = states[phase];
+        const color =
+          state === "error"
+            ? "var(--danger)"
+            : state === "done"
+              ? "var(--accent)"
+              : state === "current"
+                ? "var(--accent)"
+                : "var(--t3)";
+        return (
+          <div
+            key={phase}
+            data-testid={`step-${phase}`}
+            data-step-state={state}
+            style={{ display: "flex", alignItems: "center", gap: 4 }}
+          >
+            <span
+              className={state === "current" ? "loom-step-pulse" : undefined}
+              style={{
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                letterSpacing: ".04em",
+                color,
+                opacity: state === "pending" ? 0.5 : 1,
+              }}
+            >
+              {phase}
+            </span>
+            {i < STEPPER_PHASES.length - 1 && (
+              <span style={{ color: "var(--t3)", fontSize: 10, opacity: 0.5 }}>-&gt;</span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -147,25 +276,29 @@ function EventLog({ events }: { events: BuildEvent[] }) {
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
       <CyanDot />
-      <div
-        ref={logRef}
-        style={{
-          ...monoSmall,
-          flex: 1,
-          maxHeight: 180,
-          overflowY: "auto",
-          color: "var(--t2)",
-          background: "rgba(0,0,0,0.25)",
-          borderRadius: 4,
-          padding: "8px 10px",
-        }}
-      >
-        {events.map((e, i) => (
-          <div key={i} style={{ padding: "1px 0" }}>
-            <span style={{ color: "var(--t3)" }}>[{e.phase}]</span>{" "}
-            <span>{e.detail}</span>
-          </div>
-        ))}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Ordered phase stepper header */}
+        <PhaseStepper events={events} />
+        {/* Mono detail log — each line colored by phase */}
+        <div
+          ref={logRef}
+          style={{
+            ...monoSmall,
+            maxHeight: 180,
+            overflowY: "auto",
+            color: "var(--t2)",
+            background: "rgba(0,0,0,0.25)",
+            borderRadius: 4,
+            padding: "8px 10px",
+          }}
+        >
+          {events.map((e, i) => (
+            <div key={i} style={{ padding: "1px 0", overflowWrap: "break-word" }}>
+              <span style={{ color: phaseColor(e.phase) }}>[{e.phase}]</span>{" "}
+              <span style={{ overflowWrap: "break-word" }}>{e.detail}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -189,10 +322,24 @@ function SuccessCardView({
           padding: "12px 14px",
         }}
       >
-        <div style={{ color: "var(--go)", fontWeight: 600, marginBottom: 4 }}>
+        <div
+          title={`${verb} ${item.organId}`}
+          style={{
+            color: "var(--go)",
+            fontWeight: 600,
+            marginBottom: 4,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            maxWidth: 320,
+            minWidth: 0,
+          }}
+        >
           {verb} {item.organId}
         </div>
-        <div style={{ ...monoSmall, color: "var(--t3)", marginBottom: 6 }}>
+        <div
+          style={{ ...monoSmall, color: "var(--t3)", marginBottom: 6, wordBreak: "break-all" }}
+        >
           sha: {item.sha}
         </div>
         {item.turnKind === "build" && (
@@ -224,8 +371,31 @@ function FailureCardView({
           padding: "12px 14px",
         }}
       >
-        <div style={{ color: "var(--danger)", fontWeight: 600, marginBottom: 6 }}>
-          Failed{item.stage ? ` — stage: ${item.stage}` : ""}
+        <div
+          style={{
+            color: "var(--danger)",
+            fontWeight: 600,
+            marginBottom: 6,
+            display: "flex",
+            gap: 6,
+            minWidth: 0,
+          }}
+        >
+          <span style={{ flexShrink: 0 }}>Failed</span>
+          {item.stage && (
+            <span
+              title={`stage: ${item.stage}`}
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+                fontWeight: 400,
+              }}
+            >
+              — stage: {item.stage}
+            </span>
+          )}
         </div>
         <div
           style={{
@@ -357,6 +527,30 @@ function nextId() {
   return `ci-${++_idCounter}`;
 }
 
+// ---------------------------------------------------------------------------
+// Fleet activity dispatch
+// ---------------------------------------------------------------------------
+// FleetHUD lights the active role from `loom-fleet-activity` CustomEvents.
+// { role, phase } marks a role active with a phase label; { role: null }
+// clears the active state. Companion is the single source of these events
+// because it is the only place that observes which fleet member is working:
+//   - builder  → every BuildEvent phase during a build/edit
+//   - companion→ around the converse chat call
+//   - rewriter → around the model-classified intent (askModel) call. The
+//     rewriter is the fleet member the compiler uses for its model fallback
+//     classification, so we light it around that askModel invocation and clear
+//     it immediately after — regardless of whether the rules or model path
+//     ultimately resolved the intent (a no-op flash if rules short-circuited
+//     before the model was consulted is acceptable and cheap).
+function dispatchFleetActivity(
+  role: "builder" | "companion" | "rewriter" | null,
+  phase?: string,
+) {
+  window.dispatchEvent(
+    new CustomEvent("loom-fleet-activity", { detail: { role, phase } }),
+  );
+}
+
 export default function Companion() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -467,16 +661,32 @@ export default function Companion() {
     appendItem({ kind: "event-log", events: [], id: logId });
 
     // Wraps appendEvent so the first build/edit event also triggers the
-    // "building" mood (only once per turn).
+    // "building" mood (only once per turn) and lights the builder in the HUD.
     function appendEventWithMood(e: BuildEvent) {
       if (firstEventMood(hasBuildingMood.current)) {
         hasBuildingMood.current = true;
       }
+      // Every build/edit phase event lights the builder with the current phase.
+      dispatchFleetActivity("builder", e.phase);
       appendEvent(e);
     }
 
+    // Wrap fleetChat so the converse ("companion" role) call lights the
+    // companion member for the duration of the reply generation.
+    const chatWithActivity = async (role: string, messages: Msg[], opts?: ChatOpts) => {
+      if (role === "companion") {
+        dispatchFleetActivity("companion", "converse");
+        try {
+          return await fleetChat(role, messages, opts);
+        } finally {
+          dispatchFleetActivity(null);
+        }
+      }
+      return fleetChat(role, messages, opts);
+    };
+
     const deps = {
-      chat: fleetChat,
+      chat: chatWithActivity,
       build: (req: string) =>
         buildOrgan(req, {
           chat: fleetChat,
@@ -506,17 +716,28 @@ export default function Companion() {
           })
           .filter((id): id is string => Boolean(id));
       },
-      askModel: (system: string, prompt: string) =>
-        fleetChat("rewriter", [
-          { role: "system", content: system },
-          { role: "user", content: prompt },
-        ]),
+      // askModel is the rewriter-role model fallback used by the intent
+      // compiler. Light the rewriter around the compile call: on before the
+      // model classification, off immediately after.
+      askModel: async (system: string, prompt: string) => {
+        dispatchFleetActivity("rewriter", "rewrite");
+        try {
+          return await fleetChat("rewriter", [
+            { role: "system", content: system },
+            { role: "user", content: prompt },
+          ]);
+        } finally {
+          dispatchFleetActivity(null);
+        }
+      },
     };
 
     let turn: CompanionTurn;
     try {
       turn = await handle(text, history.current, deps);
     } catch (err) {
+      // Clear any fleet-active state — the turn is over.
+      dispatchFleetActivity(null);
       // Settle and clear any pending review resolvers
       reviewResolvers.current.forEach((resolve) => resolve(false));
       reviewResolvers.current.clear();
@@ -534,6 +755,9 @@ export default function Companion() {
       setBusy(false);
       return;
     }
+
+    // Turn resolved — clear any lingering fleet-active state (build end).
+    dispatchFleetActivity(null);
 
     // Remove the log card if it's still empty (fast converse turns)
     activeLogId.current = null;

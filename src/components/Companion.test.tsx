@@ -195,6 +195,53 @@ describe("Companion", () => {
     });
   });
 
+  it("success card sha breaks and organId truncates (overflow sweep)", async () => {
+    mockHandle.mockResolvedValue({ kind: "build", result: okBuild });
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "build a water tracker");
+    await userEvent.keyboard("{Enter}");
+
+    const sha = await screen.findByText(/sha: abc123/);
+    expect(sha.style.wordBreak).toBe("break-all");
+
+    const title = screen.getByText(/Built water-tracker/i);
+    expect(title.style.textOverflow).toBe("ellipsis");
+    expect(title.style.overflow).toBe("hidden");
+  });
+
+  it("user bubble applies overflow-wrap and minWidth:0 (overflow sweep)", async () => {
+    mockHandle.mockResolvedValue({ kind: "reply", text: "ok" });
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "supercalifragilistic");
+    await userEvent.keyboard("{Enter}");
+
+    const bubble = await screen.findByText("supercalifragilistic");
+    expect(bubble.style.overflowWrap).toBe("break-word");
+    expect(bubble.style.minWidth).toBe("0px");
+  });
+
+  it("dispatches loom-fleet-activity clear (role:null) when a turn ends", async () => {
+    mockHandle.mockResolvedValue({ kind: "reply", text: "hi there" });
+    const activity: Array<{ role: string | null; phase?: string }> = [];
+    function cap(ev: Event) {
+      activity.push((ev as CustomEvent).detail);
+    }
+    window.addEventListener("loom-fleet-activity", cap);
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "hello");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("hi there")).toBeTruthy());
+    window.removeEventListener("loom-fleet-activity", cap);
+
+    // The turn-end clear must have fired.
+    expect(activity.some((a) => a.role === null)).toBe(true);
+  });
+
   it("failure turn renders the failure card with stage and Retry button, clicking Retry calls handle again with same utterance", async () => {
     // First call: fail; second call: reply
     mockHandle

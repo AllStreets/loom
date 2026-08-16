@@ -9,7 +9,7 @@ export const KIT_TOKENS = {
   t3: "#5f6f8c",
   accent: "#22d3ee",
   go: "#4ade80",
-  warn: "#fbbf24",
+  warn: "#f97316",
   danger: "#f87171",
 } as const;
 
@@ -267,7 +267,7 @@ function makeUi(tokens) {
       var toneColors = {
         accent: { bg:'rgba(34,211,238,.15)', color:tokens.accent },
         go:     { bg:'rgba(74,222,128,.15)', color:tokens.go },
-        warn:   { bg:'rgba(251,191,36,.15)',  color:tokens.warn },
+        warn:   { bg:'rgba(249,115,22,.15)',  color:tokens.warn },
         danger: { bg:'rgba(248,113,113,.15)', color:tokens.danger },
         muted:  { bg:'rgba(255,255,255,.06)', color:tokens.t3 },
       };

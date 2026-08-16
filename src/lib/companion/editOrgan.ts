@@ -25,7 +25,8 @@ export async function editOrgan(
     const log: BuildEvent[] = [];
 
     function emit(phase: string, detail: string): void {
-      const e: BuildEvent = { ts: Date.now(), phase, detail };
+      // Every phase of an edit is performed by the builder role.
+      const e: BuildEvent = { ts: Date.now(), phase, detail, role: "builder" };
       log.push(e);
       deps.onEvent?.(e);
     }
