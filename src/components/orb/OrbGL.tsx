@@ -72,7 +72,24 @@ function OrbMesh({ mood, reducedMotion }: Omit<OrbGLProps, "size">) {
 export function OrbGL({ mood, reducedMotion, size = 180 }: OrbGLProps) {
   return (
     <div style={{ width: size * 2.4, height: size * 2.4, flexShrink: 0 }}>
-      <Canvas dpr={[1, 2]} gl={{ antialias: true, alpha: true }} style={{ background: "transparent" }} onCreated={({ gl }) => { gl.setClearAlpha(0); }}>
+      {/* EffectComposer's final pass writes an opaque buffer, so an alpha context still
+          yields a visible rectangle. The verified combo (screenshot-checked in-browser):
+          (1) clear to pure black; (2) the orb BAND carries mix-blend-mode: screen (the
+          blend must live there — orb-hero's transform and the band's z-index isolate any
+          deeper blend from the page backdrop), so black contributes no light; (3) a
+          radial mask fades the bloom veil out before the canvas edge. All three are
+          load-bearing: without the mask the veil edge shows; without the band blend a
+          dark halo rings the orb. */}
+      <Canvas
+        dpr={[1, 2]}
+        gl={{ antialias: true, alpha: false }}
+        style={{
+          background: "#000",
+          maskImage: "radial-gradient(circle closest-side, rgba(0,0,0,1) 55%, rgba(0,0,0,0) 96%)",
+          WebkitMaskImage: "radial-gradient(circle closest-side, rgba(0,0,0,1) 55%, rgba(0,0,0,0) 96%)",
+        }}
+        onCreated={({ gl }) => { gl.setClearColor(0x000000, 1); }}
+      >
         <OrbMesh mood={mood} reducedMotion={reducedMotion} />
         <EffectComposer>
           <Bloom luminanceThreshold={0.85} intensity={1.8} mipmapBlur />

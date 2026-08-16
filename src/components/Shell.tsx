@@ -388,6 +388,10 @@ export default function Shell() {
           padding: "0 24px 8px",
           position: "relative",
           zIndex: 10,
+          // Composites the orb canvas's black clear as pure light over the page
+          // backdrop (see OrbGL.tsx) — must live at band level: orb-hero's transform
+          // and this band's z-index isolate any deeper blend from the backdrop.
+          mixBlendMode: "screen",
         }}
       >
         {/* Orb hero */}
