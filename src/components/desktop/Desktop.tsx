@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useOrgans, type OrganState } from "../../lib/organs/host";
 import OrganWindow from "./OrganWindow";
 import Dock from "./Dock";
@@ -233,6 +234,7 @@ export default function Desktop() {
       })}
 
       {/* Permission modal */}
+      <AnimatePresence>
       {modalOrgan && (
         <div
           style={{
@@ -247,7 +249,11 @@ export default function Desktop() {
           }}
           onClick={(e) => { if (e.target === e.currentTarget) setModalOrganId(null); }}
         >
-          <div
+          <motion.div
+            initial={{ opacity: 0, scale: 0.92, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.92, y: 12 }}
+            transition={{ type: "spring", stiffness: 400, damping: 30 }}
             style={{
               background: "var(--glass)",
               backdropFilter: "blur(var(--blur))",
@@ -330,9 +336,10 @@ export default function Desktop() {
                 Not now
               </button>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
 
       <Dock organs={organs} windowStates={windowStates} onTileClick={handleDockClick} />
     </div>

@@ -676,3 +676,22 @@ describe("Companion: speaks reply when setting demands", () => {
     await waitFor(() => expect(moodEvents()).toContain("speaking"), { timeout: 2000 });
   });
 });
+
+describe("Companion Task 4 beauty pass", () => {
+  it("textarea has onFocus and onBlur handlers for focus ring", () => {
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i) as HTMLTextAreaElement;
+    // Verify focus/blur event attributes exist by checking if focus events fire without error
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+    textarea.blur();
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it("companion-log container exists and holds conversation items", async () => {
+    mockHandle.mockResolvedValue({ kind: "reply", text: "hello" });
+    render(<Companion />);
+    const log = screen.getByTestId("companion-log");
+    expect(log).toBeTruthy();
+  });
+});

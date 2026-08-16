@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { EffectComposer, Bloom } from "@react-three/postprocessing";
+import { EffectComposer, Bloom, ChromaticAberration } from "@react-three/postprocessing";
 import * as THREE from "three";
 import { VERT, FRAG } from "./shaders";
 import { stepOrbState, breath, MOOD_TARGETS, hexToRgb, type OrbMood, type OrbState } from "../../lib/orb/state";
@@ -51,7 +51,7 @@ function OrbMesh({ mood, reducedMotion }: Omit<OrbGLProps, "size">) {
 
   return (
     <mesh>
-      <icosahedronGeometry args={[1.15, 24]} />
+      <icosahedronGeometry args={[1.55, 24]} />
       <shaderMaterial
         ref={matRef}
         vertexShader={VERT}
@@ -71,11 +71,12 @@ function OrbMesh({ mood, reducedMotion }: Omit<OrbGLProps, "size">) {
 
 export function OrbGL({ mood, reducedMotion, size = 180 }: OrbGLProps) {
   return (
-    <div style={{ width: size, height: size, flexShrink: 0 }}>
-      <Canvas dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
+    <div style={{ width: size * 2.4, height: size * 2.4, flexShrink: 0 }}>
+      <Canvas dpr={[1, 2]} gl={{ antialias: true, alpha: true }} style={{ background: "transparent" }} onCreated={({ gl }) => { gl.setClearAlpha(0); }}>
         <OrbMesh mood={mood} reducedMotion={reducedMotion} />
         <EffectComposer>
-          <Bloom luminanceThreshold={1} intensity={1.4} mipmapBlur />
+          <Bloom luminanceThreshold={0.85} intensity={1.8} mipmapBlur />
+          <ChromaticAberration offset={new THREE.Vector2(0.0009, 0.0006)} />
         </EffectComposer>
       </Canvas>
     </div>

@@ -80,4 +80,48 @@ describe("Field", () => {
     render(<Field />);
     expect(mockSubscribe).toHaveBeenCalledTimes(1);
   });
+
+  it("aurora layer has two child divs with radial-gradient backgrounds", () => {
+    render(<Field />);
+    const aurora = screen.getByTestId("aurora-layer");
+    const children = aurora.querySelectorAll("div");
+    expect(children.length).toBeGreaterThanOrEqual(2);
+    // Both should have background styles set (radial-gradient)
+    const bg1 = (children[0] as HTMLElement).style.background;
+    const bg2 = (children[1] as HTMLElement).style.background;
+    expect(bg1).toMatch(/radial-gradient/);
+    expect(bg2).toMatch(/radial-gradient/);
+  });
+
+  it("aurora initial background uses opacity 0.12 and 0.08 (not 0.07/0.05)", () => {
+    render(<Field />);
+    const aurora = screen.getByTestId("aurora-layer");
+    const children = aurora.querySelectorAll("div");
+    const bg1 = (children[0] as HTMLElement).style.background;
+    const bg2 = (children[1] as HTMLElement).style.background;
+    expect(bg1).toContain("0.12");
+    expect(bg2).toContain("0.08");
+  });
+
+  it("loom-mood event updates aurora background colors", async () => {
+    const { act } = await import("@testing-library/react");
+    render(<Field />);
+    const aurora = screen.getByTestId("aurora-layer");
+    const child1 = aurora.querySelectorAll("div")[0] as HTMLElement;
+
+    // Record initial background
+    const initialBg = child1.style.background;
+
+    // Fire a mood event with a different mood (thinking = #a78bfa)
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("loom-mood", { detail: { mood: "thinking" } })
+      );
+    });
+
+    // Background should have changed to reflect thinking color
+    const newBg = child1.style.background;
+    // The thinking mood color #a78bfa = rgb(167,139,250)
+    expect(newBg).toContain("167");
+  });
 });

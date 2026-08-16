@@ -262,8 +262,10 @@ export default function Shell() {
 
   // ----- ambient glow color -----
   const moodColor = MOOD_TARGETS[mood].color;
-  // 0x12 ≈ 7% alpha — the room shifts with the orb's mood, subtly
-  const ambientBg = `radial-gradient(900px at 50% 220px, ${moodColor}12, transparent 70%)`;
+  // 0x1e ≈ 12% alpha (idle), 0x2a ≈ 16% alpha (active) — the room shifts with the orb's mood
+  const isActiveMood = ACTIVE_MOODS.has(mood);
+  const glowAlpha = isActiveMood ? "2a" : "1e";
+  const ambientBg = `radial-gradient(900px at 50% 220px, ${moodColor}${glowAlpha}, transparent 70%)`;
 
   // ----- panel animation props -----
   const motionProps = reducedMotion
@@ -304,6 +306,15 @@ export default function Shell() {
         transition: `opacity ${ignitionDuration} ease`,
       } as React.CSSProperties}
     >
+      {/* Shell micro-interaction styles */}
+      <style>{`
+        details[open] .loom-timeline-chevron { transform: rotate(90deg); }
+        @keyframes loom-row-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        @media (prefers-reduced-motion: reduce) {
+          .loom-timeline-chevron { transition: none !important; }
+        }
+      `}</style>
+
       {/* Ambient particle field — behind everything, zIndex:1 */}
       <Field />
 
@@ -330,7 +341,7 @@ export default function Shell() {
             position: "fixed",
             inset: 0,
             background:
-              "radial-gradient(600px at var(--mx, 50%) var(--my, 30%), rgba(34,211,238,.05), transparent)",
+              "radial-gradient(600px at var(--mx, 50%) var(--my, 30%), rgba(34,211,238,.08), transparent)",
             pointerEvents: "none",
             zIndex: 1,
           }}
@@ -352,11 +363,13 @@ export default function Shell() {
           padding: "20px 24px 16px",
           position: "relative",
           zIndex: 10,
+          borderBottom: reducedMotion ? undefined : `1px solid ${moodColor}20`,
+          transition: reducedMotion ? undefined : "border-color 1.2s ease",
           ...staggerStyle,
         }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <b style={{ letterSpacing: ".4em", fontSize: 20, color: "var(--t1)" }}>LOOM</b>
+          <b style={{ letterSpacing: ".4em", fontSize: 20, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
           <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)" }}>sovereign console</small>
         </div>
 
@@ -507,7 +520,7 @@ export default function Shell() {
                 gap: 6,
               }}
             >
-              <span style={{ fontSize: 10, opacity: 0.6 }}>+</span>
+              <span className="loom-timeline-chevron" aria-hidden style={{ fontSize: 10, opacity: 0.6, display: "inline-block", transition: "transform 0.2s ease" }}>›</span>
               Timeline
             </summary>
             <div style={{ marginTop: 10 }}>

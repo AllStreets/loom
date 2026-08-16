@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { fleetChat, organWrite, organRead, organList, ttsSpeak, type OrganFile, type Msg, type ChatOpts } from "../lib/core";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
@@ -552,6 +553,8 @@ function dispatchFleetActivity(
 }
 
 export default function Companion() {
+  const rm = useReducedMotion() ?? false;
+  const [textareaFocused, setTextareaFocused] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [items, setItems] = useState<ConvoItem[]>([]);
@@ -993,12 +996,22 @@ export default function Companion() {
           marginBottom: items.length > 0 ? 16 : 0,
         }}
       >
+        <AnimatePresence initial={false}>
         {items.map((item) => {
           if (item.kind === "bubble") {
-            return item.role === "user" ? (
-              <UserBubble key={item.id} text={item.text} />
-            ) : (
-              <AssistantBubble key={item.id} text={item.text} />
+            return (
+              <motion.div
+                key={item.id}
+                initial={rm ? undefined : { opacity: 0, y: 8 }}
+                animate={rm ? undefined : { opacity: 1, y: 0 }}
+                transition={rm ? undefined : { type: "spring", stiffness: 400, damping: 30 }}
+              >
+                {item.role === "user" ? (
+                  <UserBubble text={item.text} />
+                ) : (
+                  <AssistantBubble text={item.text} />
+                )}
+              </motion.div>
             );
           }
           if (item.kind === "event-log") {
@@ -1028,6 +1041,7 @@ export default function Companion() {
           }
           return null;
         })}
+        </AnimatePresence>
       </div>
 
       {/* Input */}
@@ -1038,6 +1052,8 @@ export default function Companion() {
         placeholder="Talk to LOOM — ask, or ask it to build or change an organ"
         rows={3}
         disabled={busy}
+        onFocus={() => setTextareaFocused(true)}
+        onBlur={() => setTextareaFocused(false)}
         style={{
           width: "100%",
           boxSizing: "border-box",
@@ -1051,7 +1067,8 @@ export default function Companion() {
           resize: "vertical",
           outline: "none",
           cursor: busy ? "not-allowed" : "text",
-          transition: "background 0.15s",
+          transition: "background 0.15s, box-shadow 0.15s",
+          boxShadow: textareaFocused && !rm ? "0 0 0 1.5px var(--accent)" : "none",
         }}
       />
     </section>
