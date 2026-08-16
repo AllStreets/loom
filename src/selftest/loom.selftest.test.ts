@@ -547,10 +547,18 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
   });
 
   it("exemplars-store-growth: seeded record is retrievable; recordExperience grows the store", () => {
-    // Capture prior store state (selftest runs in Node with no real localStorage —
-    // experience.ts silently swallows errors, so we exercise what IS achievable: the API
-    // works without throwing and the retrieval round-trip functions correctly when a
-    // store is available).
+    // Selftest runs in Node where localStorage does not exist — install a minimal
+    // in-memory shim for this test so the store assertions run for real instead of
+    // silently skipping. Removed in finally.
+    const mem = new Map<string, string>();
+    // @ts-expect-error minimal shim for the Node selftest environment
+    globalThis.localStorage = {
+      getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
+      setItem: (k: string, v: string) => { mem.set(k, String(v)); },
+      removeItem: (k: string) => { mem.delete(k); },
+      clear: () => { mem.clear(); },
+    };
+    try {
 
     // Seed a successful counter-organ record
     const COUNTER_RECORD: BuildRecord = {
@@ -567,26 +575,19 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
 
     recordExperience(COUNTER_RECORD);
 
-    // The store must now contain the seeded record — verify via retrieval
+    // The store must now contain the seeded record — verify via retrieval (hard assertion:
+    // the shim guarantees a working store)
     const exemplars = retrieveExemplars("counter organ increment", 5);
-    // retrieveExemplars may return "" in Node (no localStorage) — if it returns content, validate it
-    if (exemplars.length > 0) {
-      expect(exemplars).toContain("counter");
-      console.info("[exemplars-store-growth] seeded counter record is retrievable from store");
-    } else {
-      // In Node without localStorage, the API silently no-ops — that is acceptable.
-      // Assert that recordExperience at minimum does not throw.
-      console.info("[exemplars-store-growth] localStorage not available in Node environment — recordExperience silently no-ops (expected)");
-    }
+    expect(exemplars, "seeded counter record must be retrievable").toContain("counter");
+    console.info("[exemplars-store-growth] seeded counter record is retrievable from store");
 
     // Now record a second (synthetic) success and verify store count grew
     const before = (() => {
-      try {
-        const raw = (typeof localStorage !== "undefined") ? localStorage.getItem("loom.exp.v1") : null;
-        if (!raw) return 0;
-        return (JSON.parse(raw) as unknown[]).length;
-      } catch { return 0; }
+      const raw = localStorage.getItem("loom.exp.v1");
+      if (!raw) return 0;
+      return (JSON.parse(raw) as unknown[]).length;
     })();
+    expect(before, "store must contain the seeded record").toBeGreaterThanOrEqual(1);
 
     recordExperience({
       ts: Date.now(),
@@ -598,19 +599,17 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     });
 
     const after = (() => {
-      try {
-        const raw = (typeof localStorage !== "undefined") ? localStorage.getItem("loom.exp.v1") : null;
-        if (!raw) return 0;
-        return (JSON.parse(raw) as unknown[]).length;
-      } catch { return 0; }
+      const raw = localStorage.getItem("loom.exp.v1");
+      if (!raw) return 0;
+      return (JSON.parse(raw) as unknown[]).length;
     })();
 
-    // If localStorage is available, the store MUST have grown by >= 1
-    if (before > 0 || after > 0) {
-      expect(after).toBeGreaterThanOrEqual(before + 1);
-      console.info(`[exemplars-store-growth] store grew from ${before} to ${after} records`);
-    } else {
-      console.info("[exemplars-store-growth] store not accessible in this environment — growth assertion skipped");
+    // The store MUST have grown by >= 1 (hard assertion — no environment skip)
+    expect(after).toBeGreaterThanOrEqual(before + 1);
+    console.info(`[exemplars-store-growth] store grew from ${before} to ${after} records`);
+    } finally {
+      // Remove the shim so no other selftest task sees a fake localStorage
+      delete (globalThis as { localStorage?: unknown }).localStorage;
     }
   });
 

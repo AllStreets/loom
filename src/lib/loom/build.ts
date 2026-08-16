@@ -115,7 +115,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
         emit("probe", "render repair failed: " + (probeResult.error ?? "unknown"));
         recordExperience({
           ts: Date.now(), kind: "build", request, organId, ok: false,
-          stage: "render", repairRounds: 0,
+          stage: "render", repairRounds: 1,
           errors: [probeResult.error ?? "render probe failed"],
         });
         return { ok: false, error: probeResult.error ?? "render probe failed", stage: "render", log };
