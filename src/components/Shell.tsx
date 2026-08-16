@@ -534,7 +534,14 @@ export default function Shell() {
               {commits.map((c) => (
                 <div
                   key={c.sha}
-                  style={{ fontSize: 13, padding: "3px 0", display: "flex", gap: 6, minWidth: 0 }}
+                  style={{
+                    fontSize: 13,
+                    padding: "3px 0",
+                    display: "flex",
+                    gap: 6,
+                    minWidth: 0,
+                    animation: reducedMotion ? undefined : "loom-row-fade 0.25s ease both",
+                  }}
                 >
                   <span
                     style={{ fontFamily: "var(--f-mono)", color: "var(--t3)", flexShrink: 0 }}

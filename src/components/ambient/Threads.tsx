@@ -53,8 +53,10 @@ export function threadPath(
   out.cp2y = midY * 0.5 + toY * 0.5 + ny * amp2;
 }
 
-const THREAD_ALPHA_IDLE = 0.12;
-const THREAD_ALPHA_FOCUS = 0.40;
+export const THREAD_ALPHA_IDLE = 0.12;
+export const THREAD_ALPHA_FOCUS = 0.40;
+export const THREAD_FOCUSED_WIDTH = 2.5;
+export const THREAD_SHADOW_BLUR = 14;
 const FOCUS_FADE_SPEED = 3.0; // alpha decay rate per second toward idle
 let _threadRgb = "34,211,238";
 

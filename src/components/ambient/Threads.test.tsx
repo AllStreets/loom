@@ -1,6 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom";
+import {
+  THREAD_ALPHA_IDLE,
+  THREAD_ALPHA_FOCUS,
+  THREAD_FOCUSED_WIDTH,
+  THREAD_SHADOW_BLUR,
+} from "./Threads";
 
 // Use vi.hoisted so variables are available when vi.mock factory runs (hoisted to top of file)
 const { mockSubscribe } = vi.hoisted(() => ({
@@ -100,16 +106,19 @@ describe("Threads", () => {
   });
 
   it("THREAD_ALPHA_IDLE constant is 0.12", () => {
-    // The constant is exported implicitly via the module — we verify it by importing
-    // the module and checking that static drawStatic uses THREAD_ALPHA_IDLE (0.12)
-    // This is an indirect check: just render and ensure the component mounts without error
-    render(<Threads />);
-    const canvas = screen.getByTestId("ambient-threads");
-    expect(canvas).toBeInTheDocument();
-    // If THREAD_ALPHA_IDLE changed from 0.12, the component would still mount,
-    // so we check the exported value directly via the const in the source
-    // (confirmed: THREAD_ALPHA_IDLE = 0.12 in Threads.tsx line 56)
-    expect(true).toBe(true);
+    expect(THREAD_ALPHA_IDLE).toBe(0.12);
+  });
+
+  it("THREAD_ALPHA_FOCUS constant is 0.40", () => {
+    expect(THREAD_ALPHA_FOCUS).toBe(0.40);
+  });
+
+  it("THREAD_FOCUSED_WIDTH constant is 2.5", () => {
+    expect(THREAD_FOCUSED_WIDTH).toBe(2.5);
+  });
+
+  it("THREAD_SHADOW_BLUR constant is 14", () => {
+    expect(THREAD_SHADOW_BLUR).toBe(14);
   });
 
   it("resize grip has data-testid='resize-grip' in OrganWindow", async () => {
