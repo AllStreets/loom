@@ -289,10 +289,13 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     const utterance = "hmm what about the thing from yesterday";
 
     // Wire askModel to the real rewriter via Ollama /api/chat directly
-    async function askModel(prompt: string): Promise<string> {
+    async function askModel(system: string, prompt: string): Promise<string> {
       const body = JSON.stringify({
         model: "qwen3:1.7b",
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ],
         stream: false,
         options: { temperature: 0.1, num_ctx: 2048 },
       });

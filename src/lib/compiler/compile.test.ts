@@ -102,10 +102,11 @@ describe("compile — normalized request with original utterance", () => {
     // Request normalized
     expect(result.request).toBe("something strange here");
     // askModel called with normalized form (not the original)
+    // askModel signature is (system, prompt) — utterance is in the prompt (index 1)
     expect(askModel).toHaveBeenCalled();
-    const callArg = askModel.mock.calls[0]?.[0];
-    expect(callArg).toContain("something strange here");
-    expect(callArg).not.toContain("  ");
+    const promptArg = askModel.mock.calls[0]?.[1] as string;
+    expect(promptArg).toContain("something strange here");
+    expect(promptArg).not.toContain("  ");
   });
 });
 
@@ -120,8 +121,8 @@ describe("compile — model fallback path", () => {
     expect(result.source).toBe("model");
     expect(result.intent).toBe("build_organ");
     expect(askModel).toHaveBeenCalledOnce();
-    // Verify askModel receives the normalized form
-    const prompt = askModel.mock.calls[0]?.[0] || "";
+    // Verify askModel receives the normalized form in the prompt (index 1)
+    const prompt = (askModel.mock.calls[0]?.[1] as string) || "";
     expect(prompt).toContain("something ambiguous");
   });
 
@@ -148,5 +149,61 @@ describe("compile — model fallback path", () => {
 
     expect(result.source).toBe("model");
     expect(result.organId).toBe("water-tracker");
+  });
+});
+
+// ---- Task 2: history threading --------------------------------------------
+
+describe("compile — history threading", () => {
+  it("passes last 3 turns of history to intent classification", async () => {
+    // Use an utterance that forces model fallback (rules return null)
+    const askModel = vi
+      .fn()
+      .mockResolvedValue('{"intent":"converse","organId":null}');
+    const history = [
+      { role: "user", content: "turn 1" },
+      { role: "assistant", content: "reply 1" },
+      { role: "user", content: "turn 2" },
+      { role: "assistant", content: "reply 2" },
+      { role: "user", content: "turn 3" },
+      { role: "assistant", content: "reply 3" },
+      { role: "user", content: "turn 4" },
+    ];
+    await compile("blorp fizzle quux", [], askModel, history);
+    expect(askModel).toHaveBeenCalledOnce();
+    // History is passed — last 3 entries appear in the prompt
+    const [, promptArg] = askModel.mock.calls[0] as [string, string];
+    expect(promptArg).toContain("turn 3");
+    expect(promptArg).toContain("reply 3");
+    expect(promptArg).toContain("turn 4");
+    // Earlier turns are not included
+    expect(promptArg).not.toContain("turn 1");
+  });
+
+  it("truncates each history turn content to 160 chars", async () => {
+    const longContent = "x".repeat(300);
+    const askModel = vi
+      .fn()
+      .mockResolvedValue('{"intent":"converse","organId":null}');
+    await compile("blorp fizzle quux", [], askModel, [
+      { role: "user", content: longContent },
+    ]);
+    const [, promptArg] = askModel.mock.calls[0] as [string, string];
+    // Should include the first 160 chars but not the full 300
+    expect(promptArg).toContain("x".repeat(160));
+    expect(promptArg).not.toContain("x".repeat(161));
+  });
+
+  it("resolves anaphora from history via rules (no model call needed)", async () => {
+    const askModel = vi.fn();
+    const history = [
+      { role: "assistant", content: "Built water-tracker: organ ready. Passed in 0 repair round(s)." },
+    ];
+    const result = await compile("make it blue", [], askModel, history);
+    // Anaphora resolved by rules — no model call
+    expect(result.intent).toBe("edit_organ");
+    expect(result.organId).toBe("water-tracker");
+    expect(result.source).toBe("rules");
+    expect(askModel).not.toHaveBeenCalled();
   });
 });

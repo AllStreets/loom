@@ -506,8 +506,11 @@ export default function Companion() {
           })
           .filter((id): id is string => Boolean(id));
       },
-      askModel: (p: string) =>
-        fleetChat("rewriter", [{ role: "user", content: p }]),
+      askModel: (system: string, prompt: string) =>
+        fleetChat("rewriter", [
+          { role: "system", content: system },
+          { role: "user", content: prompt },
+        ]),
     };
 
     let turn: CompanionTurn;
@@ -558,9 +561,11 @@ export default function Companion() {
           id: nextId(),
         });
         window.dispatchEvent(new CustomEvent("organs-changed"));
+        const repairRounds = result.log.filter((e) => e.phase === "repair").length;
+        const historyMsg = `Built ${result.organId}: organ ready. Passed in ${repairRounds} repair round(s).`;
+        history.current.push({ role: "assistant", content: historyMsg });
         const oneliner = `${result.organId} is ready — approve it below.`;
         appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
-        // Do NOT push status string to history
       } else {
         appendItem({
           kind: "failure",
@@ -569,6 +574,8 @@ export default function Companion() {
           utterance: text,
           id: nextId(),
         });
+        const failMsg = `Build of ${result.organId ?? "organ"} failed at ${result.stage ?? "unknown"}.`;
+        history.current.push({ role: "assistant", content: failMsg });
       }
     } else if (turn.kind === "edit") {
       const result = turn.result;
@@ -581,9 +588,11 @@ export default function Companion() {
           id: nextId(),
         });
         window.dispatchEvent(new CustomEvent("organs-changed"));
+        const requestSummary = text.slice(0, 80);
+        const historyMsg = `Edited ${result.organId}: ${requestSummary}.`;
+        history.current.push({ role: "assistant", content: historyMsg });
         const oneliner = `${result.organId} updated.`;
         appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
-        // Do NOT push status string to history
       } else {
         appendItem({
           kind: "failure",
@@ -599,7 +608,6 @@ export default function Companion() {
       );
       const oneliner = `Opening ${turn.organId} below.`;
       appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
-      // Do NOT push status string to history
     }
 
     // Determine if we should speak the reply

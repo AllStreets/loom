@@ -94,16 +94,15 @@ describe("classifyByRules — build_organ", () => {
     expect(result?.intent).toBe("build_organ");
   });
 
-  it("does NOT return build_organ if an existing organ is mentioned", () => {
-    // 'build' verb + existing organ mention => should NOT be build_organ;
-    // edit_organ takes precedence when an organ IS mentioned with a change verb.
-    // 'build' is not in the edit-verb list, so without a change verb it falls to act_on_organ.
+  it("returns build_organ even when an existing organ substring appears (BUILD_PHRASE precedence)", () => {
+    // BUILD_PHRASE_RE takes priority over organ-mention detection to prevent
+    // misfires like "make me something like notes but for tasks" → edit_organ.
+    // "build the water tracker faster" contains BUILD_PHRASE "build" and mentions
+    // "water-tracker" but the user's intent is to build something, not act on it.
     const result = classifyByRules("build the water tracker faster", [
       "water-tracker",
     ]);
-    // build verb present but so is organ mention — build_organ requires NO organ mention
-    // result should be act_on_organ (organ mention, no change verb from the edit list)
-    expect(result?.intent).not.toBe("build_organ");
+    expect(result?.intent).toBe("build_organ");
   });
 });
 
@@ -177,6 +176,88 @@ describe("classifyByRules — null (rules unsure)", () => {
   });
 });
 
+// ---- Task 2: misfire regression -------------------------------------------
+
+describe("classifyByRules — misfire regression", () => {
+  it("'make me something like notes but for tasks' → build_organ not edit_organ", () => {
+    // Regression: EDIT_VERB 'make' + organ-substring 'notes' used to beat BUILD_PHRASE.
+    // BUILD_PHRASE_RE must win regardless of organ id substrings in the utterance.
+    const result = classifyByRules(
+      "make me something like notes but for tasks",
+      ["notes"]
+    );
+    expect(result).not.toBeNull();
+    expect(result!.intent).toBe("build_organ");
+    expect(result!.source).toBe("rules");
+  });
+
+  it("'make me a new habit tracker similar to water-tracker' → build_organ", () => {
+    const result = classifyByRules(
+      "make me a new habit tracker similar to water-tracker",
+      ["water-tracker"]
+    );
+    expect(result!.intent).toBe("build_organ");
+  });
+
+  it("'i need a task list like my notes organ' → build_organ", () => {
+    const result = classifyByRules(
+      "i need a task list like my notes organ",
+      ["notes"]
+    );
+    expect(result!.intent).toBe("build_organ");
+  });
+});
+
+// ---- Task 2: anaphora resolution ------------------------------------------
+
+describe("classifyByRules — anaphora resolution", () => {
+  it("'make it blue' after 'Built water-tracker:...' → edit_organ targeting water-tracker", () => {
+    const history = [
+      { role: "assistant", content: "Built water-tracker: organ ready. Passed in 0 repair round(s)." },
+    ];
+    const result = classifyByRules("make it blue", [], history);
+    expect(result).not.toBeNull();
+    expect(result!.intent).toBe("edit_organ");
+    expect(result!.organId).toBe("water-tracker");
+    expect(result!.source).toBe("rules");
+    expect(result!.confidence).toBe(0.9);
+  });
+
+  it("'change that to dark mode' after 'Edited budget-tool:...' → edit_organ targeting budget-tool", () => {
+    const history = [
+      { role: "user", content: "add a delete button" },
+      { role: "assistant", content: "Edited budget-tool: add a delete button." },
+    ];
+    const result = classifyByRules("change that to dark mode", [], history);
+    expect(result!.intent).toBe("edit_organ");
+    expect(result!.organId).toBe("budget-tool");
+  });
+
+  it("anaphora with edit verb but empty history → rules return null (fall through to model)", () => {
+    const result = classifyByRules("make it blue", [], []);
+    expect(result).toBeNull();
+  });
+
+  it("anaphora with edit verb but no assistant organ message in history → rules return null", () => {
+    const history = [
+      { role: "user", content: "build me a counter" },
+    ];
+    const result = classifyByRules("make it blue", [], history);
+    expect(result).toBeNull();
+  });
+
+  it("'update this one' resolves to most recent built organ in history", () => {
+    const history = [
+      { role: "assistant", content: "Built notes: organ ready. Passed in 0 repair round(s)." },
+      { role: "assistant", content: "Built water-tracker: organ ready. Passed in 0 repair round(s)." },
+    ];
+    // Most recent (last) assistant organ should win
+    const result = classifyByRules("update this one", [], history);
+    expect(result!.intent).toBe("edit_organ");
+    expect(result!.organId).toBe("water-tracker");
+  });
+});
+
 // ---- classifyIntent (with model fallback) ----------------------------------
 
 describe("classifyIntent — rules path", () => {
@@ -239,5 +320,27 @@ describe("classifyIntent — model fallback", () => {
     expect(result.intent).toBe("converse");
     expect(result.confidence).toBe(0.3);
     expect(result.source).toBe("model");
+  });
+
+  it("passes few-shot system message and history block to askModel", async () => {
+    const askModel = vi
+      .fn()
+      .mockResolvedValue('{"intent":"edit_organ","organId":"notes"}');
+    // Use anaphora with no edit verb → rules return null (anaphora without edit verb
+    // falls through because step 1 requires BOTH hasAnaphora AND hasEditVerb).
+    // "look at it" — "look" is not in EDIT_VERB_RE, so rules can't decide.
+    const history = [
+      { role: "assistant", content: "Built notes: organ ready. Passed in 0 repair round(s)." },
+    ];
+    await classifyIntent("show it to me", [], askModel, history);
+    expect(askModel).toHaveBeenCalledOnce();
+    const [systemArg, promptArg] = askModel.mock.calls[0] as [string, string];
+    // System message contains few-shot examples
+    expect(systemArg).toContain("build_organ");
+    expect(systemArg).toContain("edit_organ");
+    expect(systemArg).toContain("converse");
+    // Prompt includes history context
+    expect(promptArg).toContain("Built notes");
+    expect(promptArg).toContain("show it to me");
   });
 });
