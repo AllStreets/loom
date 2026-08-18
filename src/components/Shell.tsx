@@ -399,7 +399,9 @@ export default function Shell() {
         data-testid="shell-top-bar"
         style={{
           flexShrink: 0,
-          width: "100%",
+          // No explicit width: as a flex-column child the header stretches to the
+          // container; width:100% + padding overflows (no global border-box) and
+          // clips the right-edge controls.
           display: "flex",
           alignItems: "baseline",
           justifyContent: "space-between",
