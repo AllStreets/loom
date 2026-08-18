@@ -45,6 +45,7 @@ export type SettingsKey =
   | "model.builder"
   | "model.companion"
   | "model.rewriter"
+  | "model.cloudBuilder"
   | "cockpit.deck";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
@@ -55,6 +56,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "model.builder",
   "model.companion",
   "model.rewriter",
+  "model.cloudBuilder",
   "cockpit.deck",
 ];
 
@@ -67,6 +69,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "voice.speakReplies": ["always", "whenSpoken", "never"],
   "orb.tier": ["auto", "flat"],
   "loom.reviewBeforeSave": ["0", "1"],
+  "model.cloudBuilder": ["off", "anthropic"],
   "cockpit.deck": ["void", "globe"],
 };
 
@@ -78,6 +81,7 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "model.builder": "",
   "model.companion": "",
   "model.rewriter": "",
+  "model.cloudBuilder": "off",
   "cockpit.deck": "void",
 };
 

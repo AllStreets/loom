@@ -279,6 +279,152 @@ const ORGAN_JS = `export default {
     modelsNote.textContent = "Absent models fall back automatically to the next available option.";
     modelsPage.appendChild(modelsNote);
 
+    // ---- Cloud builder section ------------------------------------------------
+    modelsPage.appendChild(ui.section("Cloud builder"));
+
+    var cloudNote = document.createElement("div");
+    cloudNote.style.fontSize = "12px";
+    cloudNote.style.color = ui.tokens.t3;
+    cloudNote.style.marginBottom = "8px";
+    cloudNote.textContent = "By default all builds run on your local fleet. Enable to use claude-opus-4-8 for builder calls with automatic local fallback.";
+    modelsPage.appendChild(cloudNote);
+
+    // Enable/disable toggle
+    var cloudEnableRow = document.createElement("div");
+    cloudEnableRow.style.display = "flex";
+    cloudEnableRow.style.gap = "6px";
+    cloudEnableRow.style.marginBottom = "10px";
+
+    var cloudOffBtn = document.createElement("button");
+    cloudOffBtn.className = "lui-btn";
+    cloudOffBtn.style.borderRadius = "8px";
+    cloudOffBtn.style.padding = "7px 14px";
+    cloudOffBtn.style.fontWeight = "600";
+    cloudOffBtn.style.fontSize = "14px";
+    cloudOffBtn.style.cursor = "pointer";
+    cloudOffBtn.style.fontFamily = "inherit";
+    cloudOffBtn.style.transition = "filter .15s, background .15s, border-color .15s";
+    cloudOffBtn.dataset.action = "cloud-builder-off";
+    cloudOffBtn.textContent = "Local only";
+
+    var cloudOnBtn = document.createElement("button");
+    cloudOnBtn.className = "lui-btn";
+    cloudOnBtn.style.borderRadius = "8px";
+    cloudOnBtn.style.padding = "7px 14px";
+    cloudOnBtn.style.fontWeight = "600";
+    cloudOnBtn.style.fontSize = "14px";
+    cloudOnBtn.style.cursor = "pointer";
+    cloudOnBtn.style.fontFamily = "inherit";
+    cloudOnBtn.style.transition = "filter .15s, background .15s, border-color .15s";
+    cloudOnBtn.dataset.action = "cloud-builder-on";
+    cloudOnBtn.textContent = "Claude (cloud)";
+
+    function refreshCloudToggle(current) {
+      var isOn = current === "anthropic";
+      cloudOffBtn.style.background = !isOn ? ui.tokens.accent : "transparent";
+      cloudOffBtn.style.color = !isOn ? "#04222b" : ui.tokens.t1;
+      cloudOffBtn.style.border = !isOn ? "none" : "1px solid rgba(255,255,255,.18)";
+      cloudOnBtn.style.background = isOn ? ui.tokens.accent : "transparent";
+      cloudOnBtn.style.color = isOn ? "#04222b" : ui.tokens.t1;
+      cloudOnBtn.style.border = isOn ? "none" : "1px solid rgba(255,255,255,.18)";
+    }
+
+    cloudOffBtn.addEventListener("click", function() {
+      settings.set("model.cloudBuilder", "off");
+      refreshCloudToggle("off");
+    });
+    cloudOnBtn.addEventListener("click", function() {
+      settings.set("model.cloudBuilder", "anthropic");
+      refreshCloudToggle("anthropic");
+    });
+
+    cloudEnableRow.appendChild(cloudOffBtn);
+    cloudEnableRow.appendChild(cloudOnBtn);
+    modelsPage.appendChild(cloudEnableRow);
+
+    // API key input (password type — write-only)
+    var keyLabel = document.createElement("div");
+    keyLabel.style.fontSize = "12.5px";
+    keyLabel.style.color = ui.tokens.t3;
+    keyLabel.style.marginBottom = "4px";
+    keyLabel.textContent = "Anthropic API key";
+    modelsPage.appendChild(keyLabel);
+
+    var keyStatusSpan = document.createElement("span");
+    keyStatusSpan.style.fontSize = "12px";
+    keyStatusSpan.style.color = ui.tokens.t3;
+    keyStatusSpan.style.marginLeft = "8px";
+
+    var keyInp = document.createElement("input");
+    keyInp.type = "password";
+    keyInp.placeholder = "sk-ant-...";
+    keyInp.autocomplete = "off";
+    keyInp.dataset.action = "cloud-key-input";
+    keyInp.style.background = "rgba(255,255,255,.05)";
+    keyInp.style.border = "1px solid rgba(255,255,255,.12)";
+    keyInp.style.borderRadius = "6px";
+    keyInp.style.color = ui.tokens.t1;
+    keyInp.style.fontFamily = "inherit";
+    keyInp.style.fontSize = "13px";
+    keyInp.style.padding = "6px 10px";
+    keyInp.style.width = "100%";
+    keyInp.style.boxSizing = "border-box";
+
+    modelsPage.appendChild(keyInp);
+
+    var keySaveBtn = ui.button("Save key", { variant: "primary", action: "cloud-key-save" });
+    var keyClearBtn = ui.button("Clear", { variant: "ghost", action: "cloud-key-clear" });
+    var keyBtnRow = ui.row(keySaveBtn, keyClearBtn, keyStatusSpan);
+    keyBtnRow.style.marginTop = "6px";
+    modelsPage.appendChild(keyBtnRow);
+
+    function refreshKeyStatus() {
+      settings.cloudKeyPresent().then(function(present) {
+        if (present) {
+          keyStatusSpan.textContent = "key saved";
+          keyStatusSpan.style.color = ui.tokens.go || "#22c55e";
+          keyInp.placeholder = "sk-ant-... (key saved -- enter new to replace)";
+        } else {
+          keyStatusSpan.textContent = "";
+          keyInp.placeholder = "sk-ant-...";
+        }
+      }).catch(function() {
+        keyStatusSpan.textContent = "";
+      });
+    }
+
+    keySaveBtn.addEventListener("click", function() {
+      var k = keyInp.value.trim();
+      if (!k) return;
+      keySaveBtn.disabled = true;
+      keySaveBtn.textContent = "Saving...";
+      settings.cloudKeySet(k).then(function() {
+        keyInp.value = "";
+        keySaveBtn.textContent = "Save key";
+        keySaveBtn.disabled = false;
+        refreshKeyStatus();
+      }).catch(function(err) {
+        keySaveBtn.textContent = "Save key";
+        keySaveBtn.disabled = false;
+        keyStatusSpan.textContent = String(err);
+        keyStatusSpan.style.color = ui.tokens.danger;
+      });
+    });
+
+    keyClearBtn.addEventListener("click", function() {
+      keyClearBtn.disabled = true;
+      settings.cloudKeyClear().then(function() {
+        keyClearBtn.disabled = false;
+        keyInp.value = "";
+        refreshKeyStatus();
+      }).catch(function() {
+        keyClearBtn.disabled = false;
+      });
+    });
+
+    refreshCloudToggle(settings.get("model.cloudBuilder") || "off");
+    refreshKeyStatus();
+
     var modelRoleCards = {};
 
     var ROLES = ["builder", "companion", "rewriter"];

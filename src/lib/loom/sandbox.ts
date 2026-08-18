@@ -70,6 +70,9 @@ const freshLoom = () => {
         settingsMap.set("model." + role, tag);
         return { ok: true };
       },
+      cloudKeyPresent: async function() { return settingsMap.has("__cloudKey") && !!settingsMap.get("__cloudKey"); },
+      cloudKeySet: async function(key) { settingsMap.set("__cloudKey", key); },
+      cloudKeyClear: async function() { settingsMap.delete("__cloudKey"); },
     },
   };
 };

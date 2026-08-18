@@ -4,7 +4,7 @@ import { withFlight } from "../loom/flight";
 import { runGateWithRepair } from "../loom/gateRepair";
 import { recordExperience } from "../loom/experience";
 import type { gate } from "../loom/validate";
-import type { organWrite, organRead, OrganFile, Msg, ChatOpts } from "../core";
+import type { organWrite, organRead, OrganFile, Msg, ChatOpts, Brain } from "../core";
 import type { BuildEvent, BuildResult } from "../loom/build";
 
 export type EditDeps = {
@@ -14,6 +14,8 @@ export type EditDeps = {
   gate: typeof gate;
   onEvent?: (e: BuildEvent) => void;
   review?: (files: OrganFile[]) => Promise<boolean>;
+  /** Optional: returns the brain used by the most recent builder call. */
+  getBrain?: () => Brain;
 };
 
 export async function editOrgan(
@@ -116,6 +118,7 @@ export async function editOrgan(
         stage: gateResult.stage, repairRounds: gateResult.repairRounds,
         code: newCode, tests,
         errors: [gateResult.errors],
+        brain: deps.getBrain?.() ?? "local",
       });
       return { ok: false, error: gateResult.errors, stage: gateResult.stage, log };
     }
@@ -148,13 +151,17 @@ export async function editOrgan(
     const sha = await deps.write(organId, outputFiles, commitMsg);
     emit("write", "committed " + sha);
 
+    const brain: Brain = deps.getBrain?.() ?? "local";
+    const brainLabel = brain === "cloud" ? "claude-opus-4-8" : "local fleet";
+    emit("brain", `built by ${brainLabel}`);
     recordExperience({
       ts: Date.now(), kind: "edit", request, organId, ok: true,
       repairRounds,
       code: finalCode, tests: finalTests,
+      brain,
     });
 
-    return { ok: true, organId, sha, log };
+    return { ok: true, organId, sha, log, brain };
 
     } catch (err) {
       emit("error", String(err));

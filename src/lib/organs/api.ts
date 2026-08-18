@@ -1,4 +1,4 @@
-import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, FLEET_DEFAULTS, type Msg, type VoiceStatus } from "../core";
+import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, cloudKeyPresent as coreCloudKeyPresent, cloudKeySet as coreCloudKeySet, cloudKeyClear as coreCloudKeyClear, FLEET_DEFAULTS, type Msg, type VoiceStatus } from "../core";
 import { getSetting, setSetting, isValidModelTag, VOICE_IDS, VOICE_LABELS } from "../voice/settings";
 import { startRecording } from "../voice/recorder";
 import { playWav } from "../voice/player";
@@ -29,6 +29,9 @@ export type LoomSettingsApi = {
   setup(onPct?: (pct: number) => void): Promise<void>;
   models(): Promise<ModelEntry[]>;
   setModel(role: string, tag: string): Promise<{ ok: boolean; error?: string }>;
+  cloudKeyPresent(): Promise<boolean>;
+  cloudKeySet(key: string): Promise<void>;
+  cloudKeyClear(): Promise<void>;
 };
 
 export type LoomApi = {
@@ -50,6 +53,9 @@ export type ApiDeps = {
   playWav?: typeof playWav;
   listenProgress?: (cb: (pct: number) => void) => Promise<() => void>;
   fleetStatus?: typeof fleetStatus;
+  cloudKeyPresent?: typeof coreCloudKeyPresent;
+  cloudKeySet?: typeof coreCloudKeySet;
+  cloudKeyClear?: typeof coreCloudKeyClear;
 };
 
 export function makeLoomApi(
@@ -70,6 +76,9 @@ export function makeLoomApi(
   const _ttsSpeak = deps.ttsSpeak ?? ttsSpeak;
   const _startRecording = deps.startRecording ?? startRecording;
   const _playWav = deps.playWav ?? playWav;
+  const _cloudKeyPresent = deps.cloudKeyPresent ?? coreCloudKeyPresent;
+  const _cloudKeySet = deps.cloudKeySet ?? coreCloudKeySet;
+  const _cloudKeyClear = deps.cloudKeyClear ?? coreCloudKeyClear;
 
   // Default progress listener uses Tauri event system
   const _listenProgress = deps.listenProgress ?? (async (cb: (pct: number) => void) => {
@@ -201,6 +210,18 @@ export function makeLoomApi(
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
+      },
+      async cloudKeyPresent() {
+        need("settings");
+        return _cloudKeyPresent();
+      },
+      async cloudKeySet(key) {
+        need("settings");
+        return _cloudKeySet(key);
+      },
+      async cloudKeyClear() {
+        need("settings");
+        return _cloudKeyClear();
       },
     },
   };

@@ -13,6 +13,8 @@ export type BuildRecord = {
   tests?: string;
   failedTests?: string[];
   errors?: string[];
+  /** Which brain built this organ: "local" = local fleet, "cloud" = claude-opus-4-8 */
+  brain?: "local" | "cloud";
 };
 
 const STORE_KEY = "loom.exp.v1";

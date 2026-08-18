@@ -8,6 +8,95 @@ import { files as noteFiles } from "../organs/seeds/notes";
 import { recordExperience, retrieveExemplars } from "../lib/loom/experience";
 import type { BuildRecord } from "../lib/loom/experience";
 
+// ── Cloud builder contract selftest ───────────────────────────────────────────
+// Env-gated: only runs when ANTHROPIC_API_KEY is present in the environment.
+// When absent, prints a VISIBLE skip notice (not silently passing).
+
+describe("cloud-builder selftest", { timeout: 60_000 }, () => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+
+  it("cloud path: ANTHROPIC_API_KEY gate", async () => {
+    if (!apiKey) {
+      console.info(
+        "\n[cloud-selftest] SKIP — ANTHROPIC_API_KEY not set in environment.\n" +
+        "  To run the cloud selftest: ANTHROPIC_API_KEY=sk-ant-... npm run selftest\n"
+      );
+      // Visible skip — NOT a silent pass; we use a special marker so CI logs show it clearly
+      console.warn("[cloud-selftest] SKIPPED (no key) — this is expected in local-only mode");
+      return; // test passes but cloud was not exercised
+    }
+
+    // Mirror cloud.rs request shape exactly (same model, headers, endpoint)
+    const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
+    const ANTHROPIC_MODEL = "claude-opus-4-8";
+    const ANTHROPIC_VERSION = "2023-06-01";
+
+    const FIXED_MANIFEST = JSON.stringify({
+      id: "cloud-test-organ",
+      name: "Cloud Test",
+      description: "A minimal organ built via cloud.",
+      version: 1,
+      permissions: ["storage"],
+    });
+
+    const system = organSystemPrompt("manifest");
+    const user = "Build a minimal counter organ.";
+
+    // Make the Anthropic request exactly as cloud.rs does
+    const body = JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 2048,
+      system,
+      messages: [{ role: "user", content: user }],
+      // NO thinking param (per spec)
+    });
+
+    const resp = await fetch(ANTHROPIC_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+      },
+      body,
+      signal: AbortSignal.timeout(45_000),
+    });
+
+    console.info(`[cloud-selftest] HTTP status: ${resp.status}`);
+    expect(resp.status, `Anthropic returned ${resp.status} — check the API key`).toBe(200);
+
+    const json = await resp.json() as {
+      model: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+
+    // Validate response shape mirrors what cloud.rs expects
+    expect(Array.isArray(json.content), "response must have a content array").toBe(true);
+    const textBlocks = json.content.filter((b) => b.type === "text");
+    expect(textBlocks.length, "at least one text content block required").toBeGreaterThan(0);
+
+    const responseText = textBlocks.map((b) => b.text ?? "").join("");
+    expect(responseText.length, "response text must be non-empty").toBeGreaterThan(0);
+
+    // Validate the model matches our constant
+    expect(json.model, "response model must match claude-opus-4-8").toContain("claude-opus-4-8");
+
+    // Try parsing as a manifest
+    const code = extractCode(responseText);
+    const result = manifestGuard(code);
+
+    console.info(`[cloud-selftest] response length: ${responseText.length} chars`);
+    console.info(`[cloud-selftest] manifest guard: ${result.ok ? "PASS" : "FAIL — " + (result as { ok: false; error: string }).error}`);
+    console.info(`[cloud-selftest] brain: cloud, model: ${ANTHROPIC_MODEL}`);
+
+    // Gate pass assertion
+    expect(result.ok, `cloud-built manifest failed gate: ${!result.ok ? (result as { ok: false; error: string }).error : ""}`).toBe(true);
+    if (result.ok) {
+      console.info(`[cloud-selftest] organ id: ${result.manifest.id} — brain:cloud recorded`);
+    }
+  });
+});
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 async function pickBuilder(): Promise<string> {

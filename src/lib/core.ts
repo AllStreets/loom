@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getSetting } from "./voice/settings";
 
+// ── Cloud builder types ────────────────────────────────────────────────────────
+
+export type Brain = "local" | "cloud";
+export type BuilderChatResult = { text: string; brain: Brain };
+
 // ── Voice types ────────────────────────────────────────────────────────────────
 
 export type VoicePresence = { id: string; label: string; present: boolean };
@@ -74,3 +79,69 @@ export const sttTranscribe = (samples: number[]) =>
   invoke<string>("stt_transcribe", { samples });
 export const ttsSpeak = (text: string, voiceId: string) =>
   invoke<number[]>("tts_speak", { text, voiceId });
+
+// ── Cloud builder wrappers ─────────────────────────────────────────────────────
+
+export const cloudChat = (system: string, messages: Msg[], maxTokens?: number) =>
+  invoke<string>("cloud_chat", { system, messages, maxTokens: maxTokens ?? null });
+
+export const cloudKeySet = (key: string) =>
+  invoke<void>("cloud_key_set", { key });
+
+export const cloudKeyPresent = () =>
+  invoke<boolean>("cloud_key_present");
+
+export const cloudKeyClear = () =>
+  invoke<void>("cloud_key_clear");
+
+// ── builderChat — the single cloud-override seam ────────────────────────────────
+//
+// This is the ONLY entry point for builder-role model calls.
+// - When model.cloudBuilder == "anthropic" AND a key is present → tries cloud first,
+//   falls back to fleetChat on any cloud error (emits brain "local").
+// - Otherwise → fleetChat (brain "local").
+// Companion/rewriter roles NEVER flow through here (they call fleetChat directly).
+//
+// The `system` and `messages` arguments mirror what fleet_chat receives:
+// - system is passed as the first system-role message when using cloud
+// - For cloud: system is extracted from messages[0] if role="system", else passed as ""
+
+export async function builderChat(
+  messages: Msg[],
+  opts?: ChatOpts,
+): Promise<BuilderChatResult> {
+  const cloudSetting = getSetting("model.cloudBuilder");
+
+  if (cloudSetting === "anthropic") {
+    // Extract system message if present as first message
+    let systemMsg = "";
+    let chatMessages = messages;
+    if (messages.length > 0 && messages[0].role === "system") {
+      systemMsg = messages[0].content;
+      chatMessages = messages.slice(1);
+    }
+
+    // Check if key is configured — avoid a round-trip if not
+    let keyPresent = false;
+    try {
+      keyPresent = await cloudKeyPresent();
+    } catch {
+      // cloud not available — fall through to local
+    }
+
+    if (keyPresent) {
+      try {
+        const text = await cloudChat(systemMsg, chatMessages, opts?.numCtx ? undefined : undefined);
+        return { text, brain: "cloud" };
+      } catch {
+        // Cloud error → fall back to local; caller will log "cloud unavailable"
+        const text = await fleetChat("builder", messages, opts);
+        return { text, brain: "local" };
+      }
+    }
+  }
+
+  // Default: local fleet
+  const text = await fleetChat("builder", messages, opts);
+  return { text, brain: "local" };
+}
