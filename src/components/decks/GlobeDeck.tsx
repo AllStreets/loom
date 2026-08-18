@@ -1,8 +1,20 @@
 /**
  * GlobeDeck.tsx — AUSPEX globe iframe deck
- * Loads the bundled AUSPEX static app from /decks/auspex/index.html.
+ * Loads the bundled AUSPEX static app into an iframe.
+ *
+ * Origin isolation:
+ *   DEV  (Vite): src="/decks/auspex/index.html" — shared-origin with LOOM shell.
+ *        Shared localStorage is acceptable in dev only (documented debt).
+ *   PROD (Tauri bundled): src="deck://localhost/index.html" — custom protocol,
+ *        cross-origin with LOOM's tauri://localhost origin. localStorage is
+ *        ISOLATED per the deck origin (closes reviewer I3 from Stage 1).
+ *
+ *   DECK_URL and DECK_ORIGIN are the single source of truth (src/lib/decks/config.ts).
+ *   All postMessage calls use DECK_ORIGIN as targetOrigin — never a scattered string.
+ *
  * sandbox="allow-scripts allow-same-origin" — allow-same-origin is required
- * so the globe's Supabase fetches and localStorage (bridge poller opt-in) work.
+ * so the globe's Supabase fetches and localStorage work within its OWN origin.
+ * In prod, "same-origin" refers to deck://localhost, not to LOOM's origin.
  * Without it, localStorage reads throw SecurityError and all data feeds break.
  *
  * interact prop controls whether the iframe captures pointer events.
@@ -22,6 +34,7 @@
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
 import { useReducedMotion } from "framer-motion";
 import type { BridgeCmd } from "../../lib/decks/commands";
+import { DECK_URL, DECK_ORIGIN } from "../../lib/decks/config";
 
 interface GlobeDeckProps {
   interact: boolean;
@@ -88,7 +101,7 @@ export function postDeckCommand(
   iframeRef: React.RefObject<HTMLIFrameElement | null>,
   cmd: object
 ) {
-  iframeRef.current?.contentWindow?.postMessage({ loomDeck: true, cmd }, window.location.origin);
+  iframeRef.current?.contentWindow?.postMessage({ loomDeck: true, cmd }, DECK_ORIGIN);
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -182,7 +195,7 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
       >
         <iframe
           ref={iframeRef}
-          src="/decks/auspex/index.html"
+          src={DECK_URL}
           sandbox="allow-scripts allow-same-origin"
           title="AUSPEX Globe"
           data-testid="globe-deck-iframe"

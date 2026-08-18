@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import { sendDeckCommands, _resetDeckQueueForTests } from "./GlobeDeck";
 import GlobeDeck from "./GlobeDeck";
+import { DECK_ORIGIN } from "../../lib/decks/config";
 
 vi.mock("framer-motion", () => ({
   useReducedMotion: () => true,
@@ -52,7 +53,7 @@ describe("sendDeckCommands — cold switch (C1)", () => {
     );
     Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
       get() {
-        return { postMessage: postMessageSpy, origin: window.location.origin };
+        return { postMessage: postMessageSpy, origin: DECK_ORIGIN };
       },
       configurable: true,
     });
@@ -69,7 +70,7 @@ describe("sendDeckCommands — cold switch (C1)", () => {
       // The queued command should have been posted to the iframe.
       expect(postMessageSpy).toHaveBeenCalledWith(
         { loomDeck: true, cmd: { type: "set_cat", cat: "military" } },
-        window.location.origin
+        DECK_ORIGIN
       );
 
       unmount();
@@ -90,7 +91,7 @@ describe("sendDeckCommands — cold switch (C1)", () => {
     );
     Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
       get() {
-        return { postMessage: postMessageSpy, origin: window.location.origin };
+        return { postMessage: postMessageSpy, origin: DECK_ORIGIN };
       },
       configurable: true,
     });
@@ -111,7 +112,7 @@ describe("sendDeckCommands — cold switch (C1)", () => {
 
       expect(postMessageSpy).toHaveBeenCalledWith(
         { loomDeck: true, cmd: { type: "toggle_overlay", overlay: "vessels" } },
-        window.location.origin
+        DECK_ORIGIN
       );
 
       unmount();
@@ -133,7 +134,7 @@ describe("iframe-not-yet-loaded race (C1c)", () => {
     );
     Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
       get() {
-        return { postMessage: postMessageSpy, origin: window.location.origin };
+        return { postMessage: postMessageSpy, origin: DECK_ORIGIN };
       },
       configurable: true,
     });
@@ -164,7 +165,7 @@ describe("iframe-not-yet-loaded race (C1c)", () => {
       expect(postMessageSpy).toHaveBeenCalledTimes(1);
       expect(postMessageSpy).toHaveBeenCalledWith(
         { loomDeck: true, cmd: { type: "set_cat", cat: "civil" } },
-        window.location.origin
+        DECK_ORIGIN
       );
 
       unmount();

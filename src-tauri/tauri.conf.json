@@ -31,6 +31,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../public/decks/auspex": "decks/auspex"
+    },
     "macOS": {
       "infoPlist": "Info.plist"
     }
