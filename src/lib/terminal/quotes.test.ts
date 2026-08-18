@@ -1,7 +1,18 @@
 /**
- * quotes.test.ts — normalization, poll lifecycle, stale path, no-poll-when-inactive.
+ * quotes.test.ts — normalization, poll lifecycle, stale path, no-poll-when-inactive,
+ * and Tauri routing (fetchAllQuotesTauri path).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// Mock core so quoteFetch (the Rust IPC wrapper) can be controlled in tests.
+const mockQuoteFetch = vi.fn<[string[]], Promise<string>>();
+vi.mock("../core", () => ({
+  quoteFetch: (...args: unknown[]) => mockQuoteFetch(...(args as [string[]])),
+  ShellUnavailableError: class ShellUnavailableError extends Error {
+    constructor() { super("This surface needs the desktop shell."); this.name = "ShellUnavailableError"; }
+  },
+}));
+
 import {
   normalizeQuote,
   fetchQuote,
@@ -299,5 +310,64 @@ describe("poll runtime", () => {
 
     // Restore document.hidden to false for subsequent tests.
     Object.defineProperty(document, "hidden", { value: false, configurable: true, writable: true });
+  });
+});
+
+// ── Tauri routing path (fetchAllQuotesTauri) ──────────────────────────────────
+describe("fetchAllQuotes — Tauri path (LOOM's Rust proxy)", () => {
+  beforeEach(() => {
+    mockQuoteFetch.mockReset();
+    // Set __TAURI__ so inTauri() returns true
+    (window as unknown as { __TAURI__?: object }).__TAURI__ = {};
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { __TAURI__?: object }).__TAURI__;
+    vi.restoreAllMocks();
+  });
+
+  it("routes through quoteFetch (invoke) when Tauri is present, not browser fetch", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const raw = JSON.stringify(SYMBOLS.map((s) => ({ symbol: s, body: chartBody({ price: 100, prevClose: 99 }) })));
+    mockQuoteFetch.mockResolvedValue(raw);
+    const quotes = await fetchAllQuotes();
+    expect(mockQuoteFetch).toHaveBeenCalledWith([...SYMBOLS]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(quotes.length).toBe(SYMBOLS.length);
+  });
+
+  it("normalizes the Rust array shape through the existing normalizer", async () => {
+    const body = chartBody({ price: 450, prevClose: 440, shortName: "S&P 500" });
+    const raw = JSON.stringify([{ symbol: "SPY", body }]);
+    mockQuoteFetch.mockResolvedValue(raw);
+    const quotes = await fetchAllQuotes();
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0].symbol).toBe("SPY");
+    expect(quotes[0].price).toBe(450);
+    expect(quotes[0].name).toBe("S&P 500");
+  });
+
+  it("null body entries are dropped (partial success — individual fetch failures)", async () => {
+    const raw = JSON.stringify([
+      { symbol: "SPY", body: chartBody({ price: 450, prevClose: 440 }) },
+      { symbol: "^VIX", body: null },
+    ]);
+    mockQuoteFetch.mockResolvedValue(raw);
+    const quotes = await fetchAllQuotes();
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0].symbol).toBe("SPY");
+  });
+
+  it("returns empty array on quoteFetch rejection (never throws)", async () => {
+    mockQuoteFetch.mockRejectedValue(new Error("IPC error"));
+    const quotes = await fetchAllQuotes();
+    expect(quotes).toEqual([]);
+  });
+
+  it("returns empty array on malformed JSON from quoteFetch", async () => {
+    mockQuoteFetch.mockResolvedValue("not-json");
+    const quotes = await fetchAllQuotes();
+    expect(quotes).toEqual([]);
   });
 });

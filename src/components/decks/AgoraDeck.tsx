@@ -21,6 +21,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useReducedMotion } from "framer-motion";
 import { getSetting } from "../../lib/voice/settings";
+import { timeoutSignal } from "../../lib/util/timeoutSignal";
 
 interface AgoraDeckProps {
   interact: boolean;
@@ -56,7 +57,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
       // no-cors: response will be opaque (type "opaque") but no error = reachable.
       await fetch(agoraUrl, {
         mode: "no-cors",
-        signal: AbortSignal.timeout(2000),
+        signal: timeoutSignal(2000),
       });
       if (mountedRef.current && seq === probeSeq.current) setProbeState("reachable");
     } catch {
