@@ -40,8 +40,10 @@ const DECK_HIDE_RE =
   /\b(hide|close)\b.{0,20}?\b(globe|world|map)\b|back to (the )?void/i;
 
 // Category filter: "show military news", "show geopolitical", "switch to finance", etc.
+// The "all" token requires a news-context word to avoid false positives like
+// "show all my notes" (M1 fix: without the guard, "show all" would match set_cat all).
 const CAT_RE =
-  /\b(show|filter|switch to|switch|display)\b.{0,25}?\b(military|geopolitical|geo|finance|financial|climate|tech|technology|all)\b/i;
+  /\b(show|filter|switch to|switch|display)\b.{0,25}?\b(military|geopolitical|geo|finance|financial|climate|tech|technology)\b|\b(show|filter|switch to|switch|display)\b.{0,40}?\b(all)\b.{0,30}?\b(news|coverage|categories)\b/i;
 
 // Vessels / ships overlay toggle
 const VESSELS_RE =
@@ -71,7 +73,8 @@ const CAT_MAP: Record<string, string> = {
 function extractCat(utterance: string): string | null {
   const m = CAT_RE.exec(utterance);
   if (!m) return null;
-  const raw = m[2].toLowerCase();
+  // Group 2 = named-category branch; group 4 = "all" (news-context branch).
+  const raw = (m[2] ?? m[4]).toLowerCase();
   return CAT_MAP[raw] ?? null;
 }
 

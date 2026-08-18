@@ -8,6 +8,7 @@ import { handle, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
 import { getSetting, setSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
+import { sendDeckCommands } from "./decks/GlobeDeck";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -855,13 +856,11 @@ export default function Companion() {
         );
       }
 
-      // 3. Bridge commands forwarded to GlobeDeck via loom-deck-command event
+      // 3. Bridge commands forwarded to GlobeDeck via mount-safe queue.
+      // sendDeckCommands dispatches immediately when GlobeDeck is mounted;
+      // otherwise enqueues for drain on mount+iframe-load (C1 fix).
       if (deckCommandResult.bridgeCmds.length > 0) {
-        window.dispatchEvent(
-          new CustomEvent("loom-deck-command", {
-            detail: { bridgeCmds: deckCommandResult.bridgeCmds },
-          })
-        );
+        sendDeckCommands(deckCommandResult.bridgeCmds);
       }
 
       // 4. Push confirmation to history and show in companion

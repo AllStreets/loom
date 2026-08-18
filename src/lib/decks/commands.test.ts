@@ -219,6 +219,36 @@ describe("classifyDeckCommand — auto-switch when void + globe-only cmd", () =>
   });
 });
 
+// ── "all" category requires news context (M1 fix) ────────────────────────────
+
+describe("classifyDeckCommand — 'all' ambiguity guard", () => {
+  it("'show all news' → set_cat all", () => {
+    const r = classifyDeckCommand("show all news", "globe");
+    expect(r).not.toBeNull();
+    expect(r!.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "all" });
+  });
+
+  it("'show all coverage' → set_cat all", () => {
+    const r = classifyDeckCommand("show all coverage", "globe");
+    expect(r).not.toBeNull();
+    expect(r!.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "all" });
+  });
+
+  it("'show all categories' → set_cat all", () => {
+    const r = classifyDeckCommand("show all categories", "globe");
+    expect(r).not.toBeNull();
+    expect(r!.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "all" });
+  });
+
+  it("'show all my notes' → null (no news context)", () => {
+    expect(classifyDeckCommand("show all my notes", "void")).toBeNull();
+  });
+
+  it("'display all' (no news context) → null", () => {
+    expect(classifyDeckCommand("display all", "globe")).toBeNull();
+  });
+});
+
 // ── Non-deck phrases return null ──────────────────────────────────────────────
 
 describe("classifyDeckCommand — non-deck phrases", () => {

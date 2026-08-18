@@ -821,8 +821,10 @@ describe("Companion: deck_command turn dispatches events and pushes history", ()
 
   it("auto-switch from void: loom-deck dispatched BEFORE loom-deck-command", async () => {
     const order: string[] = [];
-    window.addEventListener("loom-deck", () => order.push("loom-deck"));
-    window.addEventListener("loom-deck-command", () => order.push("loom-deck-command"));
+    function onDeck() { order.push("loom-deck"); }
+    function onDeckCommand() { order.push("loom-deck-command"); }
+    window.addEventListener("loom-deck", onDeck);
+    window.addEventListener("loom-deck-command", onDeckCommand);
 
     mockHandle.mockResolvedValue({
       kind: "deck_command",
@@ -841,8 +843,8 @@ describe("Companion: deck_command turn dispatches events and pushes history", ()
 
     await waitFor(() => expect(mockHandle).toHaveBeenCalledTimes(1));
 
-    window.removeEventListener("loom-deck", () => {});
-    window.removeEventListener("loom-deck-command", () => {});
+    window.removeEventListener("loom-deck", onDeck);
+    window.removeEventListener("loom-deck-command", onDeckCommand);
 
     expect(order.indexOf("loom-deck")).toBeLessThan(order.indexOf("loom-deck-command"));
   });

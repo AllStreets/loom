@@ -9,9 +9,15 @@
  * When interact=false the globe is purely visual; pointer events pass through
  * to the LOOM shell above it (orb-band, top bar, companion panel).
  *
- * loom-deck-command CustomEvent: Companion dispatches this when a deck_command
- * intent resolves. GlobeDeck listens and forwards each bridge cmd via
- * postDeckCommand so the AUSPEX iframe executes the command.
+ * Mount-safe command queue (C1 fix):
+ *   When Companion fires a deck_command with both deckSwitch and bridgeCmds,
+ *   GlobeDeck may not yet be mounted (and its loom-deck-command listener not
+ *   registered) at the moment the event fires.  The exported `sendDeckCommands`
+ *   function solves this: if GlobeDeck is already mounted it dispatches
+ *   immediately; otherwise it enqueues for flush on mount.  Additionally,
+ *   even after React mounts the component the iframe itself needs to load
+ *   before postMessage is useful, so the flush waits for the iframe's `load`
+ *   event (or dispatches immediately when the iframe is already loaded).
  */
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
 import { useReducedMotion } from "framer-motion";
@@ -25,12 +31,50 @@ export interface GlobeDeckHandle {
   postCommand: (cmd: object) => void;
 }
 
+// ── Module-level pending command queue (C1 fix) ──────────────────────────────
+
+/**
+ * Pending bridge commands enqueued before GlobeDeck mounts.
+ * GlobeDeck's mount useEffect drains this after the iframe is ready.
+ */
+const pendingCmds: BridgeCmd[][] = [];
+
+/** True while a GlobeDeck instance is mounted and its listener registered. */
+let globeListenerActive = false;
+
+/**
+ * Send bridge commands to GlobeDeck.
+ *
+ * Always dispatches the loom-deck-command event (preserves ordering guarantees
+ * and test observability). When GlobeDeck is not yet mounted (listener not
+ * registered), the event fires but no one catches it — so the commands are
+ * ALSO enqueued in pendingCmds.  GlobeDeck drains the queue on mount after
+ * the iframe fires its load event, ensuring no commands are silently dropped.
+ *
+ * Called by Companion instead of dispatching loom-deck-command directly.
+ */
+export function sendDeckCommands(cmds: BridgeCmd[]): void {
+  if (cmds.length === 0) return;
+  // Always fire the event so ordering tests and any active listener work.
+  window.dispatchEvent(
+    new CustomEvent("loom-deck-command", { detail: { bridgeCmds: cmds } })
+  );
+  // If no GlobeDeck listener is active, queue for drain on mount.
+  if (!globeListenerActive) {
+    pendingCmds.push(cmds);
+  }
+}
+
+// ── postDeckCommand util (unchanged public API) ───────────────────────────────
+
 export function postDeckCommand(
   iframeRef: React.RefObject<HTMLIFrameElement | null>,
   cmd: object
 ) {
   iframeRef.current?.contentWindow?.postMessage({ loomDeck: true, cmd }, window.location.origin);
 }
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
   function GlobeDeck({ interact }, ref) {
@@ -52,7 +96,7 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
       },
     }));
 
-    // Listen for loom-deck-command events dispatched by Companion.
+    // Listen for loom-deck-command events dispatched by Companion (or sendDeckCommands).
     // Each event carries { bridgeCmds: BridgeCmd[] }; forward them to the AUSPEX iframe.
     useEffect(() => {
       function onDeckCommand(ev: Event) {
@@ -62,8 +106,48 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
           postDeckCommand(iframeRef, cmd);
         }
       }
+
+      /**
+       * Drain the pending queue once the iframe is ready.
+       * If the iframe is already loaded (e.g. cached), flush synchronously.
+       * Otherwise wait for the load event so postMessage reaches the document.
+       */
+      function flushPending() {
+        if (pendingCmds.length === 0) return;
+        const batches = pendingCmds.splice(0);
+        for (const batch of batches) {
+          for (const cmd of batch) {
+            postDeckCommand(iframeRef, cmd);
+          }
+        }
+      }
+
+      function onIframeLoad() {
+        flushPending();
+      }
+
+      globeListenerActive = true;
       window.addEventListener("loom-deck-command", onDeckCommand);
-      return () => window.removeEventListener("loom-deck-command", onDeckCommand);
+
+      const iframe = iframeRef.current;
+      if (iframe) {
+        // If already loaded (readyState complete or src already resolved), flush now.
+        // Otherwise wait for the load event.
+        if (
+          (iframe.contentDocument?.readyState === "complete") ||
+          (iframe as HTMLIFrameElement & { _loaded?: boolean })._loaded
+        ) {
+          flushPending();
+        } else {
+          iframe.addEventListener("load", onIframeLoad);
+        }
+      }
+
+      return () => {
+        globeListenerActive = false;
+        window.removeEventListener("loom-deck-command", onDeckCommand);
+        if (iframe) iframe.removeEventListener("load", onIframeLoad);
+      };
     }, []);
 
     return (
