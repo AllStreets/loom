@@ -233,6 +233,27 @@ describe("Shell deck integration", () => {
   });
 });
 
+// ── AgoraDeck rendering ───────────────────────────────────────────────────────
+
+describe("DeckLayer — agora deck", () => {
+  it("renders AgoraDeck container (agora-deck) when deck='agora'", () => {
+    // AgoraDeck will probe on mount; fetch is not mocked so it rejects.
+    // The outer container is always rendered regardless of probe state.
+    render(
+      <DeckLayer deck="agora" interactMode={false} onInteractToggle={() => {}} />
+    );
+    const container = document.querySelector("[data-testid='agora-deck']");
+    expect(container).not.toBeNull();
+  });
+
+  it("renders nothing (no agora-deck) when deck='void'", () => {
+    render(
+      <DeckLayer deck="void" interactMode={false} onInteractToggle={() => {}} />
+    );
+    expect(document.querySelector("[data-testid='agora-deck']")).toBeNull();
+  });
+});
+
 // ── EmberDeck rendering ───────────────────────────────────────────────────────
 
 describe("DeckLayer — ember deck", () => {

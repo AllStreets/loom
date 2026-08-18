@@ -22,7 +22,7 @@ export type BridgeCmd =
 
 export type DeckCommandResult = {
   /** deck switch that must fire BEFORE bridge cmds (only set when needed) */
-  deckSwitch?: "globe" | "void" | "terminal" | "ember";
+  deckSwitch?: "globe" | "void" | "terminal" | "ember" | "agora";
   /** bridge commands to post into the AUSPEX iframe (may be empty) */
   bridgeCmds: BridgeCmd[];
   /** short confirmation line for the companion to speak ("Globe up.", etc.) */
@@ -54,6 +54,10 @@ const DECK_HIDE_RE =
 // The bare "failsafe" / "the failsafe" trigger without a show/open verb (wake-word style).
 const EMBER_SHOW_RE =
   /(?:\b(show|open)\b.{0,20}?\b(ember|survival|failsafe)\b)|\bthe failsafe\b/i;
+
+// AGORA show: "show agora", "open agora", "show the exchange", "open the floor"
+const AGORA_SHOW_RE =
+  /(?:\b(show|open)\b.{0,20}?\b(agora|the exchange|exchange)\b)|\bopen the floor\b/i;
 
 // Category filter: "show military news", "show geopolitical", "switch to finance", etc.
 // The "all" token requires a news-context word to avoid false positives like
@@ -111,7 +115,7 @@ const CAT_LABELS: Record<string, string> = {
  * Classify a (normalized, lowercased) utterance into a DeckCommandResult.
  *
  * @param utterance  — the utterance to classify (already normalized)
- * @param currentDeck — current cockpit.deck value ("void" | "globe" | "terminal" | "ember")
+ * @param currentDeck — current cockpit.deck value ("void" | "globe" | "terminal" | "ember" | "agora")
  * @returns DeckCommandResult if utterance matches a deck command; null otherwise.
  *
  * Globe-only commands ("show vessels", category filters, spin, reset) when
@@ -129,7 +133,7 @@ const CAT_LABELS: Record<string, string> = {
  */
 export function classifyDeckCommand(
   utterance: string,
-  currentDeck: "void" | "globe" | "terminal" | "ember"
+  currentDeck: "void" | "globe" | "terminal" | "ember" | "agora"
 ): DeckCommandResult | null {
   // 1. Category filter — highest priority so "show financial markets" routes to
   //    set_cat, NOT to the terminal deck. Globe-only: auto-switch from any non-globe deck.
@@ -184,6 +188,15 @@ export function classifyDeckCommand(
       deckSwitch: "ember",
       bridgeCmds: [],
       confirmation: "Failsafe up.",
+    };
+  }
+
+  // 3.6. AGORA show: "show agora", "open agora", "show the exchange", "open the floor"
+  if (AGORA_SHOW_RE.test(utterance)) {
+    return {
+      deckSwitch: "agora",
+      bridgeCmds: [],
+      confirmation: "The exchange is live.",
     };
   }
 

@@ -11,12 +11,14 @@
  * "globe"    → renders GlobeDeck iframe (AUSPEX globe behind the orb).
  * "terminal" → renders TerminalDeck (Bloomberg-grade markets surface).
  * "ember"    → renders EmberDeck iframe (EMBER offline survival console).
+ * "agora"    → renders AgoraDeck iframe dock (AGORA conviction-market exchange).
  */
 import GlobeDeck from "./GlobeDeck";
 import TerminalDeck from "./TerminalDeck";
 import EmberDeck from "./EmberDeck";
+import AgoraDeck from "./AgoraDeck";
 
-export type DeckId = "void" | "globe" | "terminal" | "ember";
+export type DeckId = "void" | "globe" | "terminal" | "ember" | "agora";
 
 interface DeckLayerProps {
   deck: DeckId;
@@ -38,6 +40,7 @@ export default function DeckLayer({ deck, interactMode }: DeckLayerProps) {
       {deck === "globe" && <GlobeDeck interact={interactMode} />}
       {deck === "terminal" && <TerminalDeck />}
       {deck === "ember" && <EmberDeck interact={interactMode} />}
+      {deck === "agora" && <AgoraDeck interact={interactMode} />}
     </div>
   );
 }

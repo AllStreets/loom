@@ -35,6 +35,25 @@ export function isValidModelTag(tag: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/.test(tag);
 }
 
+// ── AGORA URL validation ───────────────────────────────────────────────────────
+
+/**
+ * Validate a candidate AGORA URL.
+ * MUST be http or https with hostname exactly "localhost" or "127.0.0.1" (any port).
+ * Empty string is treated as "use default" — returns true.
+ * Any other value (remote URLs, file://, wrong hostname) returns false.
+ */
+export function isValidAgoraUrl(url: string): boolean {
+  if (url === "") return true; // empty = use default
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
 // ── Whitelist ──────────────────────────────────────────────────────────────────
 
 export type SettingsKey =
@@ -49,7 +68,8 @@ export type SettingsKey =
   | "cockpit.deck"
   | "cockpit.interact"
   | "cockpit.constellation"
-  | "cockpit.watchOpen";
+  | "cockpit.watchOpen"
+  | "deck.agora.url";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "voice.default",
@@ -64,10 +84,14 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "cockpit.interact",
   "cockpit.constellation",
   "cockpit.watchOpen",
+  "deck.agora.url",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
 const MODEL_KEYS = new Set<SettingsKey>(["model.builder", "model.companion", "model.rewriter"]);
+
+// Keys that use free-text URL validation instead of enumeration
+const URL_KEYS = new Set<SettingsKey>(["deck.agora.url"]);
 
 // Allowed values for enumerated keys (model.* keys validate via isValidModelTag instead)
 const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
@@ -76,7 +100,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "orb.tier": ["auto", "flat"],
   "loom.reviewBeforeSave": ["0", "1"],
   "model.cloudBuilder": ["off", "anthropic"],
-  "cockpit.deck": ["void", "globe", "terminal", "ember"],
+  "cockpit.deck": ["void", "globe", "terminal", "ember", "agora"],
   "cockpit.interact": ["on", "off"],
   "cockpit.constellation": ["on", "off"],
   "cockpit.watchOpen": ["on", "off"],
@@ -95,6 +119,7 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "cockpit.interact": "on",
   "cockpit.constellation": "off",
   "cockpit.watchOpen": "off",
+  "deck.agora.url": "http://localhost:3000",
 };
 
 // Legacy key the orb's detectTier reads
@@ -130,6 +155,13 @@ export function setSetting(key: string, value: string): void {
     if (value !== "" && !isValidModelTag(value)) {
       throw new Error(
         `Invalid model tag "${value}" for key "${key}". Must match ^[A-Za-z0-9][A-Za-z0-9._\\-\\/]*(:[A-Za-z0-9._\\-]+)?$ (max 128 chars) or be empty.`
+      );
+    }
+  } else if (URL_KEYS.has(k)) {
+    // Free-text URL: empty string resets to default; non-empty must be a valid local URL
+    if (!isValidAgoraUrl(value)) {
+      throw new Error(
+        `Invalid URL "${value}" for key "${key}". Must be http(s)://localhost[:<port>] or http(s)://127.0.0.1[:<port>], or empty to reset to default.`
       );
     }
   } else {
