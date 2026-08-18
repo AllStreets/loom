@@ -20,7 +20,12 @@
   --dur-fast:.15s;
   --dur-slow:.4s;
 }
+/* Border-box everywhere: width + padding must never overflow a container.
+   (The content-box default caused a recurring class of right-edge clipping.) */
+*,*::before,*::after{box-sizing:border-box}
 html,body,#root{height:100%;margin:0}
+/* The shell is a fixed instrument — nothing may create horizontal scroll. */
+html,body{overflow-x:clip}
 body{background:var(--bg);color:var(--t1);font-family:var(--f-sans)}
 
 .glass{

@@ -324,7 +324,11 @@ export default function Shell() {
   const staggerStyle = (!reducedMotion && !alreadyIgnited)
     ? {
         opacity: staggerVisible ? 1 : 0,
-        transform: staggerVisible ? "translateY(0)" : "translateY(10px)",
+        // Once visible, the transform must be REMOVED (undefined), not left as
+        // translateY(0): any transform on these containers turns them into the
+        // containing block for position:fixed descendants (WatchPanel, dock),
+        // silently re-anchoring viewport chrome.
+        transform: staggerVisible ? undefined : "translateY(10px)",
         transition: "opacity 0.5s ease, transform 0.5s cubic-bezier(0.34,1.56,0.64,1)",
       }
     : {};
