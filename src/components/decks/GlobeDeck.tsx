@@ -8,9 +8,14 @@
  * interact prop controls whether the iframe captures pointer events.
  * When interact=false the globe is purely visual; pointer events pass through
  * to the LOOM shell above it (orb-band, top bar, companion panel).
+ *
+ * loom-deck-command CustomEvent: Companion dispatches this when a deck_command
+ * intent resolves. GlobeDeck listens and forwards each bridge cmd via
+ * postDeckCommand so the AUSPEX iframe executes the command.
  */
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
 import { useReducedMotion } from "framer-motion";
+import type { BridgeCmd } from "../../lib/decks/commands";
 
 interface GlobeDeckProps {
   interact: boolean;
@@ -46,6 +51,20 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
         postDeckCommand(iframeRef, cmd);
       },
     }));
+
+    // Listen for loom-deck-command events dispatched by Companion.
+    // Each event carries { bridgeCmds: BridgeCmd[] }; forward them to the AUSPEX iframe.
+    useEffect(() => {
+      function onDeckCommand(ev: Event) {
+        const detail = (ev as CustomEvent<{ bridgeCmds: BridgeCmd[] }>).detail;
+        if (!detail?.bridgeCmds) return;
+        for (const cmd of detail.bridgeCmds) {
+          postDeckCommand(iframeRef, cmd);
+        }
+      }
+      window.addEventListener("loom-deck-command", onDeckCommand);
+      return () => window.removeEventListener("loom-deck-command", onDeckCommand);
+    }, []);
 
     return (
       <div

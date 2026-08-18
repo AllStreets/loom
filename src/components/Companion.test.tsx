@@ -695,3 +695,155 @@ describe("Companion Task 4 beauty pass", () => {
     expect(log).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// deck_command dispatch + history integration
+// ---------------------------------------------------------------------------
+
+describe("Companion: deck_command turn dispatches events and pushes history", () => {
+  beforeEach(() => {
+    mockHandle.mockReset();
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  it("deck_command with deckSwitch dispatches loom-deck event", async () => {
+    const deckEvents: string[] = [];
+    function capDeck(ev: Event) {
+      deckEvents.push((ev as CustomEvent).detail.deck);
+    }
+    window.addEventListener("loom-deck", capDeck);
+
+    mockHandle.mockResolvedValue({
+      kind: "deck_command",
+      deckCommandResult: {
+        deckSwitch: "globe",
+        bridgeCmds: [],
+        confirmation: "Globe up.",
+      },
+      confirmation: "Globe up.",
+    });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "show the globe");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(mockHandle).toHaveBeenCalledTimes(1));
+
+    window.removeEventListener("loom-deck", capDeck);
+    expect(deckEvents).toContain("globe");
+  });
+
+  it("deck_command with bridgeCmds dispatches loom-deck-command event", async () => {
+    const bridgeEvents: unknown[] = [];
+    function capBridge(ev: Event) {
+      bridgeEvents.push((ev as CustomEvent).detail.bridgeCmds);
+    }
+    window.addEventListener("loom-deck-command", capBridge);
+
+    mockHandle.mockResolvedValue({
+      kind: "deck_command",
+      deckCommandResult: {
+        bridgeCmds: [{ type: "set_cat", cat: "military" }],
+        confirmation: "Filtering: military.",
+      },
+      confirmation: "Filtering: military.",
+    });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "show military news");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(mockHandle).toHaveBeenCalledTimes(1));
+    window.removeEventListener("loom-deck-command", capBridge);
+
+    expect(bridgeEvents.length).toBeGreaterThan(0);
+    const cmds = bridgeEvents[0] as Array<{ type: string; cat?: string }>;
+    expect(cmds[0]).toEqual({ type: "set_cat", cat: "military" });
+  });
+
+  it("deck_command pushes confirmation to history and UI", async () => {
+    mockHandle.mockResolvedValue({
+      kind: "deck_command",
+      deckCommandResult: {
+        bridgeCmds: [{ type: "reset_view" }],
+        confirmation: "View reset.",
+      },
+      confirmation: "View reset.",
+    });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "reset the view");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("View reset.")).toBeTruthy());
+
+    // Submit second utterance; history should contain the confirmation
+    mockHandle.mockResolvedValue({ kind: "reply", text: "ok" });
+    await userEvent.type(textarea, "hello");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(mockHandle).toHaveBeenCalledTimes(2));
+    const [, secondHistory] = mockHandle.mock.calls[1] as [string, Array<{ role: string; content: string }>];
+    const hasConfirmation = secondHistory.some((m) => m.content === "View reset.");
+    expect(hasConfirmation).toBe(true);
+  });
+
+  it("deck_command with deckSwitch:void dispatches loom-deck void", async () => {
+    const deckEvents: string[] = [];
+    function capDeck(ev: Event) {
+      deckEvents.push((ev as CustomEvent).detail.deck);
+    }
+    window.addEventListener("loom-deck", capDeck);
+
+    mockHandle.mockResolvedValue({
+      kind: "deck_command",
+      deckCommandResult: {
+        deckSwitch: "void",
+        bridgeCmds: [],
+        confirmation: "Back to the void.",
+      },
+      confirmation: "Back to the void.",
+    });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "hide the globe");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(mockHandle).toHaveBeenCalledTimes(1));
+    window.removeEventListener("loom-deck", capDeck);
+    expect(deckEvents).toContain("void");
+  });
+
+  it("auto-switch from void: loom-deck dispatched BEFORE loom-deck-command", async () => {
+    const order: string[] = [];
+    window.addEventListener("loom-deck", () => order.push("loom-deck"));
+    window.addEventListener("loom-deck-command", () => order.push("loom-deck-command"));
+
+    mockHandle.mockResolvedValue({
+      kind: "deck_command",
+      deckCommandResult: {
+        deckSwitch: "globe",
+        bridgeCmds: [{ type: "toggle_overlay", overlay: "vessels" }],
+        confirmation: "Vessels overlay toggled.",
+      },
+      confirmation: "Vessels overlay toggled.",
+    });
+
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "show vessels");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(mockHandle).toHaveBeenCalledTimes(1));
+
+    window.removeEventListener("loom-deck", () => {});
+    window.removeEventListener("loom-deck-command", () => {});
+
+    expect(order.indexOf("loom-deck")).toBeLessThan(order.indexOf("loom-deck-command"));
+  });
+});

@@ -6,7 +6,7 @@ import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
 import { handle, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
-import { getSetting } from "../lib/voice/settings";
+import { getSetting, setSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
 
 // ---------------------------------------------------------------------------
@@ -733,6 +733,9 @@ export default function Companion() {
           dispatchFleetActivity(null);
         }
       },
+      // Provide current deck state to the runtime so deck_command rules can
+      // auto-switch from void → globe when needed.
+      currentDeck: () => getSetting("cockpit.deck") as "void" | "globe",
     };
 
     let turn: CompanionTurn;
@@ -835,6 +838,38 @@ export default function Companion() {
       );
       const oneliner = `Opening ${turn.organId} below.`;
       appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
+    } else if (turn.kind === "deck_command") {
+      const { deckCommandResult, confirmation } = turn;
+
+      // 1. Orb mood pulse: building → idle (fast visual beat for instant commands)
+      dispatchMood("building");
+
+      // 2. Deck switch first (spec requirement 4: auto-switch fires before bridge cmd)
+      if (deckCommandResult.deckSwitch) {
+        // Persist deck state so kernel store stays consistent
+        setSetting("cockpit.deck", deckCommandResult.deckSwitch);
+        window.dispatchEvent(
+          new CustomEvent("loom-deck", {
+            detail: { deck: deckCommandResult.deckSwitch },
+          })
+        );
+      }
+
+      // 3. Bridge commands forwarded to GlobeDeck via loom-deck-command event
+      if (deckCommandResult.bridgeCmds.length > 0) {
+        window.dispatchEvent(
+          new CustomEvent("loom-deck-command", {
+            detail: { bridgeCmds: deckCommandResult.bridgeCmds },
+          })
+        );
+      }
+
+      // 4. Push confirmation to history and show in companion
+      appendItem({ kind: "bubble", role: "assistant", text: confirmation, id: nextId() });
+      history.current.push({ role: "assistant", content: confirmation });
+
+      // 5. Orb settle to idle
+      dispatchMood("idle");
     }
 
     // Determine if we should speak the reply
@@ -849,6 +884,8 @@ export default function Companion() {
       if (r.ok && r.organId) speakableText = `${r.organId} updated.`;
     } else if (turn.kind === "act") {
       speakableText = `Opening ${turn.organId} below.`;
+    } else if (turn.kind === "deck_command") {
+      speakableText = turn.confirmation;
     }
 
     const speakReplies = getSetting("voice.speakReplies");
