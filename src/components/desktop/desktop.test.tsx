@@ -784,6 +784,135 @@ describe("Desktop", () => {
     });
   });
 
+  it("delete flow: trash icon click shows confirm strip, DELETE calls organDelete and dispatches organs-changed", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'notes', render(el){ el.textContent = 'notes-content'; } }";
+      if (cmd === "organ_delete") return "sha";
+      return null;
+    });
+
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+    });
+
+    // Hover doesn't work in jsdom so simulate click directly
+    const trashBtn = screen.getByTitle("Delete organ");
+    await userEvent.click(trashBtn);
+
+    // Confirm strip should appear
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-confirm-notes")).toBeInTheDocument();
+    });
+
+    // Listen for organs-changed event
+    let organsChangedFired = false;
+    window.addEventListener("organs-changed", () => { organsChangedFired = true; }, { once: true });
+
+    // Click DELETE
+    const deleteBtn = screen.getByRole("button", { name: "DELETE" });
+    await userEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("organ_delete", expect.objectContaining({ id: "notes" }));
+    });
+
+    await waitFor(() => {
+      expect(organsChangedFired).toBe(true);
+    });
+  });
+
+  it("delete flow: tombstone written to localStorage on DELETE", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'notes', render(el){ el.textContent = 'notes-content'; } }";
+      if (cmd === "organ_delete") return "sha";
+      return null;
+    });
+
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+    });
+
+    const trashBtn = screen.getByTitle("Delete organ");
+    await userEvent.click(trashBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-confirm-notes")).toBeInTheDocument();
+    });
+
+    const deleteBtn = screen.getByRole("button", { name: "DELETE" });
+    await userEvent.click(deleteBtn);
+
+    await waitFor(() => {
+      const raw = localStorage.getItem("loom.organs.deleted");
+      expect(raw).not.toBeNull();
+      const list = JSON.parse(raw!);
+      expect(list).toContain("notes");
+    });
+  });
+
+  it("purgeOrganStorage removes organ.id.* keys and loom.win.id", async () => {
+    const { purgeOrganStorage } = await import("../../lib/organs/api");
+    localStorage.setItem("organ.notes.data", JSON.stringify({ test: 1 }));
+    localStorage.setItem("loom.win.notes", JSON.stringify({ x: 40 }));
+    purgeOrganStorage("notes");
+    expect(localStorage.getItem("organ.notes.data")).toBeNull();
+    expect(localStorage.getItem("loom.win.notes")).toBeNull();
+  });
+
+  it("minimized persistence: minimize writes loom.minimized, boot restores minimized state", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'notes', render(el){ el.textContent = 'ok'; } }";
+      return null;
+    });
+
+    const { unmount } = render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+    });
+
+    // Minimize
+    const minBtn = screen.getByTitle("Minimize");
+    await userEvent.click(minBtn);
+
+    // loom.minimized should be written
+    await waitFor(() => {
+      const raw = localStorage.getItem("loom.minimized");
+      expect(raw).not.toBeNull();
+      const ids = JSON.parse(raw!);
+      expect(ids).toContain("notes");
+    });
+
+    unmount();
+
+    // Re-render — should boot with notes minimized
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+    });
+
+    // Window should be display:none from boot
+    const titleBar = screen.getByTestId("title-bar-notes");
+    let el: HTMLElement | null = titleBar;
+    let hidden = false;
+    while (el) {
+      if ((el as HTMLElement).style?.display === "none") { hidden = true; break; }
+      el = el.parentElement;
+    }
+    expect(hidden).toBe(true);
+  });
+
   it("viewport-resize listener re-clamps an open window that would be off-screen after shrink", async () => {
     // Start with a wide viewport
     Object.defineProperty(window, "innerWidth",  { configurable: true, writable: true, value: 1280 });

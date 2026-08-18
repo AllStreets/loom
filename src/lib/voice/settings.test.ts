@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   getSetting,
   setSetting,
+  resetAllSettings,
   SETTINGS_KEYS,
   VOICE_IDS,
   VOICE_LABELS,
@@ -10,6 +11,9 @@ import {
 
 // jsdom provides localStorage
 beforeEach(() => {
+  localStorage.clear();
+});
+afterEach(() => {
   localStorage.clear();
 });
 
@@ -26,7 +30,8 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("cockpit.deck");
     expect(SETTINGS_KEYS).toContain("cockpit.interact");
     expect(SETTINGS_KEYS).toContain("cockpit.constellation");
-    expect(SETTINGS_KEYS).toHaveLength(11);
+    expect(SETTINGS_KEYS).toContain("cockpit.watchOpen");
+    expect(SETTINGS_KEYS).toHaveLength(12);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -213,5 +218,55 @@ describe("model.* settings", () => {
   it("setSetting accepts complex valid tag for rewriter", () => {
     expect(() => setSetting("model.rewriter", "hf.co/user/model:Q4_K_M")).not.toThrow();
     expect(getSetting("model.rewriter")).toBe("hf.co/user/model:Q4_K_M");
+  });
+});
+
+describe("cockpit.watchOpen setting", () => {
+  it("cockpit.watchOpen default is 'off'", () => {
+    expect(getSetting("cockpit.watchOpen")).toBe("off");
+  });
+
+  it("cockpit.watchOpen accepts 'on' and 'off'", () => {
+    setSetting("cockpit.watchOpen", "on");
+    expect(getSetting("cockpit.watchOpen")).toBe("on");
+    setSetting("cockpit.watchOpen", "off");
+    expect(getSetting("cockpit.watchOpen")).toBe("off");
+  });
+
+  it("cockpit.watchOpen rejects unknown values", () => {
+    expect(() => setSetting("cockpit.watchOpen", "maybe")).toThrow();
+  });
+});
+
+describe("resetAllSettings", () => {
+  it("clears all SETTINGS_KEYS", () => {
+    setSetting("cockpit.watchOpen", "on");
+    setSetting("cockpit.interact", "off");
+    resetAllSettings();
+    for (const k of SETTINGS_KEYS) {
+      expect(localStorage.getItem(k)).toBeNull();
+    }
+  });
+
+  it("removes all loom.* keys", () => {
+    localStorage.setItem("loom.minimized", JSON.stringify(["notes"]));
+    localStorage.setItem("loom.win.notes", JSON.stringify({ x: 40 }));
+    localStorage.setItem("loom.organs.deleted", JSON.stringify(["notes"]));
+    resetAllSettings();
+    expect(localStorage.getItem("loom.minimized")).toBeNull();
+    expect(localStorage.getItem("loom.win.notes")).toBeNull();
+    expect(localStorage.getItem("loom.organs.deleted")).toBeNull();
+  });
+
+  it("removes auspex.tour.seen.v1", () => {
+    localStorage.setItem("auspex.tour.seen.v1", "1");
+    resetAllSettings();
+    expect(localStorage.getItem("auspex.tour.seen.v1")).toBeNull();
+  });
+
+  it("removes loom.organs.deleted tombstones", () => {
+    localStorage.setItem("loom.organs.deleted", JSON.stringify(["notes", "timeline"]));
+    resetAllSettings();
+    expect(localStorage.getItem("loom.organs.deleted")).toBeNull();
   });
 });

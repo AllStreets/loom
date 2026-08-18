@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { type OrganState, mountOrgan } from "../../lib/organs/host";
 import { windowRegistry } from "../../lib/ambient/windowRegistry";
+import { organDelete } from "../../lib/core";
+import { addOrganTombstone, purgeOrganStorage } from "../../lib/organs/api";
+import { IconTrash } from "../chrome/icons";
 
 type WinPos = {
   x: number;
@@ -15,6 +18,7 @@ type Props = {
   focused: boolean;
   onFocus: () => void;
   onMinimize: () => void;
+  onDelete: () => void;
   initial: { x: number; y: number; w: number; h: number };
 };
 
@@ -75,9 +79,10 @@ function loadPos(id: string, initial: { x: number; y: number; w: number; h: numb
   return clampToViewport({ x: initial.x, y: initial.y, w: initial.w, h: initial.h, collapsed: false });
 }
 
-export default function OrganWindow({ state, focused, onFocus, onMinimize, initial }: Props) {
+export default function OrganWindow({ state, focused, onFocus, onMinimize, onDelete, initial }: Props) {
   const id = state.entry.id;
   const [pos, setPos] = useState<WinPos>(() => loadPos(id, initial));
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // Keep a ref always in sync with the latest pos so drag/resize onUp closures
   // read the live value rather than the stale capture from pointerdown.
   const posRef = useRef(pos);
@@ -281,6 +286,15 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
     });
   }
 
+  async function handleDelete() {
+    addOrganTombstone(id);
+    await organDelete(id);
+    purgeOrganStorage(id);
+    windowRegistry.delete(id);
+    window.dispatchEvent(new CustomEvent("organs-changed"));
+    onDelete();
+  }
+
   const windowStyle: React.CSSProperties = {
     position: "absolute",
     left: pos.x,
@@ -344,17 +358,98 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, initi
         onPointerDown={handleTitlePointerDown}
         onDoubleClick={handleTitleDoubleClick}
       >
-        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {state.manifest.name}
-        </span>
-        <button
-          data-action="win-min"
-          style={minimizeButtonStyle}
-          onClick={(e) => { e.stopPropagation(); onMinimize(); }}
-          title="Minimize"
-        >
-          -
-        </button>
+        {showDeleteConfirm ? (
+          <div
+            data-testid={`delete-confirm-${id}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flex: 1,
+              background: "var(--glass-raised, rgba(255,255,255,.06))",
+              borderRadius: 6,
+              padding: "0 6px",
+            }}
+          >
+            <span style={{ fontSize: 12, color: "var(--t2)", flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              Delete {state.manifest.name}? This removes its code and data.
+            </span>
+            <button
+              data-action="delete-confirm-yes"
+              onClick={(e) => { e.stopPropagation(); void handleDelete(); }}
+              style={{
+                background: "var(--danger)",
+                color: "#fff",
+                border: "none",
+                borderRadius: 4,
+                padding: "2px 10px",
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              DELETE
+            </button>
+            <button
+              data-action="delete-confirm-no"
+              onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(false); }}
+              style={{
+                background: "none",
+                color: "var(--t2)",
+                border: "1px solid var(--glass-border)",
+                borderRadius: 4,
+                padding: "2px 8px",
+                fontSize: 12,
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              KEEP
+            </button>
+          </div>
+        ) : (
+          <>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+              {state.manifest.name}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }} className="win-title-actions">
+              <button
+                data-action="win-delete"
+                title="Delete organ"
+                onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true); }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--t3)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 22,
+                  height: 22,
+                  borderRadius: 3,
+                  padding: 0,
+                  opacity: 0,
+                  transition: "opacity var(--dur-fast, 150ms) ease",
+                  flexShrink: 0,
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; (e.currentTarget as HTMLElement).style.color = "var(--danger)"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0"; (e.currentTarget as HTMLElement).style.color = "var(--t3)"; }}
+              >
+                <IconTrash size={12} />
+              </button>
+              <button
+                data-action="win-min"
+                style={minimizeButtonStyle}
+                onClick={(e) => { e.stopPropagation(); onMinimize(); }}
+                title="Minimize"
+              >
+                -
+              </button>
+            </div>
+          </>
+        )}
       </div>
       <div style={bodyStyle}>
         <div ref={mountRef} style={{ minHeight: "100%", padding: "8px" }} />

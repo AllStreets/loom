@@ -127,7 +127,7 @@ export default function Shell() {
 
   const [deck, setDeck] = useState<DeckId>(() => getSetting('cockpit.deck') as DeckId);
   const [interactMode, setInteractMode] = useState(() => getSetting('cockpit.interact') === 'on');
-  const [watchOpen, setWatchOpen] = useState(false);
+  const [watchOpen, setWatchOpen] = useState(() => getSetting('cockpit.watchOpen') === 'on');
   const [watchUnseen, setWatchUnseen] = useState(0);
 
   // ----- Ignition sequence state -----
@@ -613,7 +613,11 @@ export default function Shell() {
                 label="WATCH"
                 selected={watchOpen}
                 onClick={() => {
-                  setWatchOpen((p) => !p);
+                  setWatchOpen((p) => {
+                    const next = !p;
+                    setSetting('cockpit.watchOpen', next ? 'on' : 'off');
+                    return next;
+                  });
                   setWatchUnseen(0);
                 }}
                 badge={!watchOpen && watchUnseen > 0 ? (watchUnseen > 9 ? "9+" : String(watchUnseen)) : undefined}

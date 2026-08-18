@@ -36,6 +36,7 @@ const ORGAN_JS = `export default {
       { label: "Models", page: "models", action: "page-models" },
       { label: "Appearance", page: "appearance", action: "page-appearance" },
       { label: "Building", page: "building", action: "page-building" },
+      { label: "System", page: "system", action: "page-system" },
     ];
 
     var activePage = "voice";
@@ -736,6 +737,71 @@ const ORGAN_JS = `export default {
     }
     buildingPage.appendChild(reviewRow);
 
+    // ========================================================================
+    // PAGE: System
+    // ========================================================================
+    var systemPage = document.createElement("div");
+    pages["system"] = systemPage;
+
+    systemPage.appendChild(ui.heading("System", "Reset LOOM to factory defaults."));
+
+    var resetNote = document.createElement("div");
+    resetNote.style.fontSize = "12px";
+    resetNote.style.color = ui.tokens.t3;
+    resetNote.style.marginBottom = "12px";
+    resetNote.textContent = "Organs' code is kept; deleted seed organs will return.";
+    systemPage.appendChild(resetNote);
+
+    var resetBtnState = "idle";
+    var resetBtn = ui.button("Reset LOOM to defaults", { variant: "ghost", action: "system-reset" });
+    resetBtn.style.color = ui.tokens.danger;
+    resetBtn.style.borderColor = ui.tokens.danger;
+
+    var resetConfirmStrip = document.createElement("div");
+    resetConfirmStrip.style.display = "none";
+    resetConfirmStrip.style.gap = "8px";
+    resetConfirmStrip.style.alignItems = "center";
+    resetConfirmStrip.style.marginTop = "8px";
+    resetConfirmStrip.dataset.testid = "system-reset-confirm";
+
+    var resetConfirmLabel = document.createElement("span");
+    resetConfirmLabel.style.fontSize = "12px";
+    resetConfirmLabel.style.color = ui.tokens.t2;
+    resetConfirmLabel.textContent = "This will clear all settings and restart. Organs' code is kept.";
+
+    var resetConfirmBtn = ui.button("DELETE", { variant: "primary", action: "system-reset-confirm" });
+    resetConfirmBtn.style.background = ui.tokens.danger;
+    resetConfirmBtn.style.color = "#fff";
+    resetConfirmBtn.style.border = "none";
+
+    var resetCancelBtn = ui.button("KEEP", { variant: "ghost", action: "system-reset-cancel" });
+
+    resetConfirmStrip.appendChild(resetConfirmLabel);
+    resetConfirmStrip.appendChild(resetConfirmBtn);
+    resetConfirmStrip.appendChild(resetCancelBtn);
+
+    resetBtn.addEventListener("click", function() {
+      resetConfirmStrip.style.display = "flex";
+      resetBtn.style.display = "none";
+    });
+
+    resetCancelBtn.addEventListener("click", function() {
+      resetConfirmStrip.style.display = "none";
+      resetBtn.style.display = "";
+    });
+
+    resetConfirmBtn.addEventListener("click", function() {
+      resetConfirmBtn.disabled = true;
+      resetConfirmBtn.textContent = "Resetting...";
+      settings.resetAll().catch(function() {
+        resetConfirmBtn.disabled = false;
+        resetConfirmBtn.textContent = "DELETE";
+      });
+    });
+
+    systemPage.appendChild(resetBtn);
+    systemPage.appendChild(resetConfirmStrip);
+
     // -- Assemble -----------------------------------------------------------------
     for (var pi = 0; pi < NAV_ITEMS.length; pi++) {
       var pitem = NAV_ITEMS[pi];
@@ -943,6 +1009,51 @@ const TEST_JS = `export const tests = [
       assert(cloudKeySetCalls[0] === "sk-ant-test123", "cloudKeySet called with the key");
       assert(keyInp.value === "", "input cleared after save");
       loom.settings.cloudKeySet = origCloudKeySet;
+    },
+  },
+  {
+    name: "page-system nav exists",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var sysNav = el.querySelector('[data-action="page-system"]');
+      assert(sysNav !== null, "page-system nav button exists");
+    },
+  },
+  {
+    name: "system reset confirm strip appears on reset button click",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var sysNav = el.querySelector('[data-action="page-system"]');
+      assert(sysNav !== null, "page-system nav exists");
+      sysNav.click();
+      await new Promise(function(r) { setTimeout(r, 30); });
+      var resetBtn = el.querySelector('[data-action="system-reset"]');
+      assert(resetBtn !== null, "system-reset button exists");
+      resetBtn.click();
+      var strip = el.querySelector('[data-testid="system-reset-confirm"]');
+      assert(strip !== null, "system-reset-confirm strip exists");
+      assert(strip.style.display !== "none", "confirm strip is visible after click");
+    },
+  },
+  {
+    name: "system reset confirm calls settings.resetAll",
+    fn: async function({ el, loom, assert }) {
+      var resetAllCalls = 0;
+      loom.settings.resetAll = function() {
+        resetAllCalls++;
+        return Promise.resolve();
+      };
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var sysNav = el.querySelector('[data-action="page-system"]');
+      sysNav.click();
+      await new Promise(function(r) { setTimeout(r, 30); });
+      var resetBtn = el.querySelector('[data-action="system-reset"]');
+      resetBtn.click();
+      var confirmBtn = el.querySelector('[data-action="system-reset-confirm"]');
+      assert(confirmBtn !== null, "system-reset-confirm button exists");
+      confirmBtn.click();
+      await new Promise(function(r) { setTimeout(r, 60); });
+      assert(resetAllCalls === 1, "settings.resetAll called once (got: " + resetAllCalls + ")");
     },
   },
 ];`;

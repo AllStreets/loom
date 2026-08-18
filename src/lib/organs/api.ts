@@ -1,5 +1,5 @@
 import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, cloudKeyPresent as coreCloudKeyPresent, cloudKeySet as coreCloudKeySet, cloudKeyClear as coreCloudKeyClear, FLEET_DEFAULTS, type Msg, type VoiceStatus } from "../core";
-import { getSetting, setSetting, isValidModelTag, VOICE_IDS, VOICE_LABELS } from "../voice/settings";
+import { getSetting, setSetting, isValidModelTag, VOICE_IDS, VOICE_LABELS, resetAllSettings as resetAllSettingsFn } from "../voice/settings";
 import { startRecording } from "../voice/recorder";
 import { playWav } from "../voice/player";
 import { buildUiKit, type LoomUiKit } from "./uikit";
@@ -32,6 +32,7 @@ export type LoomSettingsApi = {
   cloudKeyPresent(): Promise<boolean>;
   cloudKeySet(key: string): Promise<void>;
   cloudKeyClear(): Promise<void>;
+  resetAll(): Promise<void>;
 };
 
 export type LoomApi = {
@@ -56,7 +57,32 @@ export type ApiDeps = {
   cloudKeyPresent?: typeof coreCloudKeyPresent;
   cloudKeySet?: typeof coreCloudKeySet;
   cloudKeyClear?: typeof coreCloudKeyClear;
+  resetAllSettings?: () => void;
 };
+
+export function purgeOrganStorage(id: string): void {
+  const prefix = `organ.${id}.`;
+  const toRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(prefix)) toRemove.push(k);
+  }
+  toRemove.forEach((k) => localStorage.removeItem(k));
+  localStorage.removeItem(`loom.win.${id}`);
+}
+
+export function addOrganTombstone(id: string): void {
+  try {
+    const raw = localStorage.getItem("loom.organs.deleted");
+    const list: string[] = raw ? JSON.parse(raw) : [];
+    if (!list.includes(id)) {
+      list.push(id);
+      localStorage.setItem("loom.organs.deleted", JSON.stringify(list));
+    }
+  } catch {
+    // ignore
+  }
+}
 
 export function makeLoomApi(
   organId: string,
@@ -222,6 +248,12 @@ export function makeLoomApi(
       async cloudKeyClear() {
         need("settings");
         return _cloudKeyClear();
+      },
+      async resetAll() {
+        need("settings");
+        const _resetAll = deps.resetAllSettings ?? resetAllSettingsFn;
+        _resetAll();
+        location.reload();
       },
     },
   };

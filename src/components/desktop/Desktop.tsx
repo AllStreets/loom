@@ -31,7 +31,20 @@ type WindowInfo = {
 export default function Desktop() {
   const rm = useReducedMotion() ?? false;
   const { organs, approve, reload } = useOrgans();
-  const [windowStates, setWindowStates] = useState<Record<string, WindowInfo>>({});
+  const [windowStates, setWindowStates] = useState<Record<string, WindowInfo>>(() => {
+    try {
+      const raw = localStorage.getItem("loom.minimized");
+      if (raw) {
+        const ids: string[] = JSON.parse(raw);
+        const init: Record<string, WindowInfo> = {};
+        for (const id of ids) {
+          init[id] = { minimized: true, focused: false };
+        }
+        return init;
+      }
+    } catch { /* ignore */ }
+    return {};
+  });
   const [zOrder, setZOrder] = useState<string[]>([]);
   const [modalOrganId, setModalOrganId] = useState<string | null>(null);
   const windowRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -138,11 +151,28 @@ export default function Desktop() {
   }
 
   function handleMinimize(id: string) {
-    setWindowStates((prev) => ({
-      ...prev,
-      [id]: { ...prev[id], minimized: true, focused: false },
-    }));
+    setWindowStates((prev) => {
+      const next = {
+        ...prev,
+        [id]: { ...prev[id], minimized: true, focused: false },
+      };
+      // Persist minimized set
+      const minimizedIds = Object.entries(next)
+        .filter(([, v]) => v.minimized)
+        .map(([k]) => k);
+      try { localStorage.setItem("loom.minimized", JSON.stringify(minimizedIds)); } catch { /* ignore */ }
+      return next;
+    });
     windowRegistry.delete(id);
+  }
+
+  function handleDelete(id: string) {
+    setWindowStates((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setZOrder((prev) => prev.filter((x) => x !== id));
   }
 
   function handleDockClick(id: string) {
@@ -153,10 +183,18 @@ export default function Desktop() {
       return;
     }
     // Un-minimize and focus
-    setWindowStates((prev) => ({
-      ...prev,
-      [id]: { minimized: false, focused: true },
-    }));
+    setWindowStates((prev) => {
+      const next = {
+        ...prev,
+        [id]: { minimized: false, focused: true },
+      };
+      // Update persisted minimized set
+      const minimizedIds = Object.entries(next)
+        .filter(([, v]) => v.minimized)
+        .map(([k]) => k);
+      try { localStorage.setItem("loom.minimized", JSON.stringify(minimizedIds)); } catch { /* ignore */ }
+      return next;
+    });
     setZOrder((prev) => {
       const next = prev.filter((x) => x !== id);
       next.push(id);
@@ -246,6 +284,7 @@ export default function Desktop() {
               focused={ws.focused}
               onFocus={() => handleFocus(id)}
               onMinimize={() => handleMinimize(id)}
+              onDelete={() => handleDelete(id)}
               initial={initial}
             />
           </div>
