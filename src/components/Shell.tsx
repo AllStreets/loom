@@ -33,6 +33,90 @@ const IGNITION_KEY = "loom.ignited";
 
 type IgnitionPhase = "igniting" | "done";
 
+// ── Segmented top-bar control button ────────────────────────────────────────────
+// A single segment of the deck/watch pill: mono label, selected = accent text +
+// soft accent underline; hover = background step-up. Reduced-motion safe (CSS).
+function SegBtn({
+  testid,
+  label,
+  selected,
+  onClick,
+  badge,
+}: {
+  testid: string;
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+  badge?: string;
+}) {
+  return (
+    <button
+      data-testid={testid}
+      role="tab"
+      aria-selected={selected}
+      onClick={onClick}
+      className={`loom-seg-btn${selected ? " is-selected" : ""}`}
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        height: "100%",
+        padding: "0 11px",
+        fontFamily: "var(--f-mono)",
+        fontSize: 10,
+        letterSpacing: ".1em",
+        lineHeight: 1,
+        color: selected ? "var(--accent)" : "var(--t3)",
+        background: selected ? "rgba(34,211,238,.10)" : "transparent",
+        border: "none",
+        borderRadius: 999,
+        cursor: "pointer",
+      }}
+    >
+      <span>{label}</span>
+      {badge !== undefined && (
+        <span
+          data-testid="watch-badge"
+          style={{
+            minWidth: 15,
+            height: 15,
+            borderRadius: 999,
+            background: "var(--accent, #22d3ee)",
+            color: "#060b18",
+            fontFamily: "var(--f-mono)",
+            fontSize: 9,
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "0 3px",
+            pointerEvents: "none",
+          }}
+        >
+          {badge}
+        </span>
+      )}
+      {selected && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 11,
+            right: 11,
+            bottom: 3,
+            height: 1.5,
+            borderRadius: 999,
+            background: "var(--accent, #22d3ee)",
+            boxShadow: "0 0 6px rgba(34,211,238,.6)",
+          }}
+        />
+      )}
+    </button>
+  );
+}
+
 export default function Shell() {
   const [mood, setMood] = useState<OrbMood>("idle");
   const [roles, setRoles] = useState<RoleStatus[]>([]);
@@ -354,8 +438,13 @@ export default function Shell() {
       <style>{`
         details[open] .loom-timeline-chevron { transform: rotate(90deg); }
         @keyframes loom-row-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .loom-seg-btn { transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+        .loom-seg-btn:hover:not(.is-selected) { color: var(--t2); background: rgba(255,255,255,.05); }
+        .loom-seg-btn:active { transform: translateY(.5px); }
         @media (prefers-reduced-motion: reduce) {
           .loom-timeline-chevron { transition: none !important; }
+          .loom-seg-btn { transition: none !important; }
+          .loom-seg-btn:active { transform: none !important; }
         }
       `}</style>
 
@@ -407,10 +496,10 @@ export default function Shell() {
           // container; width:100% + padding overflows (no global border-box) and
           // clips the right-edge controls.
           display: "flex",
-          alignItems: "baseline",
+          alignItems: "center",
           justifyContent: "space-between",
-          flexWrap: "wrap",
-          padding: "20px 24px 16px",
+          gap: 16,
+          padding: "16px 24px",
           position: "relative",
           zIndex: 10,
           borderBottom: reducedMotion ? undefined : `1px solid ${moodColor}20`,
@@ -418,154 +507,88 @@ export default function Shell() {
           ...staggerStyle,
         }}
       >
+        {/* Wordmark — baseline-aligned wordmark + subtitle */}
         <div
           style={{
             display: "flex",
             alignItems: "baseline",
             gap: 10,
-            ...(deck === 'globe' ? {
-              background: 'var(--glass)',
-              border: '1px solid var(--glass-border)',
-              borderRadius: 999,
-              padding: '2px 12px',
-              backdropFilter: 'blur(var(--blur))',
-              WebkitBackdropFilter: 'blur(var(--blur))',
-            } : {}),
+            flexShrink: 0,
           }}
         >
-          <b style={{ letterSpacing: ".4em", fontSize: 20, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
-          <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)" }}>sovereign console</small>
+          <b style={{ letterSpacing: ".4em", fontSize: 19, lineHeight: 1, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
+          <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: ".04em" }}>sovereign console</small>
         </div>
 
-        {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
-        <div
-          style={{
-            ...(deck === 'globe' ? {
-              background: 'var(--glass)',
-              border: '1px solid var(--glass-border)',
+        {/* Right cluster — fleet HUD + one segmented deck control, same height, baseline row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flexShrink: 1 }}>
+          {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              height: 30,
+              padding: "0 12px",
+              minWidth: 0,
+              background: "var(--glass)",
+              border: "1px solid var(--glass-border)",
               borderRadius: 999,
-              padding: '2px 8px',
-              backdropFilter: 'blur(var(--blur))',
-              WebkitBackdropFilter: 'blur(var(--blur))',
-            } : {}),
-          }}
-        >
-          <FleetHUD roles={roles} />
-        </div>
+              backdropFilter: "blur(var(--blur))",
+              WebkitBackdropFilter: "blur(var(--blur))",
+            }}
+          >
+            <FleetHUD roles={roles} />
+          </div>
 
-        {/* Deck controls */}
-        {/* Glass pill keeps the controls legible over bright deck content */}
-        <div
-          data-testid="deck-controls"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 6,
-            background: 'var(--glass)',
-            border: '1px solid var(--glass-border)',
-            borderRadius: 999,
-            padding: '2px 8px',
-            backdropFilter: 'blur(var(--blur))',
-            WebkitBackdropFilter: 'blur(var(--blur))',
-          }}
-        >
-          <button
-            data-testid="deck-void-btn"
-            onClick={() => window.dispatchEvent(new CustomEvent('loom-deck', { detail: { deck: 'void' } }))}
+          {/* Segmented deck control — VOID | GLOBE | INTERACT | WATCH */}
+          <div
+            data-testid="deck-controls"
+            role="tablist"
             style={{
-              fontFamily: 'var(--f-mono)',
-              fontSize: 10,
-              letterSpacing: '.08em',
-              color: deck === 'void' ? 'var(--accent)' : 'var(--t3)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '2px 6px',
+              display: "flex",
+              alignItems: "stretch",
+              height: 30,
+              flexShrink: 0,
+              background: "var(--glass)",
+              border: "1px solid var(--glass-border)",
+              borderRadius: 999,
+              padding: 3,
+              gap: 2,
+              backdropFilter: "blur(var(--blur))",
+              WebkitBackdropFilter: "blur(var(--blur))",
             }}
           >
-            VOID
-          </button>
-          <button
-            data-testid="deck-globe-btn"
-            onClick={() => window.dispatchEvent(new CustomEvent('loom-deck', { detail: { deck: 'globe' } }))}
-            style={{
-              fontFamily: 'var(--f-mono)',
-              fontSize: 10,
-              letterSpacing: '.08em',
-              color: deck === 'globe' ? 'var(--accent)' : 'var(--t3)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '2px 6px',
-            }}
-          >
-            GLOBE
-          </button>
-          {deck === 'globe' && (
-            <button
-              data-testid="deck-interact-btn"
-              onClick={() => setInteractMode(p => !p)}
-              style={{
-                fontFamily: 'var(--f-mono)',
-                fontSize: 10,
-                letterSpacing: '.08em',
-                color: interactMode ? 'var(--accent)' : 'var(--t3)',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '2px 6px',
-              }}
-            >
-              {interactMode ? 'INTERACTING' : 'INTERACT'}
-            </button>
-          )}
-          {/* WATCH toggle */}
-          <button
-            data-testid="watch-toggle-btn"
-            onClick={() => {
-              setWatchOpen((p) => !p);
-              setWatchUnseen(0);
-            }}
-            style={{
-              position: 'relative',
-              fontFamily: 'var(--f-mono)',
-              fontSize: 10,
-              letterSpacing: '.08em',
-              color: watchOpen ? 'var(--accent)' : 'var(--t3)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '2px 6px',
-            }}
-          >
-            WATCH
-            {watchUnseen > 0 && !watchOpen && (
-              <span
-                data-testid="watch-badge"
-                style={{
-                  position: 'absolute',
-                  top: -2,
-                  right: -2,
-                  minWidth: 14,
-                  height: 14,
-                  borderRadius: 999,
-                  background: 'var(--accent, #22d3ee)',
-                  color: '#060b18',
-                  fontFamily: 'var(--f-mono)',
-                  fontSize: 8,
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '0 2px',
-                  pointerEvents: 'none',
-                }}
-              >
-                {watchUnseen > 9 ? '9+' : watchUnseen}
-              </span>
+            <SegBtn
+              testid="deck-void-btn"
+              label="VOID"
+              selected={deck === "void"}
+              onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "void" } }))}
+            />
+            <SegBtn
+              testid="deck-globe-btn"
+              label="GLOBE"
+              selected={deck === "globe"}
+              onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "globe" } }))}
+            />
+            {deck === "globe" && (
+              <SegBtn
+                testid="deck-interact-btn"
+                label={interactMode ? "INTERACTING" : "INTERACT"}
+                selected={interactMode}
+                onClick={() => setInteractMode((p) => !p)}
+              />
             )}
-          </button>
+            <SegBtn
+              testid="watch-toggle-btn"
+              label="WATCH"
+              selected={watchOpen}
+              onClick={() => {
+                setWatchOpen((p) => !p);
+                setWatchUnseen(0);
+              }}
+              badge={!watchOpen && watchUnseen > 0 ? (watchUnseen > 9 ? "9+" : String(watchUnseen)) : undefined}
+            />
+          </div>
         </div>
       </header>
 

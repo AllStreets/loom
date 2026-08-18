@@ -51,8 +51,8 @@ describe("FleetHUD", () => {
     expect(tag.style.overflow).toBe("hidden");
     expect(tag.style.whiteSpace).toBe("nowrap");
     expect(tag).toHaveAttribute("title", "qwen3-coder:30b-a3b-q4_K_M");
-    // maxWidth constrained
-    expect(tag.style.maxWidth).toBe("140px");
+    // maxWidth constrained (chip fits the segmented top-bar pill height)
+    expect(tag.style.maxWidth).toBe("120px");
   });
 
   it("presence dot uses role color when present", () => {

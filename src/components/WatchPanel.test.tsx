@@ -104,6 +104,13 @@ describe("WatchPanel — render control", () => {
     fireEvent.click(screen.getByTestId("watch-panel-close"));
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it("renders THE WATCH header", () => {
+    makePanel();
+    const panel = screen.getByTestId("watch-panel");
+    // textTransform:uppercase renders "THE WATCH"; content stays title-cased
+    expect(panel.textContent).toContain("The Watch");
+  });
 });
 
 describe("WatchPanel — list renders scored items", () => {
