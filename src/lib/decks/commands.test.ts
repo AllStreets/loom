@@ -323,6 +323,16 @@ describe("classifyDeckCommand — terminal deck", () => {
     expect(r!.bridgeCmds).toEqual([{ type: "set_cat", cat: "finance" }]);
   });
 
+  it("REGRESSION 'show financial markets' → set_cat finance (NOT terminal deck switch)", () => {
+    // Verbatim phrase: the category filter (CAT_RE, highest priority) must win
+    // over TERMINAL_SHOW_RE's 'markets' token. deckSwitch must be absent when
+    // already on globe; the only bridge command is set_cat finance.
+    const r = classifyDeckCommand("show financial markets", "globe");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBeUndefined();
+    expect(r!.bridgeCmds).toEqual([{ type: "set_cat", cat: "finance" }]);
+  });
+
   it("REGRESSION 'back to the void' still → void", () => {
     expect(classifyDeckCommand("back to the void", "terminal")!.deckSwitch).toBe("void");
   });

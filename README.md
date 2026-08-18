@@ -124,6 +124,32 @@ Quote source: Yahoo Finance `/v8/chart` endpoint (`interval=15m&range=1d`). In t
 
 ---
 
+## Stage 4a — Ownership
+
+**Phase 12 — Stage 4a — shipped.**
+
+The cockpit now belongs to you. Organs are mortal, the globe is interactive out of the box, the constellation is off by default, and the state you build is durable across restarts.
+
+**What shipped:**
+
+- **Organ deletion with full residue cleanup.** Every organ window's title bar gains a hover-reveal delete affordance. Confirming removes the organ's git files, all `loom.win.<id>` and `organ.<id>.*` storage keys, the windowRegistry entry, the open-window state, and the dock entry. Seeds deleted this way stay deleted — a tombstone list (`loom.organs.deleted`) prevents `installSeeds` from reinstating them on next boot.
+
+- **Reset to defaults.** Settings > System: "Reset LOOM to defaults" clears all `loom.*` keys (positions, settings, watchlist, experience), then reloads. Tombstones are cleared on reset so deleted seed organs return — the confirm copy is honest about this. Organ git files are never touched by reset.
+
+- **Constellation defaults off.** User verdict: clunky and in the way. `cockpit.constellation` now defaults to "off"; the ambient SVG ring renders only when the setting is "on". Toggle is live — no restart required. One setting away; the feature is intact.
+
+- **Interact-by-default.** Deck iframes receive pointer events as soon as a deck is active. The INTERACT segment becomes a LOCK toggle: selected = interacting; clicking it turns pointer-passthrough off for sessions where you want orb-hold priority. Persists across restarts via `cockpit.interact` (default "on"). LOOM chrome (orb band, top bar, dock, chat input, watch panel) sits above the deck in z-order and is never captured by the iframe.
+
+- **Trail hygiene for minimized organs.** Minimizing an organ now removes its windowRegistry entry so the ambient Threads component draws no wire to it. Restoring the window re-registers it. The wire reappears only when the organ is live on screen.
+
+- **Persistence completeness.** WatchPanel open/closed state persists as `cockpit.watchOpen`. Minimized-organ set persists as `loom.minimized` so restored sessions match what you left.
+
+- **Deck-mode legibility.** The `html` background is now explicitly `var(--bg)` (navy #060b18) so any future layout overflow reveals navy, never the browser canvas grey.
+
+- **Orb transparent-mode over decks.** The orb compositor blends the orb into the scene when a deck is active — the glass sphere sits over the AUSPEX globe or the Terminal tape without a hard chrome box. The one visual quirk to know: a brief flicker can appear on first deck mount while the compositor repaints; this is a browser compositing artifact, not a bug, and disappears after the first paint settles.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -225,11 +251,12 @@ Built in phases, each a working, tested, reviewed milestone.
 | **9 · The Cockpit (Stage 1)** | deck layer · bundled AUSPEX globe · voice command of the world · cloud-override builder (`claude-opus-4-8`, opt-in) | **shipped** |
 | **10 · The Cockpit (Stage 2)** | salience engine · live world sensors (AUSPEX stories + USGS quakes) · watchlist + engagement · living constellation · watch panel · voice briefings · deck origin isolation (prod custom protocol) | **shipped** |
 | **11 · The Cockpit (Stage 3)** | chrome design language · hardening (error boundaries, LOOM-voice failure copy) · Terminal deck (live tape / indices / movers / macro + finance wire) | **shipped** |
+| **12 · The Cockpit (Stage 4a)** | ownership: organ delete + tombstones · reset-to-defaults · persistence (watchOpen, minimized set) · constellation off-by-default · interact-by-default · deck-mode legibility · orb transparent-mode over decks | **shipped** |
 | **next · EMBER deck** | Offline survival console as a deck: grid-down instrument panel | planned |
 | **next · AGORA deck** | Markets intelligence deck: order flow, positioning, macro | planned |
 | **next · Globe fly-to** | Auto-fly the globe to a salience item's lat/lng on briefing | planned |
 | **next · Learned salience** | Replace hand-tuned factor weights with a small learned model seeded by engagement history | planned |
-| **later** | LOOM-owned quote proxy (kill corsproxy dep) · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
+| **later** | LOOM-owned quote proxy (kill corsproxy dep) · mid-Earth chat overlay polish for narrow heights · Threads/Desktop error boundaries · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 
