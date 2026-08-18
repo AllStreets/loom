@@ -17,10 +17,10 @@ export type DeckId = "void" | "globe";
 interface DeckLayerProps {
   deck: DeckId;
   interactMode: boolean;
-  onInteractToggle: () => void;
+
 }
 
-export default function DeckLayer({ deck, interactMode, onInteractToggle: _ }: DeckLayerProps) {
+export default function DeckLayer({ deck, interactMode }: DeckLayerProps) {
   return (
     <div
       data-testid="deck-layer"

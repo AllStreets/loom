@@ -6,7 +6,7 @@ import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
 import { handle, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
-import { getSetting, setSetting } from "../lib/voice/settings";
+import { getSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
 import { sendDeckCommands } from "./decks/GlobeDeck";
 
@@ -876,8 +876,7 @@ export default function Companion() {
 
       // 2. Deck switch first (spec requirement 4: auto-switch fires before bridge cmd)
       if (deckCommandResult.deckSwitch) {
-        // Persist deck state so kernel store stays consistent
-        setSetting("cockpit.deck", deckCommandResult.deckSwitch);
+        // Shell's loom-deck listener is the single persistence owner for cockpit.deck
         window.dispatchEvent(
           new CustomEvent("loom-deck", {
             detail: { deck: deckCommandResult.deckSwitch },

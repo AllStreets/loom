@@ -337,7 +337,7 @@ export default function Shell() {
       <Field dim={deck === 'globe'} />
 
       {/* Deck layer — between ambient Field (z1) and orb-band (z10) */}
-      <DeckLayer deck={deck} interactMode={interactMode} onInteractToggle={() => setInteractMode(p => !p)} />
+      <DeckLayer deck={deck} interactMode={interactMode} />
 
       {/* Ambient mood glow — behind everything */}
       <div
