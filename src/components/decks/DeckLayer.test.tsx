@@ -223,9 +223,13 @@ describe("Shell deck integration", () => {
       );
     });
 
+    // New contract (Phase 12): the band's empty flanks pass clicks through to the
+    // deck (pointerEvents none on the band), while the orb hero itself re-enables
+    // pointer events so hold-to-talk always works.
     const orbBand = screen.getByTestId("orb-band");
-    // orb-band should not have pointerEvents: none (it must stay clickable)
-    expect(orbBand.style.pointerEvents).not.toBe("none");
+    expect(orbBand.style.pointerEvents).toBe("none");
+    const orbHero = screen.getByTestId("orb-hero");
+    expect(orbHero.style.pointerEvents).toBe("auto");
   });
 });
 

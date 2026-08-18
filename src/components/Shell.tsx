@@ -634,6 +634,8 @@ export default function Shell() {
           // backdrop (see OrbGL.tsx) — must live at band level: orb-hero's transform
           // and this band's z-index isolate any deeper blend from the backdrop.
           mixBlendMode: "screen",
+          // Empty flanks pass clicks to the deck; the orb hero re-enables its own.
+          pointerEvents: "none",
         }}
       >
         {/* Orb hero */}
@@ -648,6 +650,7 @@ export default function Shell() {
             margin: "12px 0 24px",
             position: "relative",
             cursor: "pointer",
+            pointerEvents: "auto",
             transform: `scale(${orbScale})`,
             transition: reducedMotion
               ? "opacity 0.3s ease"
@@ -710,10 +713,16 @@ export default function Shell() {
           padding: "0 24px 40px",
           position: "relative",
           zIndex: 10,
+          // The zone shell spans the full width but must NOT swallow clicks in its
+          // empty flanks — decks below (z2) receive them. Real content re-enables
+          // pointer events on the column below.
+          pointerEvents: "none",
           ...(!reducedMotion && !alreadyIgnited
             ? {
                 opacity: staggerVisible ? 1 : 0,
-                transform: staggerVisible ? "translateY(0)" : "translateY(10px)",
+                // undefined once visible — a lingering transform would re-anchor
+                // fixed descendants (same hazard fixed in the header staggerStyle)
+                transform: staggerVisible ? undefined : "translateY(10px)",
                 transition: "opacity 0.5s ease 0.15s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.15s",
               }
             : {}),
@@ -727,6 +736,7 @@ export default function Shell() {
             display: "flex",
             flexDirection: "column",
             gap: 16,
+            pointerEvents: "auto",
           }}
         >
           {/* Companion panel */}
