@@ -5,7 +5,7 @@
  * Origin isolation:
  *   DEV  (Vite): src="/decks/auspex/index.html" — shared-origin with LOOM shell.
  *        Shared localStorage is acceptable in dev only (documented debt).
- *   PROD (Tauri bundled): src="deck://localhost/index.html" — custom protocol,
+ *   PROD (Tauri bundled): src="deck://localhost/auspex/index.html" — custom protocol,
  *        cross-origin with LOOM's tauri://localhost origin. localStorage is
  *        ISOLATED per the deck origin (closes reviewer I3 from Stage 1).
  *

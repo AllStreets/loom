@@ -1,8 +1,8 @@
 //! deckserve.rs — Custom `deck://` URI scheme protocol handler.
 //!
-//! In production (Tauri bundled app) the AUSPEX globe deck is served on its
-//! own origin via this custom protocol rather than from LOOM's `tauri://localhost`
-//! origin.  This makes the iframe cross-origin, isolating its localStorage from
+//! In production (Tauri bundled app) decks are served on their own origin via
+//! this custom protocol rather than from LOOM's `tauri://localhost` origin.
+//! This makes the iframes cross-origin, isolating their localStorage from
 //! LOOM's (closes reviewer I3 from Stage 1).
 //!
 //! Origin per platform (Tauri v2 docs, tauri-2.x/src/app.rs:2126):
@@ -16,10 +16,17 @@
 //!   `fn handler(ctx: UriSchemeContext<'_, R>, request: http::Request<Vec<u8>>) -> http::Response<Vec<u8>>`
 //!
 //! Resource layout:
-//!   The bundled auspex directory (public/decks/auspex/**) is declared in
+//!   Each deck directory (public/decks/<name>/**) is declared in
 //!   tauri.conf.json `bundle.resources` and resolved at runtime via
-//!   `app_handle.path().resource_dir()`.  The handler appends the URL path
-//!   (after stripping the leading `/`) to that directory.
+//!   `app_handle.path().resource_dir()`.  The handler extracts the deck name
+//!   from the first URL path segment, validates it against ALLOWED_DECKS, then
+//!   appends the remaining path to that deck's resource directory.
+//!
+//! URL routing:
+//!   `deck://localhost/auspex/index.html` → decks/auspex/index.html
+//!   `deck://localhost/ember/index.html`  → decks/ember/index.html
+//!   `deck://localhost/auspex/`           → decks/auspex/index.html
+//!   `deck://localhost/`                  → 404 (no default deck)
 
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime, UriSchemeContext};
@@ -80,15 +87,27 @@ pub fn sanitize_path(base_dir: &Path, url_path: &str) -> Option<PathBuf> {
     }
 }
 
-/// Build the path to the bundled auspex resource directory.
+/// Decks that may be served by the `deck://` protocol handler.
+/// Any deck name not in this list is rejected with a 404.
+pub const ALLOWED_DECKS: &[&str] = &["auspex", "ember"];
+
+/// Build the path to the bundled resource directory for a specific deck.
 /// Returns None if the resource_dir cannot be determined.
-pub fn auspex_resource_dir<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    app.path().resource_dir().ok().map(|d| d.join("decks").join("auspex"))
+pub fn deck_resource_dir<R: Runtime>(app: &AppHandle<R>, deck_name: &str) -> Option<PathBuf> {
+    app.path().resource_dir().ok().map(|d| d.join("decks").join(deck_name))
 }
 
 /// Tauri v2 synchronous URI scheme protocol handler for `deck://`.
 ///
-/// Maps `deck://localhost/<path>` → file at `<resource_dir>/decks/auspex/<path>`.
+/// Routes `deck://localhost/<deck_name>/<path>` → file at
+/// `<resource_dir>/decks/<deck_name>/<path>`.
+///
+/// Routing rules:
+///   - Empty path or bare `/` → 404 (no default deck; each deck has explicit path)
+///   - First path segment must be in ALLOWED_DECKS (else 404)
+///   - Trailing slash on deck prefix → serves index.html
+///   - Remaining path forwarded to sanitize_path for traversal guard
+///
 /// Responds with the file bytes + correct MIME type, or 404 on any error.
 pub fn handler<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
@@ -97,18 +116,37 @@ pub fn handler<R: Runtime>(
     let app = ctx.app_handle();
     let url_path = request.uri().path().to_string();
 
-    // Default index: deck://localhost/ → index.html
-    let effective_path = if url_path == "/" || url_path.is_empty() {
-        "/index.html".to_string()
-    } else {
-        url_path
+    // Bare root → 404 (no default deck)
+    if url_path == "/" || url_path.is_empty() {
+        return not_found();
+    }
+
+    // Extract first path segment as deck name.
+    // url_path always starts with '/' so skip it before splitting.
+    let stripped = url_path.trim_start_matches('/');
+    let (deck_name, rest) = match stripped.find('/') {
+        Some(idx) => (&stripped[..idx], &stripped[idx..]),
+        // No further slash — treat as deck name with empty rest (→ index.html below)
+        None => (stripped, "/"),
     };
 
-    let Some(base) = auspex_resource_dir(app) else {
+    // Validate deck name against allowlist
+    if !ALLOWED_DECKS.contains(&deck_name) {
+        return not_found();
+    }
+
+    // rest is everything after the deck name segment (starts with '/' or is "/")
+    let effective_rest = if rest == "/" || rest.is_empty() {
+        "/index.html".to_string()
+    } else {
+        rest.to_string()
+    };
+
+    let Some(base) = deck_resource_dir(app, deck_name) else {
         return not_found();
     };
 
-    let Some(file_path) = sanitize_path(&base, &effective_path) else {
+    let Some(file_path) = sanitize_path(&base, &effective_rest) else {
         return not_found();
     };
 
@@ -236,6 +274,51 @@ mod tests {
         let p = dir.path().join(name);
         fs::write(&p, content).unwrap();
         p
+    }
+
+    // ── ALLOWED_DECKS allowlist ───────────────────────────────────────────────
+
+    #[test]
+    fn allowed_decks_contains_auspex() {
+        assert!(ALLOWED_DECKS.contains(&"auspex"), "auspex must be in ALLOWED_DECKS");
+    }
+
+    #[test]
+    fn allowed_decks_contains_ember() {
+        assert!(ALLOWED_DECKS.contains(&"ember"), "ember must be in ALLOWED_DECKS");
+    }
+
+    #[test]
+    fn allowed_decks_rejects_malicious() {
+        assert!(!ALLOWED_DECKS.contains(&"malicious"), "malicious must NOT be in ALLOWED_DECKS");
+    }
+
+    // ── deck_resource_dir path structure ─────────────────────────────────────
+    // These tests use sanitize_path with tempfile dirs to verify end-to-end
+    // path construction without a real AppHandle.
+
+    #[test]
+    fn auspex_deck_path_resolves_index() {
+        // Simulate deck_resource_dir("auspex") by creating a temp dir structure
+        let tmp = TempDir::new().unwrap();
+        let auspex_dir = tmp.path().join("decks").join("auspex");
+        fs::create_dir_all(&auspex_dir).unwrap();
+        fs::write(auspex_dir.join("index.html"), b"auspex").unwrap();
+        let result = sanitize_path(&auspex_dir, "/index.html");
+        assert!(result.is_some(), "auspex/index.html should resolve");
+        assert!(result.unwrap().ends_with("index.html"));
+    }
+
+    #[test]
+    fn ember_deck_path_resolves_index() {
+        // Simulate deck_resource_dir("ember") by creating a temp dir structure
+        let tmp = TempDir::new().unwrap();
+        let ember_dir = tmp.path().join("decks").join("ember");
+        fs::create_dir_all(&ember_dir).unwrap();
+        fs::write(ember_dir.join("index.html"), b"ember").unwrap();
+        let result = sanitize_path(&ember_dir, "/index.html");
+        assert!(result.is_some(), "ember/index.html should resolve");
+        assert!(result.unwrap().ends_with("index.html"));
     }
 
     #[test]

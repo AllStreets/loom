@@ -112,12 +112,15 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Error hardening — LOOM-voice failure copy; no raw error strings; error boundaries on watch panel, organ windows, deck layer.
 - Terminal deck — live tape / index hero cards / movers / macro strip / finance wire. Lifecycle-driven poller (no background burn). Yahoo `/v8/chart` direct in Tauri; corsproxy.io in browser dev mode only.
 
-### Stage-4 backlog
-- **EMBER deck** — offline survival console as a deck. Source: `~/Downloads/EMBER`. Bridge via the same postMessage adapter; keep EMBER's Forge self-edit loop isolated from LOOM's builder seam.
-- **AGORA deck** — markets intelligence deck: order flow, positioning, macro. Depends on terminal deck feed-source design.
+### Stage-5 backlog (post-Stage-4b)
 - **LOOM-owned quote proxy** — kill the corsproxy.io dependency. Run a tiny Rust/Axum sidecar in the Tauri process that proxies Yahoo `/v8/chart` for the webview (no external relay, no CORS). Blocked on: deciding whether it lives in `src-tauri/src/` or as a named Tauri plugin. (`src-tauri/src/`, `src/lib/terminal/quotes.ts` `quoteUrl()`)
 - **Globe fly-to on briefing** — when the cockpit speaks a salience item with lat/lng, auto-fly the globe to that location. Requires a new bridge command `fly_to {lat, lng}` in the deck protocol. (`src/lib/decks/commands.ts`, `public/decks/auspex/js/main.js`)
 - **Learned salience model** — replace the hand-tuned factor weights with a small learned model seeded by engagement history. Fits in the `scoreEvent` pure-function seam. (`src/lib/watch/score.ts`)
+- **AGORA engine health strip** — when the AGORA deck is live and reachable, show a small status strip (engine ws, Postgres) pulled from AGORA's health endpoint. Design the strip in the AGORA offline card area so it appears on reconnect without layout shift.
+- **EMBER Forge-in-deck story** — Forge (File System Access API) is unavailable inside a sandboxed iframe. Design a path: either a Tauri command bridge that proxies file reads/writes for EMBER's Forge loop, or a companion read-file/write-file postMessage protocol scoped to the organs directory.
+- **AGORA iframe live-state screenshot unverified** — the offline card acceptance state is tested and screenshot-gated; live iframe state (AGORA running) was not captured during 4b because Postgres/engine were not started. Verify and screenshot in a follow-up session.
+- **AbortSignal.timeout wkwebview fallback** — `AbortSignal.timeout()` is used for AGORA reachability probes; wkwebview (Tauri macOS) may not support it on older OS targets. Add a `setTimeout`/`AbortController` polyfill path in the probe if support gaps surface. (`src/components/decks/AgoraDeck.tsx`)
+- **Paint discipline audit clean 2026-08-18** — all LOOM-owned painters above deck z2 verified event-driven or void-only: cursor spotlight suppressed when `deck !== "void"`; listening ring rAF runs only while `voice.state === "listening"`; Constellation (z8) uses one-shot SMIL packets on events, no rAF loop; Field canvas (z1) is below decks. No continuous per-frame painters above z2 while a deck is active.
 - **Mid-Earth chat overlay polish for narrow heights** — the companion chat panel renders over the deck at a fixed vertical position that compresses it on short viewports. A min-height / scroll-container pass is needed for 768px and below. (`src/components/Companion.tsx`, `src/components/Shell.tsx`)
 - **Threads / Desktop error boundaries** — `Threads.tsx` and the organ window host do not yet have React error boundaries. A throw in a thread animation or an organ window crashes more than it should. Add boundaries with LOOM-voice failure copy consistent with the Stage-3 hardening pass. (`src/components/ambient/Threads.tsx`, `src/components/desktop/`)
 
@@ -131,3 +134,10 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Trail hygiene — minimized organs dropped from windowRegistry; restored on un-minimize.
 - html background belt — `html { background: var(--bg) }` in tokens.css; overflow reveals navy.
 - Orb transparent-mode compositor over active decks.
+
+### Resolved in Stage 4b (More Decks, Phase 13)
+- EMBER failsafe deck — bundled static snapshot at `public/decks/ember/`; served via `deck://localhost/ember/`; voice-commanded ("show ember / survival / the failsafe"); offline-capable; advisor degrades gracefully when OLLAMA_ORIGINS not set.
+- AGORA exchange dock — localhost-only iframe dock with probed reachability, designed offline card, RETRY on demand, URL configurable in Settings; voice-commanded ("show agora / the exchange / open the floor").
+- Deckserve generalized — `src-tauri/src/deckserve.rs` now resolves any `deck://localhost/<deckname>/` path from `public/decks/<deckname>/`; auspex and ember paths both tested.
+- Five-deck plumbing — DeckId union, DeckLayer, Shell SegBtns, commands.ts CAT_RE precedence, few-shot examples all updated and regression-tested.
+- Settings gains a Decks section — AGORA URL field (localhost/127.0.0.1 only; remote URLs rejected).

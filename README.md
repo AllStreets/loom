@@ -150,6 +150,26 @@ The cockpit now belongs to you. Organs are mortal, the globe is interactive out 
 
 ---
 
+## Stage 4b — More Decks
+
+**Phase 13 — Stage 4b — shipped.**
+
+The cockpit now carries five decks: void, globe, terminal, ember, and agora. The deck infrastructure was generalized so all future decks use the same `deck://localhost/<deckname>/` origin pattern and the same lifecycle plumbing.
+
+**EMBER — the failsafe deck.**
+
+Say "show ember", "show survival", or "show the failsafe" and the cockpit mounts EMBER: a bundled, fully offline survival console. EMBER is a static snapshot committed to `public/decks/ember/` from `~/Downloads/EMBER` — the same source project whose Forge engine inspired LOOM's builder. It runs entirely from local files with no network required.
+
+EMBER's Advisor and Forge features call Ollama at `localhost:11434`. Under the `deck://` protocol origin used in packaged builds, Ollama's default CORS policy will reject these requests — EMBER degrades silently (the LLM chip goes offline; the rest of the console remains fully functional). To enable the Advisor in a packaged build, set `OLLAMA_ORIGINS=deck://localhost` in your Ollama environment before launching. EMBER's File System Access API (Forge file editing) may be unavailable inside a sandboxed iframe; EMBER hides or degrades those controls per its own design — it does not crash.
+
+**AGORA — the exchange dock.**
+
+Say "show agora", "show the exchange", or "open the floor" and the cockpit mounts the AGORA deck. AGORA is a dock: the deck iframe points at a configurable local URL (default `http://localhost:3000`). AGORA is a locally-run Next.js app (web + engine WebSocket + Postgres) that you start separately. The deck URL is set in Settings.
+
+When AGORA is reachable the iframe mounts live; pointer events follow the interact toggle exactly as other decks. When AGORA is not running the deck shows an honest offline card: instructions to start the local app, a RETRY button that re-probes on demand, and no polling loop while dark. There is no remote-URL option — the Settings field accepts only `http(s)://localhost` or `http(s)://127.0.0.1` addresses; sovereignty and iframe safety require the app to run on your machine.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -252,11 +272,9 @@ Built in phases, each a working, tested, reviewed milestone.
 | **10 · The Cockpit (Stage 2)** | salience engine · live world sensors (AUSPEX stories + USGS quakes) · watchlist + engagement · living constellation · watch panel · voice briefings · deck origin isolation (prod custom protocol) | **shipped** |
 | **11 · The Cockpit (Stage 3)** | chrome design language · hardening (error boundaries, LOOM-voice failure copy) · Terminal deck (live tape / indices / movers / macro + finance wire) | **shipped** |
 | **12 · The Cockpit (Stage 4a)** | ownership: organ delete + tombstones · reset-to-defaults · persistence (watchOpen, minimized set) · constellation off-by-default · interact-by-default · deck-mode legibility · orb transparent-mode over decks | **shipped** |
-| **next · EMBER deck** | Offline survival console as a deck: grid-down instrument panel | planned |
-| **next · AGORA deck** | Markets intelligence deck: order flow, positioning, macro | planned |
-| **next · Globe fly-to** | Auto-fly the globe to a salience item's lat/lng on briefing | planned |
-| **next · Learned salience** | Replace hand-tuned factor weights with a small learned model seeded by engagement history | planned |
-| **later** | LOOM-owned quote proxy (kill corsproxy dep) · mid-Earth chat overlay polish for narrow heights · Threads/Desktop error boundaries · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
+| **13 · The Cockpit (Stage 4b)** | EMBER failsafe deck · AGORA exchange dock · deckserve generalized to all decks · five decks total | **shipped** |
+| **next · Stage 5** | LOOM-owned quote proxy (kill corsproxy dep) · globe fly-to on salience briefings · learned salience model · AGORA engine health strip · EMBER Forge-in-deck story | planned |
+| **later** | mid-Earth chat overlay polish for narrow heights · Threads/Desktop error boundaries · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 

@@ -7,6 +7,7 @@ import {
   VOICE_IDS,
   VOICE_LABELS,
   isValidModelTag,
+  isValidAgoraUrl,
 } from "./settings";
 
 // jsdom provides localStorage
@@ -31,7 +32,8 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("cockpit.interact");
     expect(SETTINGS_KEYS).toContain("cockpit.constellation");
     expect(SETTINGS_KEYS).toContain("cockpit.watchOpen");
-    expect(SETTINGS_KEYS).toHaveLength(12);
+    expect(SETTINGS_KEYS).toContain("deck.agora.url");
+    expect(SETTINGS_KEYS).toHaveLength(13);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -235,6 +237,78 @@ describe("cockpit.watchOpen setting", () => {
 
   it("cockpit.watchOpen rejects unknown values", () => {
     expect(() => setSetting("cockpit.watchOpen", "maybe")).toThrow();
+  });
+});
+
+describe("isValidAgoraUrl", () => {
+  it("empty string → true (use default)", () => {
+    expect(isValidAgoraUrl("")).toBe(true);
+  });
+
+  it("http://localhost:3000 → true", () => {
+    expect(isValidAgoraUrl("http://localhost:3000")).toBe(true);
+  });
+
+  it("http://localhost:8080 → true", () => {
+    expect(isValidAgoraUrl("http://localhost:8080")).toBe(true);
+  });
+
+  it("https://localhost:3000 → true", () => {
+    expect(isValidAgoraUrl("https://localhost:3000")).toBe(true);
+  });
+
+  it("http://127.0.0.1:3000 → true", () => {
+    expect(isValidAgoraUrl("http://127.0.0.1:3000")).toBe(true);
+  });
+
+  it("https://127.0.0.1 → true", () => {
+    expect(isValidAgoraUrl("https://127.0.0.1")).toBe(true);
+  });
+
+  it("https://evil.com → false", () => {
+    expect(isValidAgoraUrl("https://evil.com")).toBe(false);
+  });
+
+  it("http://localhost.evil.com → false", () => {
+    expect(isValidAgoraUrl("http://localhost.evil.com")).toBe(false);
+  });
+
+  it("file:///etc/passwd → false", () => {
+    expect(isValidAgoraUrl("file:///etc/passwd")).toBe(false);
+  });
+
+  it("not-a-url → false", () => {
+    expect(isValidAgoraUrl("not-a-url")).toBe(false);
+  });
+
+  it("http://192.168.1.1:3000 → false", () => {
+    expect(isValidAgoraUrl("http://192.168.1.1:3000")).toBe(false);
+  });
+});
+
+describe("deck.agora.url setting", () => {
+  it("defaults to http://localhost:3000", () => {
+    expect(getSetting("deck.agora.url")).toBe("http://localhost:3000");
+  });
+
+  it("setSetting accepts valid local URL", () => {
+    expect(() => setSetting("deck.agora.url", "http://localhost:8080")).not.toThrow();
+    expect(getSetting("deck.agora.url")).toBe("http://localhost:8080");
+  });
+
+  it("setSetting accepts empty string (reset to default)", () => {
+    setSetting("deck.agora.url", "http://localhost:8080");
+    expect(() => setSetting("deck.agora.url", "")).not.toThrow();
+    // After empty set, localStorage key is set to "" so getSetting returns "" not default
+    expect(localStorage.getItem("deck.agora.url")).toBe("");
+  });
+
+  it("setSetting rejects remote URL", () => {
+    expect(() => setSetting("deck.agora.url", "https://evil.com")).toThrow(/Invalid URL/);
+  });
+
+  it("setSetting rejects non-URL garbage", () => {
+    expect(() => setSetting("deck.agora.url", "not-a-url")).toThrow(/Invalid URL/);
   });
 });
 

@@ -275,6 +275,45 @@ describe("classifyDeckCommand — non-deck phrases", () => {
   });
 });
 
+describe("classifyDeckCommand — ember deck", () => {
+  it("'show ember' → deckSwitch:ember, no bridgeCmds", () => {
+    const r = classifyDeckCommand("show ember", "void");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("ember");
+    expect(r!.bridgeCmds).toHaveLength(0);
+    expect(r!.confirmation).toMatch(/failsafe/i);
+  });
+
+  it("'show survival' → deckSwitch:ember", () => {
+    const r = classifyDeckCommand("show survival", "void");
+    expect(r!.deckSwitch).toBe("ember");
+  });
+
+  it("'the failsafe' → deckSwitch:ember", () => {
+    const r = classifyDeckCommand("the failsafe", "void");
+    expect(r!.deckSwitch).toBe("ember");
+  });
+
+  it("'open the failsafe' → deckSwitch:ember", () => {
+    const r = classifyDeckCommand("open the failsafe", "void");
+    expect(r!.deckSwitch).toBe("ember");
+  });
+
+  // Regressions: globe/terminal/category rules untouched
+  it("REGRESSION 'show the globe' still → globe (not ember)", () => {
+    expect(classifyDeckCommand("show the globe", "void")!.deckSwitch).toBe("globe");
+  });
+
+  it("REGRESSION 'show markets' still → terminal (not ember)", () => {
+    expect(classifyDeckCommand("show markets", "void")!.deckSwitch).toBe("terminal");
+  });
+
+  it("REGRESSION 'show military' still → set_cat military (not ember)", () => {
+    const r = classifyDeckCommand("show military", "globe");
+    expect(r!.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "military" });
+  });
+});
+
 describe("classifyDeckCommand — terminal deck", () => {
   it("'show the terminal' → deckSwitch:terminal", () => {
     const r = classifyDeckCommand("show the terminal", "void");
@@ -335,5 +374,65 @@ describe("classifyDeckCommand — terminal deck", () => {
 
   it("REGRESSION 'back to the void' still → void", () => {
     expect(classifyDeckCommand("back to the void", "terminal")!.deckSwitch).toBe("void");
+  });
+});
+
+describe("classifyDeckCommand — agora deck", () => {
+  it("'show agora' → deckSwitch:agora, no bridgeCmds", () => {
+    const r = classifyDeckCommand("show agora", "void");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("agora");
+    expect(r!.bridgeCmds).toHaveLength(0);
+    expect(r!.confirmation).toMatch(/exchange/i);
+  });
+
+  it("'open agora' → deckSwitch:agora", () => {
+    const r = classifyDeckCommand("open agora", "void");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("agora");
+  });
+
+  it("'show the exchange' → deckSwitch:agora", () => {
+    const r = classifyDeckCommand("show the exchange", "void");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("agora");
+  });
+
+  it("'open the exchange' → deckSwitch:agora", () => {
+    const r = classifyDeckCommand("open the exchange", "void");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("agora");
+  });
+
+  it("'open the floor' → deckSwitch:agora", () => {
+    const r = classifyDeckCommand("open the floor", "void");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("agora");
+  });
+
+  // Regressions: existing rules untouched
+  it("REGRESSION 'show the globe' still → globe (not agora)", () => {
+    expect(classifyDeckCommand("show the globe", "void")!.deckSwitch).toBe("globe");
+  });
+
+  it("REGRESSION 'show markets' still → terminal (not agora)", () => {
+    expect(classifyDeckCommand("show markets", "void")!.deckSwitch).toBe("terminal");
+  });
+
+  it("REGRESSION 'show ember' still → ember (not agora)", () => {
+    expect(classifyDeckCommand("show ember", "void")!.deckSwitch).toBe("ember");
+  });
+
+  it("REGRESSION 'show military' still → set_cat military (not agora)", () => {
+    const r = classifyDeckCommand("show military", "globe");
+    expect(r!.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "military" });
+    expect(r!.deckSwitch).not.toBe("agora");
+  });
+
+  it("PRECEDENCE 'show financial markets' → set_cat finance (not agora), CAT_RE wins", () => {
+    const r = classifyDeckCommand("show financial markets", "globe");
+    expect(r).not.toBeNull();
+    expect(r!.bridgeCmds).toEqual([{ type: "set_cat", cat: "finance" }]);
+    expect(r!.deckSwitch).not.toBe("agora");
   });
 });

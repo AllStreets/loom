@@ -8,7 +8,7 @@ import { describe, it, expect } from "vitest";
 import { buildDeckConfig } from "./config";
 
 describe("buildDeckConfig factory — dev branch (isDev = true)", () => {
-  it("DECK_URL is the vite relative path in dev", () => {
+  it("DECK_URL is the vite relative path in dev (auspex default)", () => {
     const config = buildDeckConfig(true);
     expect(config.url).toBe("/decks/auspex/index.html");
   });
@@ -21,9 +21,9 @@ describe("buildDeckConfig factory — dev branch (isDev = true)", () => {
 });
 
 describe("buildDeckConfig factory — prod branch (isDev = false)", () => {
-  it("DECK_URL is the custom protocol URL in prod", () => {
+  it("DECK_URL is the custom protocol URL in prod (auspex default)", () => {
     const config = buildDeckConfig(false);
-    expect(config.url).toBe("deck://localhost/index.html");
+    expect(config.url).toBe("deck://localhost/auspex/index.html");
   });
 
   it("DECK_ORIGIN is deck://localhost in prod", () => {
@@ -52,5 +52,27 @@ describe("DECK_ORIGIN matches postMessage targetOrigin expectation", () => {
     // the browser will only deliver to a frame at exactly that origin.
     const config = buildDeckConfig(false);
     expect(config.origin).not.toBe(window.location.origin);
+  });
+});
+
+describe("buildDeckConfig with deckName='ember'", () => {
+  it("DEV: url = /decks/ember/index.html", () => {
+    const config = buildDeckConfig(true, "ember");
+    expect(config.url).toBe("/decks/ember/index.html");
+  });
+
+  it("PROD: url = deck://localhost/ember/index.html", () => {
+    const config = buildDeckConfig(false, "ember");
+    expect(config.url).toBe("deck://localhost/ember/index.html");
+  });
+
+  it("origin is unchanged (deck://localhost in prod)", () => {
+    const config = buildDeckConfig(false, "ember");
+    expect(config.origin).toBe("deck://localhost");
+  });
+
+  it("origin is window.location.origin in dev", () => {
+    const config = buildDeckConfig(true, "ember");
+    expect(config.origin).toBe(window.location.origin);
   });
 });
