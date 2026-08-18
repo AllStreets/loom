@@ -24,7 +24,8 @@
  * @keyframes class toggle (attribute flip, no state).
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { getSetting } from '../lib/voice/settings';
 
 // ── Node definitions ──────────────────────────────────────────────────────────
 
@@ -197,6 +198,20 @@ export default function Constellation() {
   const recompute = useRef<() => void>(() => {});
 
   const reducedMotionRef = useRef<boolean>(false);
+
+  // Visibility: reads cockpit.constellation setting; defaults to "off"
+  const [visible, setVisible] = useState(() => getSetting('cockpit.constellation') === 'on');
+
+  useEffect(() => {
+    function onSettingsChanged(ev: Event) {
+      const detail = (ev as CustomEvent<{ key: string; value: string }>).detail;
+      if (detail?.key === 'cockpit.constellation') {
+        setVisible(detail.value === 'on');
+      }
+    }
+    window.addEventListener('loom-settings-changed', onSettingsChanged);
+    return () => window.removeEventListener('loom-settings-changed', onSettingsChanged);
+  }, []);
 
   useEffect(() => {
     ensureKeyframes();
@@ -378,6 +393,8 @@ export default function Constellation() {
 
   const W = typeof window !== "undefined" ? window.innerWidth : 1440;
   const H = typeof window !== "undefined" ? window.innerHeight : 900;
+
+  if (!visible) return null;
 
   return (
     <svg

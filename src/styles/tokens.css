@@ -26,6 +26,7 @@
 html,body,#root{height:100%;margin:0}
 /* The shell is a fixed instrument — nothing may create horizontal scroll. */
 html,body{overflow-x:clip}
+html{background:var(--bg)}
 body{background:var(--bg);color:var(--t1);font-family:var(--f-sans)}
 
 .glass{

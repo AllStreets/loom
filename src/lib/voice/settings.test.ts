@@ -24,7 +24,9 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("model.rewriter");
     expect(SETTINGS_KEYS).toContain("model.cloudBuilder");
     expect(SETTINGS_KEYS).toContain("cockpit.deck");
-    expect(SETTINGS_KEYS).toHaveLength(9);
+    expect(SETTINGS_KEYS).toContain("cockpit.interact");
+    expect(SETTINGS_KEYS).toContain("cockpit.constellation");
+    expect(SETTINGS_KEYS).toHaveLength(11);
   });
 
   it("throws on unknown key in getSetting", () => {

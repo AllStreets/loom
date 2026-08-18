@@ -46,7 +46,9 @@ export type SettingsKey =
   | "model.companion"
   | "model.rewriter"
   | "model.cloudBuilder"
-  | "cockpit.deck";
+  | "cockpit.deck"
+  | "cockpit.interact"
+  | "cockpit.constellation";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "voice.default",
@@ -58,6 +60,8 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "model.rewriter",
   "model.cloudBuilder",
   "cockpit.deck",
+  "cockpit.interact",
+  "cockpit.constellation",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
@@ -71,6 +75,8 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "loom.reviewBeforeSave": ["0", "1"],
   "model.cloudBuilder": ["off", "anthropic"],
   "cockpit.deck": ["void", "globe", "terminal"],
+  "cockpit.interact": ["on", "off"],
+  "cockpit.constellation": ["on", "off"],
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -83,6 +89,8 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "model.rewriter": "",
   "model.cloudBuilder": "off",
   "cockpit.deck": "void",
+  "cockpit.interact": "on",
+  "cockpit.constellation": "off",
 };
 
 // Legacy key the orb's detectTier reads
@@ -130,6 +138,9 @@ export function setSetting(key: string, value: string): void {
   }
 
   localStorage.setItem(k, value);
+
+  // Dispatch a live-update event so Shell/Constellation react without restart
+  window.dispatchEvent(new CustomEvent("loom-settings-changed", { detail: { key: k, value } }));
 
   // Legacy side-effect for orb.tier
   if (k === "orb.tier") {

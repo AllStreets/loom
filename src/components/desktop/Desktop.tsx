@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useOrgans, type OrganState } from "../../lib/organs/host";
 import OrganWindow from "./OrganWindow";
 import Dock from "./Dock";
+import { windowRegistry } from "../../lib/ambient/windowRegistry";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -56,6 +57,14 @@ export default function Desktop() {
         next.push(id);
         return next;
       });
+      // Re-add to registry using persisted position
+      try {
+        const raw = localStorage.getItem(`loom.win.${id}`);
+        if (raw) {
+          const p = JSON.parse(raw);
+          windowRegistry.set(id, { x: p.x ?? 0, y: p.y ?? 0, w: p.w ?? 420, h: p.h ?? 360 });
+        }
+      } catch { /* ignore */ }
       // Flash outline
       const winEl = windowRefs.current[id];
       if (winEl) {
@@ -133,6 +142,7 @@ export default function Desktop() {
       ...prev,
       [id]: { ...prev[id], minimized: true, focused: false },
     }));
+    windowRegistry.delete(id);
   }
 
   function handleDockClick(id: string) {
@@ -152,6 +162,14 @@ export default function Desktop() {
       next.push(id);
       return next;
     });
+    // Re-add to registry using persisted position
+    try {
+      const raw = localStorage.getItem(`loom.win.${id}`);
+      if (raw) {
+        const p = JSON.parse(raw);
+        windowRegistry.set(id, { x: p.x ?? 0, y: p.y ?? 0, w: p.w ?? 420, h: p.h ?? 360 });
+      }
+    } catch { /* ignore */ }
   }
 
   async function handleApprove(id: string) {

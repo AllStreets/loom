@@ -126,7 +126,7 @@ export default function Shell() {
   const reducedMotion = useReducedMotion() ?? false;
 
   const [deck, setDeck] = useState<DeckId>(() => getSetting('cockpit.deck') as DeckId);
-  const [interactMode, setInteractMode] = useState(false);
+  const [interactMode, setInteractMode] = useState(() => getSetting('cockpit.interact') === 'on');
   const [watchOpen, setWatchOpen] = useState(false);
   const [watchUnseen, setWatchUnseen] = useState(0);
 
@@ -205,6 +205,19 @@ export default function Shell() {
     }
     window.addEventListener('loom-deck', onDeck);
     return () => window.removeEventListener('loom-deck', onDeck);
+  }, []);
+
+  // ----- loom-settings-changed: live-update interact + constellation -----
+  useEffect(() => {
+    function onSettingsChanged(ev: Event) {
+      const detail = (ev as CustomEvent<{ key: string; value: string }>).detail;
+      if (!detail) return;
+      if (detail.key === 'cockpit.interact') {
+        setInteractMode(detail.value === 'on');
+      }
+    }
+    window.addEventListener('loom-settings-changed', onSettingsChanged);
+    return () => window.removeEventListener('loom-settings-changed', onSettingsChanged);
   }, []);
 
   // ----- fleet poll -----
@@ -583,7 +596,11 @@ export default function Shell() {
                   testid="deck-interact-btn"
                   label={interactMode ? "INTERACTING" : "INTERACT"}
                   selected={interactMode}
-                  onClick={() => setInteractMode((p) => !p)}
+                  onClick={() => {
+                    const next = !interactMode;
+                    setInteractMode(next);
+                    setSetting('cockpit.interact', next ? 'on' : 'off');
+                  }}
                 />
               )}
               <SegBtn

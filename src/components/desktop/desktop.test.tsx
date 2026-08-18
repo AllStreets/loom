@@ -746,6 +746,44 @@ describe("Desktop", () => {
     expect(resizeGrip.style.cursor).toBe("se-resize");
   });
 
+  it("minimize removes organ from windowRegistry, restore re-adds it", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'notes', render(el){ el.textContent = 'notes-content'; } }";
+      return null;
+    });
+
+    // Pre-populate localStorage so handleDockClick can re-add the registry entry
+    localStorage.setItem("loom.win.notes", JSON.stringify({ x: 40, y: 40, w: 420, h: 360 }));
+
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+    });
+
+    const { windowRegistry } = await import("../../lib/ambient/windowRegistry");
+
+    // Minimize
+    const minBtn = screen.getByTitle("Minimize");
+    await userEvent.click(minBtn);
+
+    // Registry should no longer have the entry after minimize
+    await waitFor(() => {
+      expect(windowRegistry.getAll().has("notes")).toBe(false);
+    });
+
+    // Restore via dock click
+    const dockTile = screen.getByTitle("Note Keeper");
+    await userEvent.click(dockTile);
+
+    // Registry should have the entry again after restore
+    await waitFor(() => {
+      expect(windowRegistry.getAll().has("notes")).toBe(true);
+    });
+  });
+
   it("viewport-resize listener re-clamps an open window that would be off-screen after shrink", async () => {
     // Start with a wide viewport
     Object.defineProperty(window, "innerWidth",  { configurable: true, writable: true, value: 1280 });
