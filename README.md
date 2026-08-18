@@ -91,7 +91,7 @@ The cockpit now watches the world for you. A salience engine runs in the kernel,
 
 - **Voice briefings.** Say "brief me", "what matters", "morning brief", "what's happening", or "since I've been gone". The cockpit assembles a spoken briefing from the top 3 salient items — title and first reason — with zero model calls. Empty watch: "The watch is quiet. Nothing crosses your thresholds." Spoken per the existing speakReplies setting.
 
-- **Deck origin isolation (production).** In production builds, the AUSPEX globe iframe is served via a custom `auspex.localhost` Tauri protocol, giving it a distinct origin from the LOOM shell. The deck's own localStorage and Supabase fetches continue to work (CORS: anon REST allows any origin). In dev, vite serves as before (shared origin, documented).
+- **Deck origin isolation (production).** In production builds, the AUSPEX globe iframe is served via a custom `deck://localhost` Tauri protocol (custom `deck` URI scheme), giving it a distinct origin from the LOOM shell. The deck's own localStorage and Supabase fetches continue to work (CORS: anon REST allows any origin). In dev, vite serves as before (shared origin, documented).
 
 ---
 
