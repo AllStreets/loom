@@ -752,7 +752,6 @@ const ORGAN_JS = `export default {
     resetNote.textContent = "Organs' code is kept; deleted seed organs will return.";
     systemPage.appendChild(resetNote);
 
-    var resetBtnState = "idle";
     var resetBtn = ui.button("Reset LOOM to defaults", { variant: "ghost", action: "system-reset" });
     resetBtn.style.color = ui.tokens.danger;
     resetBtn.style.borderColor = ui.tokens.danger;
