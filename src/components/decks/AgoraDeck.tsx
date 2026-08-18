@@ -42,11 +42,15 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
   const [opacity, setOpacity] = useState(reducedMotion ? 1 : 0);
   const [probeState, setProbeState] = useState<ProbeState>("probing");
   const agoraUrl = getAgoraUrl();
-  const probeController = useRef<AbortController | null>(null);
+
+  // Monotonic probe id: a settled probe only writes state if it is still the
+  // LATEST probe AND the component is mounted — rapid deck switching within
+  // the 2s window can neither warn (setState-on-unmounted) nor write stale.
+  const probeSeq = useRef(0);
+  const mountedRef = useRef(true);
 
   const probe = useCallback(async () => {
-    // Cancel any in-flight probe
-    probeController.current?.abort();
+    const seq = ++probeSeq.current;
     setProbeState("probing");
     try {
       // no-cors: response will be opaque (type "opaque") but no error = reachable.
@@ -54,17 +58,18 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
         mode: "no-cors",
         signal: AbortSignal.timeout(2000),
       });
-      setProbeState("reachable");
+      if (mountedRef.current && seq === probeSeq.current) setProbeState("reachable");
     } catch {
-      setProbeState("unreachable");
+      if (mountedRef.current && seq === probeSeq.current) setProbeState("unreachable");
     }
   }, [agoraUrl]);
 
   // Probe on mount (and re-probe when deck re-activates via key change)
   useEffect(() => {
+    mountedRef.current = true;
     probe();
     return () => {
-      probeController.current?.abort();
+      mountedRef.current = false;
     };
   }, [probe]);
 

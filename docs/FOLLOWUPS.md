@@ -137,7 +137,7 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 
 ### Resolved in Stage 4b (More Decks, Phase 13)
 - EMBER failsafe deck — bundled static snapshot at `public/decks/ember/`; served via `deck://localhost/ember/`; voice-commanded ("show ember / survival / the failsafe"); offline-capable; advisor degrades gracefully when OLLAMA_ORIGINS not set.
-- AGORA exchange dock — localhost-only iframe dock with probed reachability, designed offline card, RETRY on demand, URL configurable in Settings; voice-commanded ("show agora / the exchange / markets floor").
+- AGORA exchange dock — localhost-only iframe dock with probed reachability, designed offline card, RETRY on demand, URL configurable in Settings; voice-commanded ("show agora / the exchange / open the floor").
 - Deckserve generalized — `src-tauri/src/deckserve.rs` now resolves any `deck://localhost/<deckname>/` path from `public/decks/<deckname>/`; auspex and ember paths both tested.
 - Five-deck plumbing — DeckId union, DeckLayer, Shell SegBtns, commands.ts CAT_RE precedence, few-shot examples all updated and regression-tested.
 - Settings gains a Decks section — AGORA URL field (localhost/127.0.0.1 only; remote URLs rejected).

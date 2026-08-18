@@ -164,7 +164,7 @@ EMBER's Advisor and Forge features call Ollama at `localhost:11434`. Under the `
 
 **AGORA — the exchange dock.**
 
-Say "show agora", "show the exchange", or "show markets floor" and the cockpit mounts the AGORA deck. AGORA is a dock: the deck iframe points at a configurable local URL (default `http://localhost:3000`). AGORA is a locally-run Next.js app (web + engine WebSocket + Postgres) that you start separately. The deck URL is set in Settings.
+Say "show agora", "show the exchange", or "open the floor" and the cockpit mounts the AGORA deck. AGORA is a dock: the deck iframe points at a configurable local URL (default `http://localhost:3000`). AGORA is a locally-run Next.js app (web + engine WebSocket + Postgres) that you start separately. The deck URL is set in Settings.
 
 When AGORA is reachable the iframe mounts live; pointer events follow the interact toggle exactly as other decks. When AGORA is not running the deck shows an honest offline card: instructions to start the local app, a RETRY button that re-probes on demand, and no polling loop while dark. There is no remote-URL option — the Settings field accepts only `http(s)://localhost` or `http(s)://127.0.0.1` addresses; sovereignty and iframe safety require the app to run on your machine.
 
