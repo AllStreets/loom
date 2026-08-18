@@ -1,18 +1,16 @@
 /**
- * DeckLayer.tsx — sovereign cockpit deck layer
+ * DeckLayer.tsx — sovereign cockpit deck layer (purely presentational)
  * Renders the active deck between Field (z1) and orb-band (z10).
  * This layer itself never captures pointer events — only the active
  * deck iframe may do so (when interact=true).
  *
- * Listens for the loom-deck CustomEvent {detail: {deck: "void"|"globe"}}
- * dispatched by deck control buttons in Shell's top bar.
+ * Deck prop is owned by Shell (Shell reads/writes cockpit.deck setting).
+ * DeckLayer is purely presentational — no event listeners, no persistence.
  *
  * "void" → renders nothing (current LOOM look is preserved).
  * "globe" → renders GlobeDeck iframe (AUSPEX globe behind the orb).
  */
-import { useEffect } from "react";
 import GlobeDeck from "./GlobeDeck";
-import { setSetting } from "../../lib/voice/settings";
 
 export type DeckId = "void" | "globe";
 
@@ -23,23 +21,11 @@ interface DeckLayerProps {
 }
 
 export default function DeckLayer({ deck, interactMode, onInteractToggle: _ }: DeckLayerProps) {
-  // Listen for loom-deck events (dispatched by Shell's top-bar buttons).
-  // We only persist here; Shell's own listener handles setDeck.
-  useEffect(() => {
-    function onDeckEvent(e: Event) {
-      const detail = (e as CustomEvent<{ deck: DeckId }>).detail;
-      if (!detail?.deck) return;
-      setSetting("cockpit.deck", detail.deck);
-    }
-    window.addEventListener("loom-deck", onDeckEvent);
-    return () => window.removeEventListener("loom-deck", onDeckEvent);
-  }, []);
-
   return (
     <div
       data-testid="deck-layer"
       style={{
-        position: "absolute",
+        position: "fixed",
         inset: 0,
         zIndex: 2,
         pointerEvents: "none",

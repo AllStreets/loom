@@ -245,4 +245,98 @@ describe("Bundle existence", () => {
       existsSync(path.join(repoRoot, "public/decks/auspex/loom-adapter.js"))
     ).toBe(true);
   });
+
+  it("12c. bundle excludes dev-only dirs: scripts, supabase, src", () => {
+    // These dirs must NOT be tracked in the bundle (dev-only artifacts)
+    const trackedDirs = ["scripts", "supabase", "src"];
+    // We verify they are gitignored — existsSync would be true on disk but that's OK;
+    // the key contract is they are not tracked by git. We check the .gitignore content.
+    const gitignore = require("fs").readFileSync(
+      path.join(repoRoot, "public/decks/auspex/.gitignore"),
+      "utf8"
+    );
+    for (const dir of trackedDirs) {
+      expect(gitignore).toContain(dir);
+    }
+  });
+
+  it("12d. bundle excludes package.json, package-lock.json, vercel.json", () => {
+    const gitignore = require("fs").readFileSync(
+      path.join(repoRoot, "public/decks/auspex/.gitignore"),
+      "utf8"
+    );
+    expect(gitignore).toContain("package.json");
+    expect(gitignore).toContain("package-lock.json");
+    expect(gitignore).toContain("vercel.json");
+  });
+
+  it("12e. snapshot.json exists in bundle", () => {
+    expect(
+      existsSync(path.join(repoRoot, "public/decks/auspex/snapshot.json"))
+    ).toBe(true);
+  });
+});
+
+// ── Review-fix tests (M2) ──────────────────────────────────────────────────────
+
+describe("GlobeDeck fade-in (C2)", () => {
+  it("13. iframe mounts at opacity 0 when not reduced-motion", () => {
+    // framer-motion mock returns reducedMotion=false
+    render(
+      <DeckLayer deck="globe" interactMode={false} onInteractToggle={() => {}} />
+    );
+    const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+    expect(iframe).not.toBeNull();
+    // Pre-rAF: opacity should be "0" (useState initial value)
+    expect(iframe.style.opacity).toBe("0");
+  });
+});
+
+describe("DeckLayer no event listener (M2/C1)", () => {
+  it("14. setSetting is NOT called from DeckLayer on loom-deck events", async () => {
+    const setSpy = vi.mocked(settingsMod.setSetting);
+    setSpy.mockClear();
+
+    render(
+      <DeckLayer deck="void" interactMode={false} onInteractToggle={() => {}} />
+    );
+
+    // Dispatch loom-deck event — DeckLayer must not call setSetting
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("loom-deck", { detail: { deck: "globe" } })
+      );
+    });
+
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("Shell globe chrome (M1)", () => {
+  beforeEach(() => {
+    vi.mocked(settingsMod.getSetting).mockImplementation(
+      (k: string) => (k === "cockpit.deck" ? "void" : "")
+    );
+  });
+
+  it("15. Timeline details hidden when deck=globe", async () => {
+    render(<Shell />);
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("loom-deck", { detail: { deck: "globe" } })
+      );
+    });
+
+    const timeline = document.querySelector("[data-testid='timeline-details']") as HTMLElement;
+    expect(timeline).not.toBeNull();
+    expect(timeline.style.display).toBe("none");
+  });
+
+  it("16. Timeline details visible (not display:none) when deck=void", () => {
+    render(<Shell />);
+    const timeline = document.querySelector("[data-testid='timeline-details']") as HTMLElement;
+    expect(timeline).not.toBeNull();
+    expect(timeline.style.display).not.toBe("none");
+  });
 });

@@ -1,3 +1,12 @@
+# LOOM bundle excludes — dev-only dirs/files not needed in the static bundle
+.claude/
+scripts/
+supabase/
+src/
+package.json
+package-lock.json
+vercel.json
+
 # dependencies
 node_modules/
 

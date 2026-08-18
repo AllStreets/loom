@@ -389,13 +389,40 @@ export default function Shell() {
           ...staggerStyle,
         }}
       >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 10,
+            ...(deck === 'globe' ? {
+              background: 'var(--glass)',
+              border: '1px solid var(--glass-border)',
+              borderRadius: 999,
+              padding: '2px 12px',
+              backdropFilter: 'blur(var(--blur))',
+              WebkitBackdropFilter: 'blur(var(--blur))',
+            } : {}),
+          }}
+        >
           <b style={{ letterSpacing: ".4em", fontSize: 20, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
           <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)" }}>sovereign console</small>
         </div>
 
         {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
-        <FleetHUD roles={roles} />
+        <div
+          style={{
+            ...(deck === 'globe' ? {
+              background: 'var(--glass)',
+              border: '1px solid var(--glass-border)',
+              borderRadius: 999,
+              padding: '2px 8px',
+              backdropFilter: 'blur(var(--blur))',
+              WebkitBackdropFilter: 'blur(var(--blur))',
+            } : {}),
+          }}
+        >
+          <FleetHUD roles={roles} />
+        </div>
 
         {/* Deck controls */}
         {/* Glass pill keeps the controls legible over bright deck content */}
@@ -600,10 +627,11 @@ export default function Shell() {
             style={{ width: "100%", maxWidth: 1100, position: "relative", zIndex: 10 }}
           />
 
-          {/* Timeline collapsible footer */}
+          {/* Timeline collapsible footer — hidden when AUSPEX globe is active (it has its own timeline bar) */}
           <details
+            data-testid="timeline-details"
             className="glass"
-            style={{ padding: "12px 16px", cursor: "pointer" }}
+            style={{ padding: "12px 16px", cursor: "pointer", display: deck === 'globe' ? 'none' : undefined }}
           >
             <summary
               style={{
