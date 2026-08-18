@@ -16,8 +16,8 @@
  *   function solves this: if GlobeDeck is already mounted it dispatches
  *   immediately; otherwise it enqueues for flush on mount.  Additionally,
  *   even after React mounts the component the iframe itself needs to load
- *   before postMessage is useful, so the flush waits for the iframe's `load`
- *   event (or dispatches immediately when the iframe is already loaded).
+ *   before postMessage is useful, so onDeckCommand enqueues when !iframeLoaded
+ *   and onIframeLoad flushes the queue — ensuring no double-send on any path.
  */
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
 import { useReducedMotion } from "framer-motion";
@@ -34,13 +34,30 @@ export interface GlobeDeckHandle {
 // ── Module-level pending command queue (C1 fix) ──────────────────────────────
 
 /**
- * Pending bridge commands enqueued before GlobeDeck mounts.
- * GlobeDeck's mount useEffect drains this after the iframe is ready.
+ * Pending bridge commands enqueued before GlobeDeck mounts or before the
+ * iframe has fired its `load` event.
  */
 const pendingCmds: BridgeCmd[][] = [];
 
 /** True while a GlobeDeck instance is mounted and its listener registered. */
 let globeListenerActive = false;
+
+/**
+ * True once the mounted iframe has fired its `load` event (or was already
+ * complete on mount).  Reset to false on effect cleanup so the next mount
+ * starts fresh.
+ */
+let iframeLoaded = false;
+
+/**
+ * Reset all module-level deck-queue state.
+ * Called in test beforeEach to guarantee isolation between test runs.
+ */
+export function _resetDeckQueueForTests(): void {
+  pendingCmds.length = 0;
+  globeListenerActive = false;
+  iframeLoaded = false;
+}
 
 /**
  * Send bridge commands to GlobeDeck.
@@ -99,18 +116,9 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
     // Listen for loom-deck-command events dispatched by Companion (or sendDeckCommands).
     // Each event carries { bridgeCmds: BridgeCmd[] }; forward them to the AUSPEX iframe.
     useEffect(() => {
-      function onDeckCommand(ev: Event) {
-        const detail = (ev as CustomEvent<{ bridgeCmds: BridgeCmd[] }>).detail;
-        if (!detail?.bridgeCmds) return;
-        for (const cmd of detail.bridgeCmds) {
-          postDeckCommand(iframeRef, cmd);
-        }
-      }
-
       /**
-       * Drain the pending queue once the iframe is ready.
-       * If the iframe is already loaded (e.g. cached), flush synchronously.
-       * Otherwise wait for the load event so postMessage reaches the document.
+       * Drain the pending queue now that the iframe is ready.
+       * Only called after iframeLoaded is set to true.
        */
       function flushPending() {
         if (pendingCmds.length === 0) return;
@@ -122,7 +130,22 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
         }
       }
 
+      function onDeckCommand(ev: Event) {
+        const detail = (ev as CustomEvent<{ bridgeCmds: BridgeCmd[] }>).detail;
+        if (!detail?.bridgeCmds) return;
+        if (!iframeLoaded) {
+          // Iframe not yet ready — enqueue; onIframeLoad will flush.
+          // Do NOT post here to avoid a double-send with the flush path.
+          pendingCmds.push(detail.bridgeCmds);
+          return;
+        }
+        for (const cmd of detail.bridgeCmds) {
+          postDeckCommand(iframeRef, cmd);
+        }
+      }
+
       function onIframeLoad() {
+        iframeLoaded = true;
         flushPending();
       }
 
@@ -131,12 +154,10 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
 
       const iframe = iframeRef.current;
       if (iframe) {
-        // If already loaded (readyState complete or src already resolved), flush now.
-        // Otherwise wait for the load event.
-        if (
-          (iframe.contentDocument?.readyState === "complete") ||
-          (iframe as HTMLIFrameElement & { _loaded?: boolean })._loaded
-        ) {
+        // contentDocument?.readyState is null for cross-origin iframes — harmless
+        // fallthrough to the load listener in that case.
+        if (iframe.contentDocument?.readyState === "complete") {
+          iframeLoaded = true;
           flushPending();
         } else {
           iframe.addEventListener("load", onIframeLoad);
@@ -145,6 +166,7 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
 
       return () => {
         globeListenerActive = false;
+        iframeLoaded = false;
         window.removeEventListener("loom-deck-command", onDeckCommand);
         if (iframe) iframe.removeEventListener("load", onIframeLoad);
       };

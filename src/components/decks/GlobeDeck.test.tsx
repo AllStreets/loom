@@ -6,10 +6,15 @@
  *   2. sendDeckCommands() enqueues because GlobeDeck not yet mounted
  *   3. GlobeDeck mounts (and iframe fires load)
  *   4. queued commands are flushed → iframe.contentWindow.postMessage called
+ *
+ * Also covers the iframe-not-yet-loaded race (C1c):
+ *   GlobeDeck is mounted but the iframe hasn't fired `load` yet — commands
+ *   dispatched via loom-deck-command must NOT be posted until load fires,
+ *   and must be posted exactly once (no double-send).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act } from "@testing-library/react";
-import { sendDeckCommands } from "./GlobeDeck";
+import { sendDeckCommands, _resetDeckQueueForTests } from "./GlobeDeck";
 import GlobeDeck from "./GlobeDeck";
 
 vi.mock("framer-motion", () => ({
@@ -24,10 +29,9 @@ function makeMockIframe() {
 }
 
 beforeEach(() => {
-  // Drain any leftover pending cmds between tests by rendering + unmounting GlobeDeck.
-  // The module-level pendingCmds array is reset via a mount/unmount cycle below,
-  // or simply reset via the exported queue draining on mount.
-  // We rely on test isolation via fresh renders.
+  // Reset all module-level deck-queue state (pendingCmds, globeListenerActive,
+  // iframeLoaded) so tests are fully isolated from each other.
+  _resetDeckQueueForTests();
 });
 
 describe("sendDeckCommands — cold switch (C1)", () => {
@@ -107,6 +111,59 @@ describe("sendDeckCommands — cold switch (C1)", () => {
 
       expect(postMessageSpy).toHaveBeenCalledWith(
         { loomDeck: true, cmd: { type: "toggle_overlay", overlay: "vessels" } },
+        window.location.origin
+      );
+
+      unmount();
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", originalDescriptor);
+      }
+    }
+  });
+});
+
+describe("iframe-not-yet-loaded race (C1c)", () => {
+  it("does NOT postMessage before iframe load fires, then posts exactly once after load", async () => {
+    const postMessageSpy = vi.fn();
+
+    const originalDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLIFrameElement.prototype,
+      "contentWindow"
+    );
+    Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
+      get() {
+        return { postMessage: postMessageSpy, origin: window.location.origin };
+      },
+      configurable: true,
+    });
+
+    try {
+      const { unmount, getByTestId } = render(<GlobeDeck interact={false} />);
+
+      // GlobeDeck is mounted but load has NOT fired yet.
+      // Dispatch a loom-deck-command now — must NOT post to the iframe.
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("loom-deck-command", {
+            detail: { bridgeCmds: [{ type: "set_cat", cat: "civil" }] },
+          })
+        );
+      });
+
+      // postMessage must NOT have been called yet (iframe not ready).
+      expect(postMessageSpy).not.toHaveBeenCalled();
+
+      // Now fire the iframe load event.
+      const iframe = getByTestId("globe-deck-iframe") as HTMLIFrameElement;
+      await act(async () => {
+        iframe.dispatchEvent(new Event("load"));
+      });
+
+      // Now postMessage should have been called exactly once with the queued command.
+      expect(postMessageSpy).toHaveBeenCalledTimes(1);
+      expect(postMessageSpy).toHaveBeenCalledWith(
+        { loomDeck: true, cmd: { type: "set_cat", cat: "civil" } },
         window.location.origin
       );
 
