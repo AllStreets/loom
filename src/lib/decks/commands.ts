@@ -22,7 +22,7 @@ export type BridgeCmd =
 
 export type DeckCommandResult = {
   /** deck switch that must fire BEFORE bridge cmds (only set when needed) */
-  deckSwitch?: "globe" | "void";
+  deckSwitch?: "globe" | "void" | "terminal";
   /** bridge commands to post into the AUSPEX iframe (may be empty) */
   bridgeCmds: BridgeCmd[];
   /** short confirmation line for the companion to speak ("Globe up.", etc.) */
@@ -34,6 +34,14 @@ export type DeckCommandResult = {
 // Deck show: "show the globe", "open the world", "show map", etc.
 const DECK_SHOW_RE =
   /\b(show|open)\b.{0,20}?\b(globe|world|map)\b/i;
+
+// Terminal show: "show the terminal", "show markets", "show the tape", etc.
+const TERMINAL_SHOW_RE =
+  /\b(show|open)\b.{0,20}?\b(terminal|markets|market|the tape|tape)\b/i;
+
+// Terminal hide: "hide the terminal", "close markets", "close the tape".
+const TERMINAL_HIDE_RE =
+  /\b(hide|close)\b.{0,20}?\b(terminal|markets|market|tape)\b/i;
 
 // Deck hide: "hide the globe", "back to void", "close the world", etc.
 const DECK_HIDE_RE =
@@ -104,8 +112,27 @@ const CAT_LABELS: Record<string, string> = {
  */
 export function classifyDeckCommand(
   utterance: string,
-  currentDeck: "void" | "globe"
+  currentDeck: "void" | "globe" | "terminal"
 ): DeckCommandResult | null {
+  // Terminal show — checked before globe/category rules so "show markets"
+  // routes to the tape, not a category filter. Globe rules stay untouched.
+  if (TERMINAL_SHOW_RE.test(utterance)) {
+    return {
+      deckSwitch: "terminal",
+      bridgeCmds: [],
+      confirmation: "The tape is live.",
+    };
+  }
+
+  // Terminal hide — back to void.
+  if (TERMINAL_HIDE_RE.test(utterance)) {
+    return {
+      deckSwitch: "void",
+      bridgeCmds: [],
+      confirmation: "Back to the void.",
+    };
+  }
+
   // Deck show
   if (DECK_SHOW_RE.test(utterance)) {
     return {

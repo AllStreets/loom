@@ -782,7 +782,7 @@ export default function Companion() {
       },
       // Provide current deck state to the runtime so deck_command rules can
       // auto-switch from void → globe when needed.
-      currentDeck: () => getSetting("cockpit.deck") as "void" | "globe",
+      currentDeck: () => getSetting("cockpit.deck") as "void" | "globe" | "terminal",
       getSalient: (k: number) => getSalient(k),
     };
 

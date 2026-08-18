@@ -12,7 +12,7 @@ export type CompanionDeps = {
   organIds: () => Promise<string[]>;
   askModel: (system: string, prompt: string) => Promise<string>;
   /** Current cockpit deck state — used for deck_command auto-switch logic */
-  currentDeck?: () => "void" | "globe";
+  currentDeck?: () => "void" | "globe" | "terminal";
   /** Returns the top-k salient events for the briefing fast path */
   getSalient?: (k: number) => ScoredEvent[];
 };

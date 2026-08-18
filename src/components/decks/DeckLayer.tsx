@@ -9,10 +9,12 @@
  *
  * "void" → renders nothing (current LOOM look is preserved).
  * "globe" → renders GlobeDeck iframe (AUSPEX globe behind the orb).
+ * "terminal" → renders TerminalDeck (Bloomberg-grade markets surface).
  */
 import GlobeDeck from "./GlobeDeck";
+import TerminalDeck from "./TerminalDeck";
 
-export type DeckId = "void" | "globe";
+export type DeckId = "void" | "globe" | "terminal";
 
 interface DeckLayerProps {
   deck: DeckId;
@@ -32,6 +34,7 @@ export default function DeckLayer({ deck, interactMode }: DeckLayerProps) {
       }}
     >
       {deck === "globe" && <GlobeDeck interact={interactMode} />}
+      {deck === "terminal" && <TerminalDeck />}
     </div>
   );
 }

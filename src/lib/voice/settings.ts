@@ -70,7 +70,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "orb.tier": ["auto", "flat"],
   "loom.reviewBeforeSave": ["0", "1"],
   "model.cloudBuilder": ["off", "anthropic"],
-  "cockpit.deck": ["void", "globe"],
+  "cockpit.deck": ["void", "globe", "terminal"],
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {

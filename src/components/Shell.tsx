@@ -450,7 +450,7 @@ export default function Shell() {
       `}</style>
 
       {/* Ambient particle field — behind everything, zIndex:1 */}
-      <Field dim={deck === 'globe'} />
+      <Field dim={deck !== 'void'} />
 
       {/* Deck layer — between ambient Field (z1) and orb-band (z10) */}
       <DeckLayer deck={deck} interactMode={interactMode} />
@@ -571,6 +571,12 @@ export default function Shell() {
                 label="GLOBE"
                 selected={deck === "globe"}
                 onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "globe" } }))}
+              />
+              <SegBtn
+                testid="deck-terminal-btn"
+                label="TERMINAL"
+                selected={deck === "terminal"}
+                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "terminal" } }))}
               />
               {deck === "globe" && (
                 <SegBtn
@@ -709,14 +715,14 @@ export default function Shell() {
           {/* Companion panel */}
           <PanelTag
             {...(motionProps as object)}
-            data-deck-active={deck === 'globe' ? 'true' : undefined}
+            data-deck-active={deck !== 'void' ? 'true' : undefined}
             style={{
               background: "var(--glass)",
               backdropFilter: "blur(var(--blur))",
               WebkitBackdropFilter: "blur(var(--blur))",
               border: "1px solid var(--glass-border)",
               borderRadius: 14,
-              ...(deck === 'globe' ? {
+              ...(deck !== 'void' ? {
                 maxHeight: '33vh',
                 overflowY: 'auto' as const,
                 background: 'rgba(6,11,24,0.7)',
@@ -736,7 +742,7 @@ export default function Shell() {
           <details
             data-testid="timeline-details"
             className="glass"
-            style={{ padding: "12px 16px", cursor: "pointer", display: deck === 'globe' ? 'none' : undefined }}
+            style={{ padding: "12px 16px", cursor: "pointer", display: deck !== 'void' ? 'none' : undefined }}
           >
             <summary
               style={{
