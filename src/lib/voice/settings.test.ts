@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 
 describe("settings whitelist", () => {
-  it("SETTINGS_KEYS contains the seven required keys", () => {
+  it("SETTINGS_KEYS contains the eight required keys", () => {
     expect(SETTINGS_KEYS).toContain("voice.default");
     expect(SETTINGS_KEYS).toContain("voice.speakReplies");
     expect(SETTINGS_KEYS).toContain("orb.tier");
@@ -22,7 +22,8 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("model.builder");
     expect(SETTINGS_KEYS).toContain("model.companion");
     expect(SETTINGS_KEYS).toContain("model.rewriter");
-    expect(SETTINGS_KEYS).toHaveLength(7);
+    expect(SETTINGS_KEYS).toContain("cockpit.deck");
+    expect(SETTINGS_KEYS).toHaveLength(8);
   });
 
   it("throws on unknown key in getSetting", () => {

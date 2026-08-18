@@ -56,7 +56,7 @@ function createColorStrings(particles: Particle[]): string[] {
   return particles.map(makeColorString);
 }
 
-export default function Field() {
+export default function Field({ dim = false }: { dim?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const aurora1Ref = useRef<HTMLDivElement | null>(null);
   const aurora2Ref = useRef<HTMLDivElement | null>(null);
@@ -203,6 +203,8 @@ export default function Field() {
           pointerEvents: "none",
           zIndex: 1,
           overflow: "hidden",
+          opacity: dim ? 0.35 : 1,
+          transition: 'opacity 0.6s ease',
         }}
       >
         <div
@@ -243,6 +245,8 @@ export default function Field() {
           pointerEvents: "none",
           zIndex: 1,
           display: "block",
+          opacity: dim ? 0.35 : 1,
+          transition: 'opacity 0.6s ease',
         }}
       />
 

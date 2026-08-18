@@ -44,7 +44,8 @@ export type SettingsKey =
   | "loom.reviewBeforeSave"
   | "model.builder"
   | "model.companion"
-  | "model.rewriter";
+  | "model.rewriter"
+  | "cockpit.deck";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "voice.default",
@@ -54,6 +55,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "model.builder",
   "model.companion",
   "model.rewriter",
+  "cockpit.deck",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
@@ -65,6 +67,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "voice.speakReplies": ["always", "whenSpoken", "never"],
   "orb.tier": ["auto", "flat"],
   "loom.reviewBeforeSave": ["0", "1"],
+  "cockpit.deck": ["void", "globe"],
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -75,6 +78,7 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "model.builder": "",
   "model.companion": "",
   "model.rewriter": "",
+  "cockpit.deck": "void",
 };
 
 // Legacy key the orb's detectTier reads
