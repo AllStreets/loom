@@ -11,8 +11,10 @@ export interface OrbProps {
   mood: OrbMood;
   reducedMotion?: boolean;
   size?: number;
+  /** Deck mode: true-alpha GL, no bloom, no band blend (see OrbGL). */
+  transparent?: boolean;
   /** For testing: inject a GL component (or a thrower) */
-  glComponent?: ComponentType<{ mood: OrbMood; reducedMotion: boolean; size?: number }>;
+  glComponent?: ComponentType<{ mood: OrbMood; reducedMotion: boolean; size?: number; transparent?: boolean }>;
   /** For testing: override tier detection */
   tierOverride?: "gl" | "flat";
 }
@@ -33,7 +35,7 @@ class OrbErrorBoundary extends Component<EBProps, EBState> {
   }
 }
 
-export function Orb({ mood, reducedMotion: reducedMotionProp, size = 180, glComponent, tierOverride }: OrbProps) {
+export function Orb({ mood, reducedMotion: reducedMotionProp, size = 180, transparent = false, glComponent, tierOverride }: OrbProps) {
   const detectedRef = useRef<{ tier: "gl" | "flat"; reducedMotion: boolean } | null>(null);
   if (!detectedRef.current) {
     if (tierOverride) {
@@ -63,7 +65,7 @@ export function Orb({ mood, reducedMotion: reducedMotionProp, size = 180, glComp
     <div data-testid="orb">
       <OrbErrorBoundary fallback={fallback} onError={handleError}>
         <React.Suspense fallback={fallback}>
-          <GLComponent mood={mood} reducedMotion={reducedMotion} size={size} />
+          <GLComponent mood={mood} reducedMotion={reducedMotion} size={size} transparent={transparent} />
         </React.Suspense>
       </OrbErrorBoundary>
     </div>

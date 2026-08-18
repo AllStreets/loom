@@ -642,7 +642,10 @@ export default function Shell() {
           // Composites the orb canvas's black clear as pure light over the page
           // backdrop (see OrbGL.tsx) — must live at band level: orb-hero's transform
           // and this band's z-index isolate any deeper blend from the backdrop.
-          mixBlendMode: "screen",
+          // Screen blend ONLY over the void: over a deck iframe the blend forces a
+          // cross-document backdrop readback every orb frame (= whole-iframe
+          // flicker). Deck mode uses a truly transparent GL context instead.
+          mixBlendMode: deck === "void" ? "screen" : undefined,
           // Empty flanks pass clicks to the deck; the orb hero re-enables its own.
           pointerEvents: "none",
         }}
@@ -669,7 +672,7 @@ export default function Shell() {
               : "drop-shadow(0 0 0px transparent)",
           }}
         >
-          <Orb mood={mood} size={180} />
+          <Orb mood={mood} size={180} transparent={deck !== "void"} />
           {voice.state === "listening" && (
             <div
               data-testid="listening-ring"
