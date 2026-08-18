@@ -422,12 +422,6 @@ export default function WatchPanel({ open, onClose }: Props) {
     try { return getSalient(20); } catch { return []; }
   });
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  const dismissedRef = useRef<Set<string>>(dismissed);
-
-  // Sync ref with state
-  useEffect(() => {
-    dismissedRef.current = dismissed;
-  }, [dismissed]);
 
   // Subscribe to salience events
   useEffect(() => {

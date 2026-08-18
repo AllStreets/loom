@@ -768,7 +768,7 @@ export default function Shell() {
       <Constellation />
 
       {/* ── Watch panel: collapsible salience feed (z 900, right side) ── */}
-      <WatchPanel open={watchOpen} onClose={() => setWatchOpen(false)} />
+      <WatchPanel open={watchOpen} onClose={() => { setWatchOpen(false); setWatchUnseen(0); }} />
     </div>
   );
 }

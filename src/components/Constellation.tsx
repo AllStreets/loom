@@ -447,9 +447,9 @@ export default function Constellation() {
           {/* Glass chip label */}
           <g transform="translate(0, 22)">
             <rect
-              x={-22}
+              x={-27}
               y={-8}
-              width={44}
+              width={54}
               height={13}
               rx={4}
               fill="rgba(6,11,24,0.72)"
