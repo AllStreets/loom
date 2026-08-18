@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { fleetChat, organWrite, organRead, organList, ttsSpeak, type OrganFile, type Msg, type ChatOpts } from "../lib/core";
+import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, type OrganFile, type Msg, type ChatOpts, type Brain } from "../lib/core";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
@@ -8,6 +8,7 @@ import { handle, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
 import { getSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
+import { sendDeckCommands } from "./decks/GlobeDeck";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +35,7 @@ type SuccessCard = {
   organId: string;
   sha: string;
   id: string;
+  brain?: Brain;
 };
 
 type FailureCard = {
@@ -346,6 +348,11 @@ function SuccessCardView({
         {item.turnKind === "build" && (
           <div style={{ fontSize: 13, color: "var(--t2)" }}>
             Approve it below to run it.
+          </div>
+        )}
+        {item.brain && (
+          <div style={{ fontSize: 11, color: "var(--t3)", marginTop: 4 }}>
+            built by {item.brain === "cloud" ? "claude-opus-4-8" : "local fleet"}
           </div>
         )}
       </div>
@@ -674,8 +681,14 @@ export default function Companion() {
       appendEvent(e);
     }
 
-    // Wrap fleetChat so the converse ("companion" role) call lights the
-    // companion member for the duration of the reply generation.
+    // Track the brain used by the most recent builder call (for success card).
+    // Use a ref object so TS never narrows the union to a single literal.
+    const lastBrainRef: { v: Brain } = { v: "local" };
+
+    // Wrap chat so:
+    // - "builder" role → builderChat (cloud-override seam); companion/rewriter stay local.
+    // - "companion" role → lights the companion HUD member.
+    // - Cloud errors fall back to local fleet (brain stays "local").
     const chatWithActivity = async (role: string, messages: Msg[], opts?: ChatOpts) => {
       if (role === "companion") {
         dispatchFleetActivity("companion", "converse");
@@ -685,6 +698,15 @@ export default function Companion() {
           dispatchFleetActivity(null);
         }
       }
+      if (role === "builder") {
+        const result = await builderChat(messages, opts);
+        lastBrainRef.v = result.brain;
+        // Emit fallback event when cloud was requested but local was used
+        if (getSetting("model.cloudBuilder") === "anthropic" && result.brain === "local") {
+          appendEventWithMood({ ts: Date.now(), phase: "cloud", detail: "cloud unavailable — built locally" });
+        }
+        return result.text;
+      }
       return fleetChat(role, messages, opts);
     };
 
@@ -692,19 +714,21 @@ export default function Companion() {
       chat: chatWithActivity,
       build: (req: string) =>
         buildOrgan(req, {
-          chat: fleetChat,
+          chat: chatWithActivity,
           write: organWrite,
           gate,
           onEvent: appendEventWithMood,
+          getBrain: () => lastBrainRef.v,
           ...(reviewOn ? { review: requestReview } : {}),
         }),
       edit: (id: string, req: string) =>
         editOrgan(id, req, {
-          chat: fleetChat,
+          chat: chatWithActivity,
           read: organRead,
           write: organWrite,
           gate,
           onEvent: appendEventWithMood,
+          getBrain: () => lastBrainRef.v,
           ...(reviewOn ? { review: requestReview } : {}),
         }),
       organIds: async () => {
@@ -733,6 +757,9 @@ export default function Companion() {
           dispatchFleetActivity(null);
         }
       },
+      // Provide current deck state to the runtime so deck_command rules can
+      // auto-switch from void → globe when needed.
+      currentDeck: () => getSetting("cockpit.deck") as "void" | "globe",
     };
 
     let turn: CompanionTurn;
@@ -780,16 +807,19 @@ export default function Companion() {
     } else if (turn.kind === "build") {
       const result = turn.result;
       if (result.ok && result.organId && result.sha) {
+        const brainUsed: Brain = lastBrainRef.v;
+        const brainLabel = brainUsed === "cloud" ? "claude-opus-4-8" : "local fleet";
         appendItem({
           kind: "success",
           turnKind: "build",
           organId: result.organId,
           sha: result.sha,
+          brain: brainUsed,
           id: nextId(),
         });
         window.dispatchEvent(new CustomEvent("organs-changed"));
         const repairRounds = result.log.filter((e) => e.phase === "repair").length;
-        const historyMsg = `Built ${result.organId}: organ ready. Passed in ${repairRounds} repair round(s).`;
+        const historyMsg = `Built ${result.organId}: organ ready. Passed in ${repairRounds} repair round(s). built by ${brainLabel}`;
         history.current.push({ role: "assistant", content: historyMsg });
         const oneliner = `${result.organId} is ready — approve it below.`;
         appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
@@ -807,16 +837,19 @@ export default function Companion() {
     } else if (turn.kind === "edit") {
       const result = turn.result;
       if (result.ok && result.organId && result.sha) {
+        const brainUsed: Brain = lastBrainRef.v;
+        const brainLabel = brainUsed === "cloud" ? "claude-opus-4-8" : "local fleet";
         appendItem({
           kind: "success",
           turnKind: "edit",
           organId: result.organId,
           sha: result.sha,
+          brain: brainUsed,
           id: nextId(),
         });
         window.dispatchEvent(new CustomEvent("organs-changed"));
         const requestSummary = text.slice(0, 80);
-        const historyMsg = `Edited ${result.organId}: ${requestSummary}.`;
+        const historyMsg = `Edited ${result.organId}: ${requestSummary}. built by ${brainLabel}`;
         history.current.push({ role: "assistant", content: historyMsg });
         const oneliner = `${result.organId} updated.`;
         appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
@@ -835,6 +868,35 @@ export default function Companion() {
       );
       const oneliner = `Opening ${turn.organId} below.`;
       appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
+    } else if (turn.kind === "deck_command") {
+      const { deckCommandResult, confirmation } = turn;
+
+      // 1. Orb mood pulse: building → idle (fast visual beat for instant commands)
+      dispatchMood("building");
+
+      // 2. Deck switch first (spec requirement 4: auto-switch fires before bridge cmd)
+      if (deckCommandResult.deckSwitch) {
+        // Shell's loom-deck listener is the single persistence owner for cockpit.deck
+        window.dispatchEvent(
+          new CustomEvent("loom-deck", {
+            detail: { deck: deckCommandResult.deckSwitch },
+          })
+        );
+      }
+
+      // 3. Bridge commands forwarded to GlobeDeck via mount-safe queue.
+      // sendDeckCommands dispatches immediately when GlobeDeck is mounted;
+      // otherwise enqueues for drain on mount+iframe-load (C1 fix).
+      if (deckCommandResult.bridgeCmds.length > 0) {
+        sendDeckCommands(deckCommandResult.bridgeCmds);
+      }
+
+      // 4. Push confirmation to history and show in companion
+      appendItem({ kind: "bubble", role: "assistant", text: confirmation, id: nextId() });
+      history.current.push({ role: "assistant", content: confirmation });
+
+      // 5. Orb settle to idle
+      dispatchMood("idle");
     }
 
     // Determine if we should speak the reply
@@ -849,6 +911,8 @@ export default function Companion() {
       if (r.ok && r.organId) speakableText = `${r.organId} updated.`;
     } else if (turn.kind === "act") {
       speakableText = `Opening ${turn.organId} below.`;
+    } else if (turn.kind === "deck_command") {
+      speakableText = turn.confirmation;
     }
 
     const speakReplies = getSetting("voice.speakReplies");
@@ -918,7 +982,7 @@ export default function Companion() {
     setItems([{
       kind: "bubble",
       role: "assistant",
-      text: "I am LOOM. I run on your machine, entirely offline. To start building: ask me to build something — a water tracker, a reading log, a habit counter. Press Enter or hold the orb and speak.",
+      text: "I am LOOM. I run on your machine, entirely offline. To start building: ask me to build something — a water tracker, a reading log, a habit counter. Press Enter or hold the orb and speak. Say \"show the globe\" to see the living world.",
       id: nextId(),
     }]);
     localStorage.setItem("loom.firstGreeting", "1");

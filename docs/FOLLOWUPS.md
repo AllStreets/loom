@@ -72,3 +72,30 @@ Deferred (non-blocking) findings from the foundation branch reviews. None block 
 - Kit v2 primitives: hero/spark/keyval/section/dot/toolbar (T4: uikitSrc.ts)
 - Threads of light + ambient field + ignition (T3: ambient components)
 - First-run greeting (T5: companion greets on first boot, no model call)
+
+---
+
+## Stage-2 backlog (Cockpit Phase 9, post-Stage-1)
+
+Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in the next deck iteration or a dedicated pass.
+
+### Next decks
+- **Constellation + salience deck** — port AgentZeus constellation view as a LOOM deck: agents rendered as lights, salience scoring visible, ledger panel. Key source paths: `~/Downloads/AgentZeus/src/components/Constellation.tsx`, `~/Downloads/AgentZeus/src/lib/salience.ts`, `~/Downloads/AgentZeus/src/components/Ledger.tsx`. Adapt to the postMessage deck protocol; salience engine needs a Rust seam for the local embedding model path.
+- **Terminal deck** — Bloomberg-style structured data terminal: market feeds, macro data, order-flow panels. Design the feed-source abstraction before wiring; must degrade fully offline.
+- **EMBER deck** — offline survival console instrument panel as a deck. Source: `~/Downloads/EMBER`. Bridge via the same postMessage adapter pattern used for AUSPEX; EMBER's Forge self-edit loop should stay isolated from LOOM's builder seam.
+- **AGORA deck** — markets intelligence deck: order flow, positioning, macro. Depends on feed sourcing design from the terminal deck pass.
+
+### Stage-1 known limitations to resolve
+- **Space-PTT inside iframe** — when the AUSPEX globe deck is active and the user has clicked into Interact mode, the iframe captures keyboard focus and the Space push-to-talk no longer reaches LOOM's window listener. Stage-1 documented limitation. Fix path: synthesize a keydown relay from the adapter (postMessage the key event up to the shell), or add a visible PTT button that works regardless of focus.
+- **Deck-aware Threads anchors** — the Threads of Light component currently anchors to static DOM nodes. When a deck is active, the visible chat panel region changes (compact lower-third). Threads should re-anchor to the deck-active layout region rather than the full-height position. (`src/components/ambient/Threads.tsx`)
+- **localStorage origin de-share / IndexedDB migration** — AUSPEX runs inside a `file:` or same-origin iframe and shares the same localStorage partition as the LOOM shell. Reviewer I3: keys could collide if AUSPEX and LOOM ever write the same key. Migration path: scope LOOM's keys under a `loom.` prefix (already done for most; audit for stragglers) or isolate AUSPEX to IndexedDB in the adapter.
+- **M2-Ascension catch-path experience records** — when a build fails and falls to the local catch path after a cloud attempt, the `brain` field in the experience record should record `"cloud-fallback"` rather than `"local"` so the post-mortem can distinguish an intended local build from a cloud timeout. (`src/lib/loom/build.ts`, `src/lib/loom/experience.ts`)
+- **Deck toggle a11y** — the VOID / GLOBE / INTERACT buttons in the top bar have no `aria-label` or `aria-pressed` attributes. Add them for screen-reader correctness. (`src/components/Shell.tsx`)
+
+### Resolved in Stage-1 (Cockpit Phase 9)
+- Deck layer + bundled AUSPEX globe (T1)
+- Voice command of the world — show/hide globe, category filter, vessels, spin, reset (T2)
+- Cloud-override builder — `claude-opus-4-8`, opt-in, local default + fallback (T3)
+- AUSPEX first-run tour suppressed via adapter (T1)
+- Fleet-offline glass pill when deck active (T1, Shell wrapper)
+- AUSPEX logo hidden in deck context to prevent wordmark overlap (T4, loom-adapter.js)

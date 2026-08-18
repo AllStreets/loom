@@ -1,12 +1,15 @@
 import { normalize } from "./normalize";
+import { classifyDeckCommand } from "../decks/commands";
 
-export type Intent = "build_organ" | "edit_organ" | "act_on_organ" | "converse";
+export type Intent = "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "deck_command";
 
 export type IntentResult = {
   intent: Intent;
   confidence: number;
   organId?: string;
   source: "rules" | "model";
+  /** Populated when intent === "deck_command" (rules path only) */
+  deckCommandResult?: import("../decks/commands").DeckCommandResult;
 };
 
 export type HistoryMsg = { role: string; content: string };
@@ -16,6 +19,7 @@ const VALID_INTENTS = new Set<string>([
   "edit_organ",
   "act_on_organ",
   "converse",
+  "deck_command",
 ]);
 
 // Verbs that signal an intent to modify an existing organ.
@@ -87,13 +91,15 @@ function resolveOrganFromHistory(history: HistoryMsg[]): string | null {
  *   2. edit_organ   — organ mention + edit verb                           (0.9)
  *   3. build_organ  — build phrase + NO organ mention                     (0.85)
  *   4. act_on_organ — organ mentioned, no edit verb                       (0.7)
- *   5. converse     — greeting or bare question                           (0.8)
- *   6. null         — rules cannot decide
+ *   5. deck_command — matches a globe/deck phrase (after build/edit/act)  (0.95)
+ *   6. converse     — greeting or bare question                           (0.8)
+ *   7. null         — rules cannot decide
  */
 export function classifyByRules(
   utterance: string,
   organIds: string[],
-  history: HistoryMsg[] = []
+  history: HistoryMsg[] = [],
+  currentDeck: "void" | "globe" = "void"
 ): IntentResult | null {
   const normed = normalize(utterance);
   const lower = normed.toLowerCase();
@@ -154,18 +160,31 @@ export function classifyByRules(
     };
   }
 
-  // 5. converse — greeting word or question (no organ, no build phrase).
+  // 5. deck_command — distinctive globe-control phrases that didn't match
+  //    any organ reference above. Fires AFTER build/edit/act so organ-named
+  //    utterances ("show me the water tracker") still route correctly.
+  const deckCmd = classifyDeckCommand(lower, currentDeck);
+  if (deckCmd !== null) {
+    return {
+      intent: "deck_command",
+      confidence: 0.95,
+      source: "rules",
+      deckCommandResult: deckCmd,
+    };
+  }
+
+  // 6. converse — greeting word or question (no organ, no build phrase).
   const isGreeting = GREETING_RE.test(lower);
   const isQuestion = lower.endsWith("?") && !hasBuildPhrase;
   if (isGreeting || isQuestion) {
     return { intent: "converse", confidence: 0.8, source: "rules" };
   }
 
-  // 6. Rules unsure.
+  // 7. Rules unsure.
   return null;
 }
 
-const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: build_organ, edit_organ, act_on_organ, converse.
+const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: build_organ, edit_organ, act_on_organ, converse, deck_command.
 
 Examples:
 User: "build me a sleep tracker" -> {"intent":"build_organ","organId":null}
@@ -174,6 +193,8 @@ User: "add a delete button to the water tracker" -> {"intent":"edit_organ","orga
 User: "make it dark mode" (after assistant: "Built water-tracker: ...") -> {"intent":"edit_organ","organId":"water-tracker"}
 User: "open the budget tool" -> {"intent":"act_on_organ","organId":"budget-tool"}
 User: "what can you do?" -> {"intent":"converse","organId":null}
+User: "show the globe" -> {"intent":"deck_command","organId":null}
+User: "show military news" -> {"intent":"deck_command","organId":null}
 
 Reply with a single line of JSON and nothing else: {"intent":"<value>","organId":null}
 If an organ id is known from context, put it in organId; otherwise null.`;
@@ -200,14 +221,18 @@ function formatHistoryBlock(history: HistoryMsg[]): string {
  *
  * history (optional) — last few turns, used for anaphora resolution and
  * included in the model fallback prompt for context.
+ *
+ * currentDeck (optional) — "void"|"globe", used by the deck_command rule to
+ * decide whether a globe-only command should auto-switch the deck.
  */
 export async function classifyIntent(
   utterance: string,
   organIds: string[],
   askModel: (system: string, prompt: string) => Promise<string>,
-  history: HistoryMsg[] = []
+  history: HistoryMsg[] = [],
+  currentDeck: "void" | "globe" = "void"
 ): Promise<IntentResult> {
-  const rulesResult = classifyByRules(utterance, organIds, history);
+  const rulesResult = classifyByRules(utterance, organIds, history, currentDeck);
   if (rulesResult !== null) return rulesResult;
 
   const historyBlock = formatHistoryBlock(history);

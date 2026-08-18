@@ -29,6 +29,47 @@ describe("makeLoomApi", () => {
   });
 });
 
+// ── cloudKey permission tests ──────────────────────────────────────────────────
+
+describe("settings.cloudKey*() permissions", () => {
+  it("cloudKeyPresent throws without 'settings' permission", async () => {
+    const api = makeLoomApi("x", []);
+    await expect(api.settings.cloudKeyPresent()).rejects.toThrow(/not granted/);
+  });
+
+  it("cloudKeySet throws without 'settings' permission", async () => {
+    const api = makeLoomApi("x", []);
+    await expect(api.settings.cloudKeySet("sk-ant-test")).rejects.toThrow(/not granted/);
+  });
+
+  it("cloudKeyClear throws without 'settings' permission", async () => {
+    const api = makeLoomApi("x", []);
+    await expect(api.settings.cloudKeyClear()).rejects.toThrow(/not granted/);
+  });
+
+  it("cloudKeyPresent succeeds with 'settings' permission (mock invoke)", async () => {
+    invoke.mockResolvedValueOnce(true);
+    const api = makeLoomApi("x", ["settings"]);
+    const result = await api.settings.cloudKeyPresent();
+    expect(invoke).toHaveBeenCalledWith("cloud_key_present");
+    expect(result).toBe(true);
+  });
+
+  it("cloudKeySet succeeds with 'settings' permission (mock invoke)", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    const api = makeLoomApi("x", ["settings"]);
+    await api.settings.cloudKeySet("sk-ant-test");
+    expect(invoke).toHaveBeenCalledWith("cloud_key_set", { key: "sk-ant-test" });
+  });
+
+  it("cloudKeyClear succeeds with 'settings' permission (mock invoke)", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    const api = makeLoomApi("x", ["settings"]);
+    await api.settings.cloudKeyClear();
+    expect(invoke).toHaveBeenCalledWith("cloud_key_clear");
+  });
+});
+
 // ── settings.models() ──────────────────────────────────────────────────────────
 
 describe("settings.models()", () => {

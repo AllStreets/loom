@@ -12,6 +12,9 @@ import { organList, organWrite } from "../lib/core";
 import { installSeeds } from "../organs/seeds/install";
 import { useVoice, makeSpacePttHandlers } from "../lib/voice/useVoice";
 import { audioLevel } from "../lib/orb/audioLevel";
+import { getSetting, setSetting } from '../lib/voice/settings';
+import DeckLayer from './decks/DeckLayer';
+import type { DeckId } from './decks/DeckLayer';
 
 // Active turn moods — fleet-offline cannot override these
 const ACTIVE_MOODS: ReadonlySet<OrbMood> = new Set([
@@ -33,6 +36,9 @@ export default function Shell() {
   const [commits, setCommits] = useState<Commit[]>([]);
   const [voiceReady, setVoiceReady] = useState(false);
   const reducedMotion = useReducedMotion() ?? false;
+
+  const [deck, setDeck] = useState<DeckId>(() => getSetting('cockpit.deck') as DeckId);
+  const [interactMode, setInteractMode] = useState(false);
 
   // ----- Ignition sequence state -----
   const alreadyIgnited = typeof localStorage !== "undefined"
@@ -80,6 +86,18 @@ export default function Shell() {
     }
     window.addEventListener("loom-mood", onMood);
     return () => window.removeEventListener("loom-mood", onMood);
+  }, []);
+
+  // ----- loom-deck event listener -----
+  useEffect(() => {
+    function onDeck(ev: Event) {
+      const detail = (ev as CustomEvent<{ deck: DeckId }>).detail;
+      if (!detail?.deck) return;
+      setDeck(detail.deck);
+      setSetting('cockpit.deck', detail.deck);
+    }
+    window.addEventListener('loom-deck', onDeck);
+    return () => window.removeEventListener('loom-deck', onDeck);
   }, []);
 
   // ----- fleet poll -----
@@ -316,7 +334,10 @@ export default function Shell() {
       `}</style>
 
       {/* Ambient particle field — behind everything, zIndex:1 */}
-      <Field />
+      <Field dim={deck === 'globe'} />
+
+      {/* Deck layer — between ambient Field (z1) and orb-band (z10) */}
+      <DeckLayer deck={deck} interactMode={interactMode} />
 
       {/* Ambient mood glow — behind everything */}
       <div
@@ -368,13 +389,108 @@ export default function Shell() {
           ...staggerStyle,
         }}
       >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 10,
+            ...(deck === 'globe' ? {
+              background: 'var(--glass)',
+              border: '1px solid var(--glass-border)',
+              borderRadius: 999,
+              padding: '2px 12px',
+              backdropFilter: 'blur(var(--blur))',
+              WebkitBackdropFilter: 'blur(var(--blur))',
+            } : {}),
+          }}
+        >
           <b style={{ letterSpacing: ".4em", fontSize: 20, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
           <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)" }}>sovereign console</small>
         </div>
 
         {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
-        <FleetHUD roles={roles} />
+        <div
+          style={{
+            ...(deck === 'globe' ? {
+              background: 'var(--glass)',
+              border: '1px solid var(--glass-border)',
+              borderRadius: 999,
+              padding: '2px 8px',
+              backdropFilter: 'blur(var(--blur))',
+              WebkitBackdropFilter: 'blur(var(--blur))',
+            } : {}),
+          }}
+        >
+          <FleetHUD roles={roles} />
+        </div>
+
+        {/* Deck controls */}
+        {/* Glass pill keeps the controls legible over bright deck content */}
+        <div
+          data-testid="deck-controls"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            background: 'var(--glass)',
+            border: '1px solid var(--glass-border)',
+            borderRadius: 999,
+            padding: '2px 8px',
+            backdropFilter: 'blur(var(--blur))',
+            WebkitBackdropFilter: 'blur(var(--blur))',
+          }}
+        >
+          <button
+            data-testid="deck-void-btn"
+            onClick={() => window.dispatchEvent(new CustomEvent('loom-deck', { detail: { deck: 'void' } }))}
+            style={{
+              fontFamily: 'var(--f-mono)',
+              fontSize: 10,
+              letterSpacing: '.08em',
+              color: deck === 'void' ? 'var(--accent)' : 'var(--t3)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '2px 6px',
+            }}
+          >
+            VOID
+          </button>
+          <button
+            data-testid="deck-globe-btn"
+            onClick={() => window.dispatchEvent(new CustomEvent('loom-deck', { detail: { deck: 'globe' } }))}
+            style={{
+              fontFamily: 'var(--f-mono)',
+              fontSize: 10,
+              letterSpacing: '.08em',
+              color: deck === 'globe' ? 'var(--accent)' : 'var(--t3)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '2px 6px',
+            }}
+          >
+            GLOBE
+          </button>
+          {deck === 'globe' && (
+            <button
+              data-testid="deck-interact-btn"
+              onClick={() => setInteractMode(p => !p)}
+              style={{
+                fontFamily: 'var(--f-mono)',
+                fontSize: 10,
+                letterSpacing: '.08em',
+                color: interactMode ? 'var(--accent)' : 'var(--t3)',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '2px 6px',
+              }}
+            >
+              {interactMode ? 'INTERACTING' : 'INTERACT'}
+            </button>
+          )}
+        </div>
       </header>
 
       {/* ── Zone B: Orb band (fixed height, always visible, never scrolls) ── */}
@@ -488,12 +604,18 @@ export default function Shell() {
           {/* Companion panel */}
           <PanelTag
             {...(motionProps as object)}
+            data-deck-active={deck === 'globe' ? 'true' : undefined}
             style={{
               background: "var(--glass)",
               backdropFilter: "blur(var(--blur))",
               WebkitBackdropFilter: "blur(var(--blur))",
               border: "1px solid var(--glass-border)",
               borderRadius: 14,
+              ...(deck === 'globe' ? {
+                maxHeight: '33vh',
+                overflowY: 'auto' as const,
+                background: 'rgba(6,11,24,0.7)',
+              } : {}),
             }}
           >
             <Companion />
@@ -505,10 +627,11 @@ export default function Shell() {
             style={{ width: "100%", maxWidth: 1100, position: "relative", zIndex: 10 }}
           />
 
-          {/* Timeline collapsible footer */}
+          {/* Timeline collapsible footer — hidden when AUSPEX globe is active (it has its own timeline bar) */}
           <details
+            data-testid="timeline-details"
             className="glass"
-            style={{ padding: "12px 16px", cursor: "pointer" }}
+            style={{ padding: "12px 16px", cursor: "pointer", display: deck === 'globe' ? 'none' : undefined }}
           >
             <summary
               style={{
