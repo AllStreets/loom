@@ -93,6 +93,11 @@ function ensureStyles() {
       .loom-icon-btn, .loom-watch-chevron { transition: none !important; }
       .loom-watch-livedot { animation: none !important; }
       .loom-watch-row .loom-row-actions { opacity: 1 !important; }
+      .loom-score-bar-fill { transition: none !important; }
+    }
+    /* Touch-first devices never hover — actions must be permanently visible */
+    @media (pointer: coarse) {
+      .loom-watch-row .loom-row-actions { opacity: 1 !important; }
     }
   `;
   document.head.appendChild(style);
@@ -286,6 +291,7 @@ function WatchRow({ item, onDismiss, onWatchPlus }: RowProps) {
           }}
         >
           <div
+            className="loom-score-bar-fill"
             style={{
               height: "100%",
               width: `${scoreBarPct}%`,
