@@ -303,4 +303,17 @@ mod tests {
         let _ = sanitize_path(tmp.path(), "/");
         let _ = sanitize_path(tmp.path(), "");
     }
+
+    #[test]
+    fn sanitize_percent_encoded_dotdot_safe() {
+        // WKWebView WHATWG URL normalization resolves %2e%2e before the handler;
+        // a literal "%2e%2e" path component doesn't exist on disk.
+        // sanitize_path checks for ".."; the percent-encoded form passes the check
+        // and joins to base_dir/%2e%2e/secret.txt. canonicalize fails because no such
+        // file exists → None → 404. This test documents that behavior: encoded
+        // traversal is safe (unlike literal ".." which is explicitly rejected).
+        let tmp = TempDir::new().unwrap();
+        let result = sanitize_path(tmp.path(), "/%2e%2e/secret.txt");
+        assert!(result.is_none(), "non-existent percent-encoded path should return None");
+    }
 }

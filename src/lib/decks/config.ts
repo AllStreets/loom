@@ -3,13 +3,13 @@
  *
  * Computes DECK_URL and DECK_ORIGIN once per environment:
  *
- *   DEV  (import.meta.env.DEV === true, Vite dev server):
+ *   DEV  (isDev === true, Vite dev server):
  *     DECK_URL    = "/decks/auspex/index.html"   (same-origin, served by Vite)
  *     DECK_ORIGIN = window.location.origin        (e.g. http://localhost:1420)
  *     Consequence: iframe shares LOOM's localStorage — acceptable in dev only
  *                  (documented reviewer debt I3 from Stage 1).
  *
- *   PROD (import.meta.env.DEV === false, Tauri bundled app):
+ *   PROD (isDev === false, Tauri bundled app):
  *     DECK_URL    = "deck://localhost/index.html"
  *     DECK_ORIGIN = "deck://localhost"
  *     Consequence: iframe is cross-origin → localStorage ISOLATED from LOOM's
@@ -24,17 +24,23 @@
  * should embed origin strings for the deck iframe.
  */
 
-export const DECK_URL: string = import.meta.env.DEV
-  ? "/decks/auspex/index.html"
-  : "deck://localhost/index.html";
-
 /**
- * The origin that the AUSPEX deck iframe runs on.
- * Used as postMessage targetOrigin — must match the iframe's actual origin.
+ * Build deck configuration for the given environment.
+ * Pure factory function — no module-level env reading.
  *
- * In dev: window.location.origin (shared with LOOM shell — dev-only acceptable).
- * In prod: "deck://localhost" (isolated custom-protocol origin — macOS/Linux).
+ * @param isDev  true for dev (Vite), false for prod (Tauri bundled)
+ * @returns { url, origin } — deck iframe URL and postMessage origin
  */
-export const DECK_ORIGIN: string = import.meta.env.DEV
-  ? (typeof window !== "undefined" ? window.location.origin : "http://localhost:1420")
-  : "deck://localhost";
+export function buildDeckConfig(isDev: boolean) {
+  return {
+    url: isDev ? "/decks/auspex/index.html" : "deck://localhost/index.html",
+    origin: isDev
+      ? (typeof window !== "undefined" ? window.location.origin : "http://localhost:1420")
+      : "deck://localhost",
+  };
+}
+
+// Module-level constants derived from import.meta.env.DEV
+const _config = buildDeckConfig(import.meta.env.DEV);
+export const DECK_URL: string = _config.url;
+export const DECK_ORIGIN: string = _config.origin;

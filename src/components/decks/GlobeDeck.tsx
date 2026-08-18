@@ -167,12 +167,17 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
 
       const iframe = iframeRef.current;
       if (iframe) {
-        // contentDocument?.readyState is null for cross-origin iframes — harmless
-        // fallthrough to the load listener in that case.
-        if (iframe.contentDocument?.readyState === "complete") {
-          iframeLoaded = true;
-          flushPending();
-        } else {
+        // Try to check contentDocument.readyState for same-origin iframes.
+        // Cross-origin access throws SecurityError; fall through to load listener.
+        try {
+          if (iframe.contentDocument?.readyState === "complete") {
+            iframeLoaded = true;
+            flushPending();
+          } else {
+            iframe.addEventListener("load", onIframeLoad);
+          }
+        } catch {
+          // SecurityError on cross-origin access — fall through to load listener.
           iframe.addEventListener("load", onIframeLoad);
         }
       }
