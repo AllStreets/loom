@@ -88,7 +88,7 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 ### Stage-1 known limitations to resolve
 - **Space-PTT inside iframe** — when the AUSPEX globe deck is active and the user has clicked into Interact mode, the iframe captures keyboard focus and the Space push-to-talk no longer reaches LOOM's window listener. Stage-1 documented limitation. Fix path: synthesize a keydown relay from the adapter (postMessage the key event up to the shell), or add a visible PTT button that works regardless of focus.
 - **Deck-aware Threads anchors** — the Threads of Light component currently anchors to static DOM nodes. When a deck is active, the visible chat panel region changes (compact lower-third). Threads should re-anchor to the deck-active layout region rather than the full-height position. (`src/components/ambient/Threads.tsx`)
-- **localStorage origin de-share / IndexedDB migration** — AUSPEX runs inside a `file:` or same-origin iframe and shares the same localStorage partition as the LOOM shell. Reviewer I3: keys could collide if AUSPEX and LOOM ever write the same key. Migration path: scope LOOM's keys under a `loom.` prefix (already done for most; audit for stragglers) or isolate AUSPEX to IndexedDB in the adapter.
+- ~~**localStorage origin de-share / IndexedDB migration**~~ — resolved in Stage 2: AUSPEX is now served via a custom `auspex.localhost` Tauri protocol in production builds, giving it a distinct origin from the LOOM shell. Key collision risk eliminated.
 - **M2-Ascension catch-path experience records** — when a build fails and falls to the local catch path after a cloud attempt, the `brain` field in the experience record should record `"cloud-fallback"` rather than `"local"` so the post-mortem can distinguish an intended local build from a cloud timeout. (`src/lib/loom/build.ts`, `src/lib/loom/experience.ts`)
 - **Deck toggle a11y** — the VOID / GLOBE / INTERACT buttons in the top bar have no `aria-label` or `aria-pressed` attributes. Add them for screen-reader correctness. (`src/components/Shell.tsx`)
 
@@ -99,3 +99,20 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - AUSPEX first-run tour suppressed via adapter (T1)
 - Fleet-offline glass pill when deck active (T1, Shell wrapper)
 - AUSPEX logo hidden in deck context to prevent wordmark overlap (T4, loom-adapter.js)
+
+### Resolved in Stage 2 (Cockpit Phase 10)
+- Salience engine + sensors (T2: score.ts + sensors.ts + watch runtime)
+- Watchlist + engagement store (T2: loom.watch.v1 localStorage)
+- Living constellation (T3: Constellation.tsx with bezier wires + activity packets)
+- Watch panel + voice briefings (T3/T4: WatchPanel.tsx + briefing intent + runtime handler)
+- Deck origin isolation — auspex.localhost custom protocol (T1: deckserve.rs)
+
+### Stage-3 backlog
+- **Terminal deck** — Bloomberg-style data terminal deck (market feeds, macro data, structured query). Design the feed-source abstraction before wiring; must degrade fully offline.
+- **EMBER deck** — Offline survival console as a deck. Source: `~/Downloads/EMBER`. Bridge via the same postMessage adapter; keep EMBER's Forge self-edit loop isolated from LOOM's builder seam.
+- **AGORA deck** — Markets intelligence deck: order flow, positioning, macro. Depends on terminal deck feed-source design.
+- **Globe fly-to on briefing** — when the cockpit speaks a salience item with lat/lng, auto-fly the globe to that location. Requires a new bridge command `fly_to {lat, lng}` in the deck protocol.
+- **Learned salience model** — replace the hand-tuned factor weights with a small learned model (few-shot from engagement history). Fits in the `scoreEvent` pure-function seam.
+- **Watch organ with fetch permission** — the Watch runtime currently runs kernel-side (organs cannot fetch). A future watch ORGAN would need a gated fetch permission token (stage-3 design work required).
+- **Watch panel / AUSPEX feed overlap** — the Watch panel overlaps AUSPEX's intelligence feed when both are visible on the globe deck. Acceptable for now; a future pass should give the panel a z-layering or offset that avoids covering the AUSPEX panel.
+- **Watch→globe cross-highlight** — selecting a salient item with lat/lng in the Watch panel should highlight or fly to that point on the globe deck.

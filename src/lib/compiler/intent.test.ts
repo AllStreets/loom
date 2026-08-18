@@ -437,3 +437,54 @@ describe("classifyByRules — deck_command does NOT regress build/edit/act", () 
     expect(result).toBeNull();
   });
 });
+
+// ── Briefing intent rules ────────────────────────────────────────────────────
+
+describe("classifyByRules — briefing intent", () => {
+  it("'brief me' → briefing", () => {
+    const result = classifyByRules("brief me", []);
+    expect(result?.intent).toBe("briefing");
+    expect(result?.confidence).toBe(0.95);
+    expect(result?.source).toBe("rules");
+  });
+
+  it("'what matters' → briefing", () => {
+    const result = classifyByRules("what matters", []);
+    expect(result?.intent).toBe("briefing");
+  });
+
+  it("'what's happening' → briefing (case-insensitive)", () => {
+    const result = classifyByRules("what's happening", []);
+    expect(result?.intent).toBe("briefing");
+  });
+
+  it("'morning brief' → briefing", () => {
+    const result = classifyByRules("morning brief", []);
+    expect(result?.intent).toBe("briefing");
+  });
+
+  it("'since i've been gone' → briefing", () => {
+    const result = classifyByRules("since i've been gone", []);
+    expect(result?.intent).toBe("briefing");
+  });
+
+  it("'whats the watch' → briefing", () => {
+    const result = classifyByRules("whats the watch", []);
+    expect(result?.intent).toBe("briefing");
+  });
+
+  it("briefing fires without calling askModel", async () => {
+    const askModel = vi.fn();
+    const result = await classifyIntent("brief me", [], askModel);
+    expect(result.intent).toBe("briefing");
+    expect(askModel).not.toHaveBeenCalled();
+  });
+
+  it("few-shot system contains briefing examples", async () => {
+    const askModel = vi.fn().mockResolvedValue('{"intent":"converse","organId":null}');
+    await classifyIntent("blorp fizzle quux", [], askModel);
+    const [systemArg] = askModel.mock.calls[0] as [string, string];
+    expect(systemArg).toContain("briefing");
+    expect(systemArg).toContain("brief me");
+  });
+});

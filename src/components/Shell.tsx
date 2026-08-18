@@ -15,6 +15,9 @@ import { audioLevel } from "../lib/orb/audioLevel";
 import { getSetting, setSetting } from '../lib/voice/settings';
 import DeckLayer from './decks/DeckLayer';
 import type { DeckId } from './decks/DeckLayer';
+import { startWatch, stopWatch } from '../lib/watch/runtime';
+import Constellation from './Constellation';
+import WatchPanel from './WatchPanel';
 
 // Active turn moods — fleet-offline cannot override these
 const ACTIVE_MOODS: ReadonlySet<OrbMood> = new Set([
@@ -39,6 +42,8 @@ export default function Shell() {
 
   const [deck, setDeck] = useState<DeckId>(() => getSetting('cockpit.deck') as DeckId);
   const [interactMode, setInteractMode] = useState(false);
+  const [watchOpen, setWatchOpen] = useState(false);
+  const [watchUnseen, setWatchUnseen] = useState(0);
 
   // ----- Ignition sequence state -----
   const alreadyIgnited = typeof localStorage !== "undefined"
@@ -64,6 +69,23 @@ export default function Shell() {
   // Refs for the listening ring animation
   const ringRef = useRef<HTMLDivElement | null>(null);
   const ringRafRef = useRef<number | null>(null);
+
+  // ----- Watch runtime — start with shell, stop on unmount -----
+  useEffect(() => {
+    startWatch();
+    return () => stopWatch();
+  }, []);
+
+  // ----- loom-salience — increment unseen badge when panel is closed -----
+  useEffect(() => {
+    function onSalience() {
+      if (!watchOpen) {
+        setWatchUnseen((n) => n + 1);
+      }
+    }
+    window.addEventListener("loom-salience", onSalience);
+    return () => window.removeEventListener("loom-salience", onSalience);
+  }, [watchOpen]);
 
   // ----- seed install (originally in App) -----
   useEffect(() => {
@@ -377,10 +399,13 @@ export default function Shell() {
         data-testid="shell-top-bar"
         style={{
           flexShrink: 0,
-          width: "100%",
+          // No explicit width: as a flex-column child the header stretches to the
+          // container; width:100% + padding overflows (no global border-box) and
+          // clips the right-edge controls.
           display: "flex",
           alignItems: "baseline",
           justifyContent: "space-between",
+          flexWrap: "wrap",
           padding: "20px 24px 16px",
           position: "relative",
           zIndex: 10,
@@ -431,6 +456,7 @@ export default function Shell() {
           style={{
             display: 'flex',
             alignItems: 'center',
+            flexWrap: 'wrap',
             gap: 6,
             background: 'var(--glass)',
             border: '1px solid var(--glass-border)',
@@ -490,6 +516,52 @@ export default function Shell() {
               {interactMode ? 'INTERACTING' : 'INTERACT'}
             </button>
           )}
+          {/* WATCH toggle */}
+          <button
+            data-testid="watch-toggle-btn"
+            onClick={() => {
+              setWatchOpen((p) => !p);
+              setWatchUnseen(0);
+            }}
+            style={{
+              position: 'relative',
+              fontFamily: 'var(--f-mono)',
+              fontSize: 10,
+              letterSpacing: '.08em',
+              color: watchOpen ? 'var(--accent)' : 'var(--t3)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '2px 6px',
+            }}
+          >
+            WATCH
+            {watchUnseen > 0 && !watchOpen && (
+              <span
+                data-testid="watch-badge"
+                style={{
+                  position: 'absolute',
+                  top: -2,
+                  right: -2,
+                  minWidth: 14,
+                  height: 14,
+                  borderRadius: 999,
+                  background: 'var(--accent, #22d3ee)',
+                  color: '#060b18',
+                  fontFamily: 'var(--f-mono)',
+                  fontSize: 8,
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '0 2px',
+                  pointerEvents: 'none',
+                }}
+              >
+                {watchUnseen > 9 ? '9+' : watchUnseen}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
@@ -695,6 +767,12 @@ export default function Shell() {
 
       {/* ── Shell-level overlay: Desktop plane — absolute inset 0, windows float above orb band ── */}
       <Desktop />
+
+      {/* ── Constellation: living agent ring around the orb (z 8, OUTSIDE orb-band screen-blend) ── */}
+      <Constellation />
+
+      {/* ── Watch panel: collapsible salience feed (z 900, right side) ── */}
+      <WatchPanel open={watchOpen} onClose={() => { setWatchOpen(false); setWatchUnseen(0); }} />
     </div>
   );
 }

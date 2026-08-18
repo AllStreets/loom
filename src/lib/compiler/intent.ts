@@ -1,7 +1,7 @@
 import { normalize } from "./normalize";
 import { classifyDeckCommand } from "../decks/commands";
 
-export type Intent = "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "deck_command";
+export type Intent = "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "deck_command" | "briefing";
 
 export type IntentResult = {
   intent: Intent;
@@ -20,6 +20,7 @@ const VALID_INTENTS = new Set<string>([
   "act_on_organ",
   "converse",
   "deck_command",
+  "briefing",
 ]);
 
 // Verbs that signal an intent to modify an existing organ.
@@ -35,6 +36,10 @@ const GREETING_RE = /^(hi|hey|hello|thanks)\b/;
 
 // Anaphora pronouns that refer back to a previously-named organ.
 const ANAPHORA_RE = /\b(it|that|this one|the last one)\b/;
+
+// Phrases that signal a watch briefing request.
+const BRIEFING_RE =
+  /\b(brief me|what matters|what'?s happening|morning brief(?:ing)?|since i'?ve been gone|what'?s the watch)\b/;
 
 // Pattern to extract an organ id mentioned in a history message.
 // Looks for "Built <id>:", "Edited <id>:" patterns written by Companion.
@@ -92,8 +97,9 @@ function resolveOrganFromHistory(history: HistoryMsg[]): string | null {
  *   3. build_organ  — build phrase + NO organ mention                     (0.85)
  *   4. act_on_organ — organ mentioned, no edit verb                       (0.7)
  *   5. deck_command — matches a globe/deck phrase (after build/edit/act)  (0.95)
- *   6. converse     — greeting or bare question                           (0.8)
- *   7. null         — rules cannot decide
+ *   6. briefing     — watch briefing request ("brief me", "what matters") (0.95)
+ *   7. converse     — greeting or bare question                           (0.8)
+ *   8. null         — rules cannot decide
  */
 export function classifyByRules(
   utterance: string,
@@ -173,18 +179,23 @@ export function classifyByRules(
     };
   }
 
-  // 6. converse — greeting word or question (no organ, no build phrase).
+  // 6. briefing — watch briefing request (fires before converse so "what's happening?" is routed here)
+  if (BRIEFING_RE.test(lower)) {
+    return { intent: "briefing", confidence: 0.95, source: "rules" };
+  }
+
+  // 7. converse — greeting word or question (no organ, no build phrase).
   const isGreeting = GREETING_RE.test(lower);
   const isQuestion = lower.endsWith("?") && !hasBuildPhrase;
   if (isGreeting || isQuestion) {
     return { intent: "converse", confidence: 0.8, source: "rules" };
   }
 
-  // 7. Rules unsure.
+  // 8. Rules unsure.
   return null;
 }
 
-const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: build_organ, edit_organ, act_on_organ, converse, deck_command.
+const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: build_organ, edit_organ, act_on_organ, converse, deck_command, briefing.
 
 Examples:
 User: "build me a sleep tracker" -> {"intent":"build_organ","organId":null}
@@ -195,6 +206,8 @@ User: "open the budget tool" -> {"intent":"act_on_organ","organId":"budget-tool"
 User: "what can you do?" -> {"intent":"converse","organId":null}
 User: "show the globe" -> {"intent":"deck_command","organId":null}
 User: "show military news" -> {"intent":"deck_command","organId":null}
+User: "brief me" -> {"intent":"briefing","organId":null}
+User: "what matters right now" -> {"intent":"briefing","organId":null}
 
 Reply with a single line of JSON and nothing else: {"intent":"<value>","organId":null}
 If an organ id is known from context, put it in organId; otherwise null.`;

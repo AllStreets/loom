@@ -73,6 +73,26 @@ LOOM is now the Sovereign Cockpit: the orb commands a living world. The ambient 
 
 ---
 
+## Stage 2 — The Cockpit Watches
+
+**Phase 10 — Stage 2 — shipped.**
+
+The cockpit now watches the world for you. A salience engine runs in the kernel, ranking live events from two free sensors against your personal watchlist. A living constellation of LOOM's agents rings the orb. Say "brief me" and the cockpit speaks the top of the watch, offline, no model call.
+
+**What shipped in Stage 2:**
+
+- **Salience engine.** A pure scoring function — source trust, category weight, recency decay, watchlist match, engagement signals — ranks every incoming event and emits only when the top-10 ordering changes. Ported and adapted from AgentZeus's factor model; every factor produces a human-readable reason string.
+
+- **Live world sensors.** Two free sensors, no keys required: AUSPEX's public Supabase stories feed (the same anon REST endpoint the globe deck reads), and the USGS all-day earthquake GeoJSON. Both poll on a 120-second interval with AbortSignal timeout and graceful offline degradation.
+
+- **Watch panel.** A collapsible glass panel (WATCH in the top bar) shows the salience-ranked feed: title, source, age, score bar, expandable reasons. Row actions: open (copies URL to clipboard and records engagement), dismiss (hides the row, records engagement), watch+ (adds the matched entity or topic to your watchlist). Watchlist chips at the panel top for add/remove.
+
+- **Living constellation.** An SVG ring of LOOM's agents — builder, companion, rewriter, and the two watch sensors — around the orb. Synaptic bezier wires node-to-orb. `loom-fleet-activity` events light the matching role node and animate a packet along the wire; `loom-salience` pulses the sensor nodes. Reduced-motion: static, no packets.
+
+- **Voice briefings.** Say "brief me", "what matters", "morning brief", "what's happening", or "since I've been gone". The cockpit assembles a spoken briefing from the top 3 salient items — title and first reason — with zero model calls. Empty watch: "The watch is quiet. Nothing crosses your thresholds." Spoken per the existing speakReplies setting.
+
+- **Deck origin isolation (production).** In production builds, the AUSPEX globe iframe is served via a custom `deck://localhost` Tauri protocol (custom `deck` URI scheme), giving it a distinct origin from the LOOM shell. The deck's own localStorage and Supabase fetches continue to work (CORS: anon REST allows any origin). In dev, vite serves as before (shared origin, documented).
+
 ---
 
 ## How it weaves
@@ -174,7 +194,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **5 · Voice** | offline whisper + piper voices · hold-the-orb / Space push-to-talk · spoken replies · Settings organ | **shipped** |
 | **6 · Vitality** | threads of light · ambient field · ignition · kit v2 (hero/spark/section) · DOM-grounded builder · first-run greeting | **shipped** |
 | **9 · The Cockpit (Stage 1)** | deck layer · bundled AUSPEX globe · voice command of the world · cloud-override builder (`claude-opus-4-8`, opt-in) | **shipped** |
-| **next · Constellation + Salience** | AgentZeus constellation view as a deck: agents as lights, salience scoring, ledger panel | planned |
+| **10 · The Cockpit (Stage 2)** | salience engine · live world sensors (AUSPEX stories + USGS quakes) · watchlist + engagement · living constellation · watch panel · voice briefings · deck origin isolation (prod custom protocol) | **shipped** |
 | **next · Terminal deck** | Bloomberg-style data terminal deck (market feeds, macro data, structured query) | planned |
 | **next · EMBER deck** | Offline survival console as a deck: grid-down instrument panel | planned |
 | **next · AGORA deck** | Markets intelligence deck: order flow, positioning, macro | planned |
