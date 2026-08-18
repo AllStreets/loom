@@ -49,12 +49,13 @@ function load(): StoreData {
 
 function save(data: StoreData): void {
   try {
-    const serialised = JSON.stringify(data);
-    // 64KB total guard — if we'd exceed it, drop oldest signals first
+    let serialised = JSON.stringify(data);
+    // 64KB total guard — if we'd exceed it, drop oldest signals in batches
     if (serialised.length > MAX_BYTES) {
-      // Trim signals until we fit
+      // Trim signals in batches (drop 10% per iteration) until we fit
       while (data.signals.length > 0 && JSON.stringify(data).length > MAX_BYTES) {
-        data.signals.shift();
+        const trimCount = Math.max(1, Math.floor(data.signals.length * 0.1));
+        data.signals.splice(0, trimCount);
       }
     }
     localStorage.setItem(STORE_KEY, JSON.stringify(data));

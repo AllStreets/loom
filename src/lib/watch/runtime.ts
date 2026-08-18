@@ -36,13 +36,9 @@ let salientItems: ScoredEvent[] = [];
 function onVisibilityChange() {
   if (document.hidden) {
     pausePolling();
-  } else {
-    if (intervalId !== null) {
-      // Already running — do nothing (just let the interval fire normally)
-    } else if (intervalId === null && _isStarted) {
-      // Was paused — restart
-      resumePolling();
-    }
+  } else if (intervalId === null && _isStarted) {
+    // Was paused — restart
+    resumePolling();
   }
 }
 

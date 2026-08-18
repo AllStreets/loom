@@ -155,4 +155,24 @@ describe("store — engagementMap", () => {
     expect(() => recordEngagement({ eventKey: "x:1", action: "open", ts: 1 })).not.toThrow();
     vi.restoreAllMocks();
   });
+
+  it("64KB byte-guard trims large signals to fit payload", () => {
+    // Create a signal with an 80KB eventKey value (simulating large data)
+    const largeKey = "x:" + "a".repeat(80 * 1024);
+    recordEngagement({ eventKey: largeKey, action: "open", ts: Date.now() });
+
+    // Add more signals to grow the store
+    for (let i = 0; i < 10; i++) {
+      recordEngagement({ eventKey: `normal:${i}`, action: "act", ts: Date.now() });
+    }
+
+    // Retrieve stored data and verify serialized form is under 64KB
+    const signals = getSignals();
+    const storeData = { watchlist: getWatchlist(), signals };
+    const serialised = JSON.stringify(storeData);
+
+    expect(serialised.length).toBeLessThanOrEqual(64 * 1024);
+    // Store should still be parseable
+    expect(() => JSON.parse(serialised)).not.toThrow();
+  });
 });
