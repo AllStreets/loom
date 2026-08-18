@@ -15,6 +15,7 @@ import { audioLevel } from "../lib/orb/audioLevel";
 import { getSetting, setSetting } from '../lib/voice/settings';
 import DeckLayer from './decks/DeckLayer';
 import type { DeckId } from './decks/DeckLayer';
+import { startWatch, stopWatch } from '../lib/watch/runtime';
 
 // Active turn moods — fleet-offline cannot override these
 const ACTIVE_MOODS: ReadonlySet<OrbMood> = new Set([
@@ -64,6 +65,12 @@ export default function Shell() {
   // Refs for the listening ring animation
   const ringRef = useRef<HTMLDivElement | null>(null);
   const ringRafRef = useRef<number | null>(null);
+
+  // ----- Watch runtime — start with shell, stop on unmount -----
+  useEffect(() => {
+    startWatch();
+    return () => stopWatch();
+  }, []);
 
   // ----- seed install (originally in App) -----
   useEffect(() => {
