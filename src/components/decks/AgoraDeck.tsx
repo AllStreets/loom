@@ -106,7 +106,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
         >
           <span
             style={{
-              fontFamily: "monospace",
+              fontFamily: "var(--f-mono, monospace)",
               fontSize: 11,
               letterSpacing: "0.12em",
               textTransform: "uppercase",
@@ -149,7 +149,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
           >
             <div
               style={{
-                fontFamily: "monospace",
+                fontFamily: "var(--f-mono, monospace)",
                 fontSize: 11,
                 letterSpacing: "0.12em",
                 textTransform: "uppercase",
@@ -160,7 +160,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
             </div>
             <div
               style={{
-                fontFamily: "monospace",
+                fontFamily: "var(--f-mono, monospace)",
                 fontSize: 13,
                 color: "var(--t1, rgba(255,255,255,0.85))",
                 lineHeight: 1.5,
@@ -181,7 +181,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
                 border: "1px solid rgba(255,255,255,0.18)",
                 borderRadius: 6,
                 color: "var(--t1, rgba(255,255,255,0.85))",
-                fontFamily: "monospace",
+                fontFamily: "var(--f-mono, monospace)",
                 fontSize: 11,
                 letterSpacing: "0.12em",
                 textTransform: "uppercase",
