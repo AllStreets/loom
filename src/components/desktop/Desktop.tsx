@@ -282,6 +282,7 @@ export default function Desktop() {
             <OrganWindow
               state={organ}
               focused={ws.focused}
+              minimized={ws.minimized}
               onFocus={() => handleFocus(id)}
               onMinimize={() => handleMinimize(id)}
               onDelete={() => handleDelete(id)}

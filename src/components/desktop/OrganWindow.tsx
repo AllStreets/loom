@@ -16,6 +16,7 @@ type WinPos = {
 type Props = {
   state: OrganState;
   focused: boolean;
+  minimized: boolean;
   onFocus: () => void;
   onMinimize: () => void;
   onDelete: () => void;
@@ -79,7 +80,7 @@ function loadPos(id: string, initial: { x: number; y: number; w: number; h: numb
   return clampToViewport({ x: initial.x, y: initial.y, w: initial.w, h: initial.h, collapsed: false });
 }
 
-export default function OrganWindow({ state, focused, onFocus, onMinimize, onDelete, initial }: Props) {
+export default function OrganWindow({ state, focused, minimized, onFocus, onMinimize, onDelete, initial }: Props) {
   const id = state.entry.id;
   const [pos, setPos] = useState<WinPos>(() => loadPos(id, initial));
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -107,9 +108,14 @@ export default function OrganWindow({ state, focused, onFocus, onMinimize, onDel
   }, [id]);
 
   // Register window position in ambient registry on mount/pos change
+  // Gate registration: only register if not minimized
   useEffect(() => {
-    windowRegistry.set(id, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
-  }, [id, pos.x, pos.y, pos.w, pos.h]);
+    if (!minimized) {
+      windowRegistry.set(id, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
+    } else {
+      windowRegistry.delete(id);
+    }
+  }, [id, minimized, pos.x, pos.y, pos.w, pos.h]);
 
   // Clean up registry on unmount
   useEffect(() => {

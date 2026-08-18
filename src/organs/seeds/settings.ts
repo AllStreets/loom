@@ -768,7 +768,7 @@ const ORGAN_JS = `export default {
     resetConfirmLabel.style.color = ui.tokens.t2;
     resetConfirmLabel.textContent = "This will clear all settings and restart. Organs' code is kept.";
 
-    var resetConfirmBtn = ui.button("DELETE", { variant: "primary", action: "system-reset-confirm" });
+    var resetConfirmBtn = ui.button("RESET", { variant: "primary", action: "system-reset-confirm" });
     resetConfirmBtn.style.background = ui.tokens.danger;
     resetConfirmBtn.style.color = "#fff";
     resetConfirmBtn.style.border = "none";
@@ -794,7 +794,7 @@ const ORGAN_JS = `export default {
       resetConfirmBtn.textContent = "Resetting...";
       settings.resetAll().catch(function() {
         resetConfirmBtn.disabled = false;
-        resetConfirmBtn.textContent = "DELETE";
+        resetConfirmBtn.textContent = "RESET";
       });
     });
 
