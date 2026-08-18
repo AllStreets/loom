@@ -398,7 +398,21 @@ export default function Shell() {
         <FleetHUD roles={roles} />
 
         {/* Deck controls */}
-        <div data-testid="deck-controls" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* Glass pill keeps the controls legible over bright deck content */}
+        <div
+          data-testid="deck-controls"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            background: 'var(--glass)',
+            border: '1px solid var(--glass-border)',
+            borderRadius: 999,
+            padding: '2px 8px',
+            backdropFilter: 'blur(var(--blur))',
+            WebkitBackdropFilter: 'blur(var(--blur))',
+          }}
+        >
           <button
             data-testid="deck-void-btn"
             onClick={() => window.dispatchEvent(new CustomEvent('loom-deck', { detail: { deck: 'void' } }))}

@@ -12,6 +12,10 @@
  */
 (function() {
   'use strict';
+  // Inside the LOOM cockpit the deck must boot straight to the globe — suppress
+  // AUSPEX's first-run tour overlay (its own SEEN_KEY, see js/tutorial.js:12).
+  try { if (!localStorage.getItem('auspex.tour.seen.v1')) localStorage.setItem('auspex.tour.seen.v1', String(Date.now())); } catch (e) { /* ignore */ }
+
   // Allowed command types (AUSPEX executeCmd verb whitelist)
   const ALLOWED_CMDS = new Set([
     'set_cat', 'toggle_overlay', 'toggle_tool', 'open_page',
