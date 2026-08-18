@@ -701,6 +701,10 @@ export default function Companion() {
       if (role === "builder") {
         const result = await builderChat(messages, opts);
         lastBrainRef.v = result.brain;
+        // Emit fallback event when cloud was requested but local was used
+        if (getSetting("model.cloudBuilder") === "anthropic" && result.brain === "local") {
+          appendEventWithMood({ ts: Date.now(), phase: "cloud", detail: "cloud unavailable — built locally" });
+        }
         return result.text;
       }
       return fleetChat(role, messages, opts);

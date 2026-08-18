@@ -131,7 +131,8 @@ export async function builderChat(
 
     if (keyPresent) {
       try {
-        const text = await cloudChat(systemMsg, chatMessages, opts?.numCtx ? undefined : undefined);
+        // max_tokens fixed at cloud.rs DEFAULT_MAX_TOKENS
+        const text = await cloudChat(systemMsg, chatMessages, undefined);
         return { text, brain: "cloud" };
       } catch {
         // Cloud error → fall back to local; caller will log "cloud unavailable"

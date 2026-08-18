@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -84,6 +84,68 @@ describe("FLEET_DEFAULTS", () => {
     expect(FLEET_DEFAULTS.builder).toBe("qwen3-coder:30b-a3b-q4_K_M");
     expect(FLEET_DEFAULTS.companion).toBe("gpt-oss:20b");
     expect(FLEET_DEFAULTS.rewriter).toBe("qwen3:1.7b");
+  });
+});
+
+// ── builderChat routing ────────────────────────────────────────────────────────
+
+describe("builderChat routing", () => {
+  it("(a) cloudBuilder='anthropic' + key present → cloud_chat invoked, brain='cloud'", async () => {
+    localStorage.setItem("model.cloudBuilder", "anthropic");
+    // cloudKeyPresent returns true
+    invoke.mockResolvedValueOnce(true);
+    // cloud_chat returns text
+    invoke.mockResolvedValueOnce("cloud reply");
+    const result = await builderChat([{ role: "user", content: "build it" }]);
+    expect(invoke).toHaveBeenCalledWith("cloud_key_present");
+    expect(invoke).toHaveBeenCalledWith("cloud_chat", expect.objectContaining({ system: "", messages: [{ role: "user", content: "build it" }] }));
+    expect(result.brain).toBe("cloud");
+    expect(result.text).toBe("cloud reply");
+  });
+
+  it("(b) cloudBuilder='off' → fleet_chat invoked, brain='local'", async () => {
+    localStorage.setItem("model.cloudBuilder", "off");
+    invoke.mockResolvedValueOnce("fleet reply");
+    const result = await builderChat([{ role: "user", content: "build it" }]);
+    expect(invoke).toHaveBeenCalledWith("fleet_chat", expect.objectContaining({ role: "builder" }));
+    expect(result.brain).toBe("local");
+    expect(result.text).toBe("fleet reply");
+  });
+
+  it("(c) cloud_chat rejects → fleet_chat fallback, brain='local'", async () => {
+    localStorage.setItem("model.cloudBuilder", "anthropic");
+    // cloudKeyPresent returns true
+    invoke.mockResolvedValueOnce(true);
+    // cloud_chat throws
+    invoke.mockRejectedValueOnce(new Error("cloud error"));
+    // fleet_chat fallback
+    invoke.mockResolvedValueOnce("fallback reply");
+    const result = await builderChat([{ role: "user", content: "build it" }]);
+    expect(result.brain).toBe("local");
+    expect(result.text).toBe("fallback reply");
+  });
+});
+
+// ── cloudKey wrappers ──────────────────────────────────────────────────────────
+
+describe("cloudKey wrappers", () => {
+  it("cloudKeySet invokes 'cloud_key_set' with { key }", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await cloudKeySet("sk-ant-test");
+    expect(invoke).toHaveBeenCalledWith("cloud_key_set", { key: "sk-ant-test" });
+  });
+
+  it("cloudKeyPresent invokes 'cloud_key_present' with no args", async () => {
+    invoke.mockResolvedValueOnce(true);
+    const present = await cloudKeyPresent();
+    expect(invoke).toHaveBeenCalledWith("cloud_key_present");
+    expect(present).toBe(true);
+  });
+
+  it("cloudKeyClear invokes 'cloud_key_clear' with no args", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await cloudKeyClear();
+    expect(invoke).toHaveBeenCalledWith("cloud_key_clear");
   });
 });
 
