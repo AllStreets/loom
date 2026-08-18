@@ -196,15 +196,23 @@ export default function Threads() {
       };
     }
 
-    // Animated render
+    // Animated render.
+    // PAINT DISCIPLINE: this canvas sits ABOVE the deck iframe (z99 > z2). A
+    // clearRect every frame — even with nothing to draw — invalidates the
+    // full-viewport region over the iframe and flickers its content. We only
+    // touch the canvas when there was or will be ink.
+    let drewLastFrame = false;
     function drawTick(t: number, dt: number) {
       if (!canvas || !ctx || document.hidden) return;
 
+      const wins = windowRegistry.getAll();
+      if (wins.size === 0 && !drewLastFrame) return; // zero paint when idle
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drewLastFrame = wins.size > 0;
 
       if (!getOrbAnchor()) return;
 
-      const wins = windowRegistry.getAll();
       const threadStates = threadStateRef.current;
 
       // Remove stale thread states for windows that are gone
@@ -276,6 +284,9 @@ export default function Threads() {
           width: "100%",
           height: "100%",
           pointerEvents: "none",
+          // Own compositor layer: our repaints must never invalidate the deck
+          // iframe's layer beneath (whole-iframe flicker).
+          transform: "translateZ(0)",
         }}
       />
     </div>

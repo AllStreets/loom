@@ -277,7 +277,9 @@ export default function Shell() {
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (reducedMotion) return;
+    // Spotlight repaints on every mouse move — invisible over a deck and a
+    // flicker source for the deck iframe. Void-only.
+    if (reducedMotion || deck !== "void") return;
 
     const shell = shellRef.current;
     if (!shell) return;
@@ -299,7 +301,7 @@ export default function Shell() {
         rafRef.current = null;
       }
     };
-  }, [reducedMotion]);
+  }, [reducedMotion, deck]);
 
   // ----- Listening ring rAF loop -----
   useEffect(() => {
@@ -463,7 +465,7 @@ export default function Shell() {
       `}</style>
 
       {/* Ambient particle field — behind everything, zIndex:1 */}
-      <Field dim={deck !== 'void'} />
+      <Field dim={deck !== 'void'} paused={deck !== 'void'} />
 
       {/* Deck layer — between ambient Field (z1) and orb-band (z10) */}
       <DeckLayer deck={deck} interactMode={interactMode} />

@@ -56,7 +56,7 @@ function createColorStrings(particles: Particle[]): string[] {
   return particles.map(makeColorString);
 }
 
-export default function Field({ dim = false }: { dim?: boolean }) {
+export default function Field({ dim = false, paused = false }: { dim?: boolean; paused?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const aurora1Ref = useRef<HTMLDivElement | null>(null);
   const aurora2Ref = useRef<HTMLDivElement | null>(null);
@@ -104,6 +104,10 @@ export default function Field({ dim = false }: { dim?: boolean }) {
   );
 
   useEffect(() => {
+    // Fully quiesce under a deck: the field is invisible beneath opaque deck
+    // content, and its per-frame canvas paints add compositor pressure that
+    // can flicker the deck iframe. No subscription, no paint.
+    if (paused) return;
     // Re-create particles if count changed (live reduced-motion toggle)
     if (particlesRef.current.length !== count) {
       particlesRef.current = createParticles(count);
@@ -189,7 +193,7 @@ export default function Field({ dim = false }: { dim?: boolean }) {
       unsub();
       window.removeEventListener("resize", resize);
     };
-  }, [reducedMotion, count]);
+  }, [reducedMotion, count, paused]);
 
   return (
     <>
