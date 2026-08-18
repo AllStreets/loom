@@ -126,8 +126,8 @@ export default function Shell() {
   const reducedMotion = useReducedMotion() ?? false;
 
   const [deck, setDeck] = useState<DeckId>(() => getSetting('cockpit.deck') as DeckId);
-  const [interactMode, setInteractMode] = useState(false);
-  const [watchOpen, setWatchOpen] = useState(false);
+  const [interactMode, setInteractMode] = useState(() => getSetting('cockpit.interact') === 'on');
+  const [watchOpen, setWatchOpen] = useState(() => getSetting('cockpit.watchOpen') === 'on');
   const [watchUnseen, setWatchUnseen] = useState(0);
 
   // ----- Ignition sequence state -----
@@ -205,6 +205,19 @@ export default function Shell() {
     }
     window.addEventListener('loom-deck', onDeck);
     return () => window.removeEventListener('loom-deck', onDeck);
+  }, []);
+
+  // ----- loom-settings-changed: live-update interact + constellation -----
+  useEffect(() => {
+    function onSettingsChanged(ev: Event) {
+      const detail = (ev as CustomEvent<{ key: string; value: string }>).detail;
+      if (!detail) return;
+      if (detail.key === 'cockpit.interact') {
+        setInteractMode(detail.value === 'on');
+      }
+    }
+    window.addEventListener('loom-settings-changed', onSettingsChanged);
+    return () => window.removeEventListener('loom-settings-changed', onSettingsChanged);
   }, []);
 
   // ----- fleet poll -----
@@ -504,6 +517,11 @@ export default function Shell() {
             padding: "16px 24px",
             position: "relative",
             zIndex: 10,
+            // Over a deck the bar needs its own ground — AUSPEX's toolbar sits
+            // directly beneath and double-chrome is unreadable without it.
+            background: deck !== "void"
+              ? "linear-gradient(to bottom, var(--bg) 55%, rgba(6,11,24,0.85) 80%, transparent)"
+              : undefined,
             borderBottom: reducedMotion ? undefined : `1px solid ${moodColor}20`,
             transition: reducedMotion ? undefined : "border-color 1.2s ease",
             ...staggerStyle,
@@ -583,7 +601,11 @@ export default function Shell() {
                   testid="deck-interact-btn"
                   label={interactMode ? "INTERACTING" : "INTERACT"}
                   selected={interactMode}
-                  onClick={() => setInteractMode((p) => !p)}
+                  onClick={() => {
+                    const next = !interactMode;
+                    setInteractMode(next);
+                    setSetting('cockpit.interact', next ? 'on' : 'off');
+                  }}
                 />
               )}
               <SegBtn
@@ -591,7 +613,11 @@ export default function Shell() {
                 label="WATCH"
                 selected={watchOpen}
                 onClick={() => {
-                  setWatchOpen((p) => !p);
+                  setWatchOpen((p) => {
+                    const next = !p;
+                    setSetting('cockpit.watchOpen', next ? 'on' : 'off');
+                    return next;
+                  });
                   setWatchUnseen(0);
                 }}
                 badge={!watchOpen && watchUnseen > 0 ? (watchUnseen > 9 ? "9+" : String(watchUnseen)) : undefined}
@@ -616,7 +642,12 @@ export default function Shell() {
           // Composites the orb canvas's black clear as pure light over the page
           // backdrop (see OrbGL.tsx) — must live at band level: orb-hero's transform
           // and this band's z-index isolate any deeper blend from the backdrop.
-          mixBlendMode: "screen",
+          // Screen blend ONLY over the void: over a deck iframe the blend forces a
+          // cross-document backdrop readback every orb frame (= whole-iframe
+          // flicker). Deck mode uses a truly transparent GL context instead.
+          mixBlendMode: deck === "void" ? "screen" : undefined,
+          // Empty flanks pass clicks to the deck; the orb hero re-enables its own.
+          pointerEvents: "none",
         }}
       >
         {/* Orb hero */}
@@ -631,6 +662,7 @@ export default function Shell() {
             margin: "12px 0 24px",
             position: "relative",
             cursor: "pointer",
+            pointerEvents: "auto",
             transform: `scale(${orbScale})`,
             transition: reducedMotion
               ? "opacity 0.3s ease"
@@ -640,7 +672,7 @@ export default function Shell() {
               : "drop-shadow(0 0 0px transparent)",
           }}
         >
-          <Orb mood={mood} size={180} />
+          <Orb mood={mood} size={180} transparent={deck !== "void"} />
           {voice.state === "listening" && (
             <div
               data-testid="listening-ring"
@@ -693,16 +725,23 @@ export default function Shell() {
           padding: "0 24px 40px",
           position: "relative",
           zIndex: 10,
+          // The zone shell spans the full width but must NOT swallow clicks in its
+          // empty flanks — decks below (z2) receive them. Real content re-enables
+          // pointer events on the column below.
+          pointerEvents: "none",
           ...(!reducedMotion && !alreadyIgnited
             ? {
                 opacity: staggerVisible ? 1 : 0,
-                transform: staggerVisible ? "translateY(0)" : "translateY(10px)",
+                // undefined once visible — a lingering transform would re-anchor
+                // fixed descendants (same hazard fixed in the header staggerStyle)
+                transform: staggerVisible ? undefined : "translateY(10px)",
                 transition: "opacity 0.5s ease 0.15s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1) 0.15s",
               }
             : {}),
         }}
       >
-        {/* Main column */}
+        {/* Main column — over a deck the console drops to the bottom edge so the
+            world stays visible; in the void it keeps its centered position */}
         <div
           style={{
             width: "100%",
@@ -710,6 +749,8 @@ export default function Shell() {
             display: "flex",
             flexDirection: "column",
             gap: 16,
+            pointerEvents: "auto",
+            marginTop: deck !== "void" ? "auto" : undefined,
           }}
         >
           {/* Companion panel */}

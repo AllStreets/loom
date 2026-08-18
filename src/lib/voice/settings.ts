@@ -46,7 +46,10 @@ export type SettingsKey =
   | "model.companion"
   | "model.rewriter"
   | "model.cloudBuilder"
-  | "cockpit.deck";
+  | "cockpit.deck"
+  | "cockpit.interact"
+  | "cockpit.constellation"
+  | "cockpit.watchOpen";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "voice.default",
@@ -58,6 +61,9 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "model.rewriter",
   "model.cloudBuilder",
   "cockpit.deck",
+  "cockpit.interact",
+  "cockpit.constellation",
+  "cockpit.watchOpen",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
@@ -71,6 +77,9 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "loom.reviewBeforeSave": ["0", "1"],
   "model.cloudBuilder": ["off", "anthropic"],
   "cockpit.deck": ["void", "globe", "terminal"],
+  "cockpit.interact": ["on", "off"],
+  "cockpit.constellation": ["on", "off"],
+  "cockpit.watchOpen": ["on", "off"],
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -83,6 +92,9 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "model.rewriter": "",
   "model.cloudBuilder": "off",
   "cockpit.deck": "void",
+  "cockpit.interact": "on",
+  "cockpit.constellation": "off",
+  "cockpit.watchOpen": "off",
 };
 
 // Legacy key the orb's detectTier reads
@@ -131,6 +143,9 @@ export function setSetting(key: string, value: string): void {
 
   localStorage.setItem(k, value);
 
+  // Dispatch a live-update event so Shell/Constellation react without restart
+  window.dispatchEvent(new CustomEvent("loom-settings-changed", { detail: { key: k, value } }));
+
   // Legacy side-effect for orb.tier
   if (k === "orb.tier") {
     if (value === "flat") {
@@ -140,4 +155,25 @@ export function setSetting(key: string, value: string): void {
       localStorage.removeItem(LEGACY_ORB_KEY);
     }
   }
+}
+
+/**
+ * Clear all user settings, loom.* keys, and auspex tour key.
+ * Called by loom.settings.resetAll() in api.ts (also clears tombstones).
+ * Does NOT touch organ git files.
+ */
+export function resetAllSettings(): void {
+  // Remove all known settings keys
+  for (const k of SETTINGS_KEYS) {
+    localStorage.removeItem(k);
+  }
+  // Remove all loom.* keys (includes loom.organs.deleted tombstones, loom.win.*, loom.minimized, etc.)
+  const loomKeys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("loom.")) loomKeys.push(k);
+  }
+  loomKeys.forEach((k) => localStorage.removeItem(k));
+  // Also remove the auspex tour key
+  localStorage.removeItem("auspex.tour.seen.v1");
 }

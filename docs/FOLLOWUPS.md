@@ -113,12 +113,21 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Terminal deck — live tape / index hero cards / movers / macro strip / finance wire. Lifecycle-driven poller (no background burn). Yahoo `/v8/chart` direct in Tauri; corsproxy.io in browser dev mode only.
 
 ### Stage-4 backlog
-- **LOOM-owned quote proxy** — kill the corsproxy.io dependency. Run a tiny Rust/Axum sidecar in the Tauri process that proxies Yahoo `/v8/chart` for the webview (no external relay, no CORS). Blocked on: deciding whether it lives in `src-tauri/src/` or as a named Tauri plugin. (`src-tauri/src/`, `src/lib/terminal/quotes.ts` `quoteUrl()`)
-- **installSeeds re-warn on non-ShellUnavailable** — `installSeeds` currently silences all errors; it should re-throw (or at minimum warn) on any error that is NOT a `ShellUnavailable` / sandbox-env signal so genuine seed bugs surface in CI. (`src/lib/loom/seeds.ts`)
-- **Threads / Desktop error boundaries** — `Threads.tsx` and the organ window host do not yet have React error boundaries. A throw in a thread animation or an organ window crashes more than it should. Add boundaries with LOOM-voice failure copy consistent with the Stage-3 hardening pass. (`src/components/ambient/Threads.tsx`, `src/components/desktop/`)
 - **EMBER deck** — offline survival console as a deck. Source: `~/Downloads/EMBER`. Bridge via the same postMessage adapter; keep EMBER's Forge self-edit loop isolated from LOOM's builder seam.
 - **AGORA deck** — markets intelligence deck: order flow, positioning, macro. Depends on terminal deck feed-source design.
+- **LOOM-owned quote proxy** — kill the corsproxy.io dependency. Run a tiny Rust/Axum sidecar in the Tauri process that proxies Yahoo `/v8/chart` for the webview (no external relay, no CORS). Blocked on: deciding whether it lives in `src-tauri/src/` or as a named Tauri plugin. (`src-tauri/src/`, `src/lib/terminal/quotes.ts` `quoteUrl()`)
 - **Globe fly-to on briefing** — when the cockpit speaks a salience item with lat/lng, auto-fly the globe to that location. Requires a new bridge command `fly_to {lat, lng}` in the deck protocol. (`src/lib/decks/commands.ts`, `public/decks/auspex/js/main.js`)
 - **Learned salience model** — replace the hand-tuned factor weights with a small learned model seeded by engagement history. Fits in the `scoreEvent` pure-function seam. (`src/lib/watch/score.ts`)
-- **Watch organ with fetch permission** — the Watch runtime currently runs kernel-side; a future watch ORGAN would need a gated fetch permission token (design work required before implementation).
-- **Watch panel / AUSPEX feed overlap** — the Watch panel overlaps AUSPEX's intelligence feed on the globe deck. Future pass: z-layering or offset. (`src/components/watch/WatchPanel.tsx`)
+- **Mid-Earth chat overlay polish for narrow heights** — the companion chat panel renders over the deck at a fixed vertical position that compresses it on short viewports. A min-height / scroll-container pass is needed for 768px and below. (`src/components/Companion.tsx`, `src/components/Shell.tsx`)
+- **Threads / Desktop error boundaries** — `Threads.tsx` and the organ window host do not yet have React error boundaries. A throw in a thread animation or an organ window crashes more than it should. Add boundaries with LOOM-voice failure copy consistent with the Stage-3 hardening pass. (`src/components/ambient/Threads.tsx`, `src/components/desktop/`)
+
+### Resolved in Stage 4a (Ownership, Phase 12)
+- Organ deletion with full residue cleanup (git files, storage keys, registry, dock).
+- Seed-deletion tombstones (`loom.organs.deleted`) — deleted seeds stay deleted across reboots.
+- Reset to defaults — clears all `loom.*` keys and reloads; tombstones cleared so seed organs return.
+- Persistence: WatchPanel open state (`cockpit.watchOpen`), minimized-organ set (`loom.minimized`).
+- Constellation defaults off (`cockpit.constellation` default "off"); live toggle via `loom-settings-changed`.
+- Interact-by-default (`cockpit.interact` default "on"); LOCK toggle in top bar; persisted.
+- Trail hygiene — minimized organs dropped from windowRegistry; restored on un-minimize.
+- html background belt — `html { background: var(--bg) }` in tokens.css; overflow reveals navy.
+- Orb transparent-mode compositor over active decks.

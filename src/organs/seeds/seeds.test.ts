@@ -1,10 +1,13 @@
-// @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from "vitest";
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { manifestGuard } from "../../lib/loom/validate";
 import { files as notesFiles } from "./notes";
 import { files as timelineFiles } from "./timeline";
 import { files as settingsFiles } from "./settings";
 import { installSeeds } from "./install";
+
+beforeEach(() => { if (typeof localStorage !== "undefined") localStorage.clear(); });
+afterEach(() => { if (typeof localStorage !== "undefined") localStorage.clear(); });
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -141,5 +144,51 @@ describe("seed content validity", () => {
     const installed = await installSeeds({ list, write });
     expect(installed).toContain("settings");
     expect(write).toHaveBeenCalledWith("settings", settingsFiles, "loom: seed settings");
+  });
+});
+
+// ── tombstone tests ───────────────────────────────────────────────────────────
+
+describe("installSeeds tombstones", () => {
+  it("skips seed ids in loom.organs.deleted tombstone list", async () => {
+    // Put notes in the tombstone list
+    localStorage.setItem("loom.organs.deleted", JSON.stringify(["notes"]));
+
+    const list = vi.fn(async () => []);
+    const write = vi.fn(async () => "sha");
+
+    const installed = await installSeeds({ list, write });
+
+    // notes must NOT be installed
+    expect(write).not.toHaveBeenCalledWith("notes", expect.anything(), expect.anything());
+    // notes must not appear in returned list
+    expect(installed).not.toContain("notes");
+  });
+
+  it("installs seeds not in tombstone list", async () => {
+    // Only notes is tombstoned
+    localStorage.setItem("loom.organs.deleted", JSON.stringify(["notes"]));
+
+    const list = vi.fn(async () => []);
+    const write = vi.fn(async () => "sha");
+
+    const installed = await installSeeds({ list, write });
+
+    // timeline and settings should be installed (not tombstoned)
+    expect(write).toHaveBeenCalledWith("timeline", expect.anything(), expect.anything());
+    expect(write).toHaveBeenCalledWith("settings", expect.anything(), expect.anything());
+    expect(installed).toContain("timeline");
+    expect(installed).toContain("settings");
+  });
+
+  it("skips seeds already in the organ list (existing behavior)", async () => {
+    const list = vi.fn(async () => [
+      { id: "notes", manifest: "{}", granted: null },
+    ]);
+    const write = vi.fn(async () => "sha");
+
+    await installSeeds({ list, write });
+
+    expect(write).not.toHaveBeenCalledWith("notes", expect.anything(), expect.anything());
   });
 });

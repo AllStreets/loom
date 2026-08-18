@@ -24,10 +24,20 @@ export async function installSeeds(deps: {
     return [];
   }
 
+  // Read tombstone list — deleted seed organs must not be reinstalled
+  let tombstones: string[] = [];
+  try {
+    const raw = localStorage.getItem("loom.organs.deleted");
+    tombstones = raw ? JSON.parse(raw) : [];
+  } catch {
+    // ignore parse errors
+  }
+
   const installed: string[] = [];
 
   for (const seed of SEEDS) {
     if (existing.includes(seed.id)) continue;
+    if (tombstones.includes(seed.id)) continue;
     try {
       await deps.write(seed.id, seed.files, `loom: seed ${seed.id}`);
       installed.push(seed.id);

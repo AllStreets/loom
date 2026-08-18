@@ -212,6 +212,10 @@ const GlobeDeck = forwardRef<GlobeDeckHandle, GlobeDeckProps>(
             opacity,
             transition: reducedMotion ? "none" : "opacity 400ms ease",
             pointerEvents: interact ? "auto" : "none",
+            // Own compositing layer: isolates the deck's WebGL/DOM repaints from
+            // LOOM's per-frame layers (orb blend, ambient) — prevents whole-iframe
+            // flicker (banner/earth/moon) from cross-layer invalidation.
+            transform: "translateZ(0)",
           }}
         />
       </div>

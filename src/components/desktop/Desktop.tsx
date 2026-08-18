@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useOrgans, type OrganState } from "../../lib/organs/host";
 import OrganWindow from "./OrganWindow";
 import Dock from "./Dock";
+import { windowRegistry } from "../../lib/ambient/windowRegistry";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -30,7 +31,20 @@ type WindowInfo = {
 export default function Desktop() {
   const rm = useReducedMotion() ?? false;
   const { organs, approve, reload } = useOrgans();
-  const [windowStates, setWindowStates] = useState<Record<string, WindowInfo>>({});
+  const [windowStates, setWindowStates] = useState<Record<string, WindowInfo>>(() => {
+    try {
+      const raw = localStorage.getItem("loom.minimized");
+      if (raw) {
+        const ids: string[] = JSON.parse(raw);
+        const init: Record<string, WindowInfo> = {};
+        for (const id of ids) {
+          init[id] = { minimized: true, focused: false };
+        }
+        return init;
+      }
+    } catch { /* ignore */ }
+    return {};
+  });
   const [zOrder, setZOrder] = useState<string[]>([]);
   const [modalOrganId, setModalOrganId] = useState<string | null>(null);
   const windowRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -56,6 +70,14 @@ export default function Desktop() {
         next.push(id);
         return next;
       });
+      // Re-add to registry using persisted position
+      try {
+        const raw = localStorage.getItem(`loom.win.${id}`);
+        if (raw) {
+          const p = JSON.parse(raw);
+          windowRegistry.set(id, { x: p.x ?? 0, y: p.y ?? 0, w: p.w ?? 420, h: p.h ?? 360 });
+        }
+      } catch { /* ignore */ }
       // Flash outline
       const winEl = windowRefs.current[id];
       if (winEl) {
@@ -129,10 +151,28 @@ export default function Desktop() {
   }
 
   function handleMinimize(id: string) {
-    setWindowStates((prev) => ({
-      ...prev,
-      [id]: { ...prev[id], minimized: true, focused: false },
-    }));
+    setWindowStates((prev) => {
+      const next = {
+        ...prev,
+        [id]: { ...prev[id], minimized: true, focused: false },
+      };
+      // Persist minimized set
+      const minimizedIds = Object.entries(next)
+        .filter(([, v]) => v.minimized)
+        .map(([k]) => k);
+      try { localStorage.setItem("loom.minimized", JSON.stringify(minimizedIds)); } catch { /* ignore */ }
+      return next;
+    });
+    windowRegistry.delete(id);
+  }
+
+  function handleDelete(id: string) {
+    setWindowStates((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setZOrder((prev) => prev.filter((x) => x !== id));
   }
 
   function handleDockClick(id: string) {
@@ -143,15 +183,31 @@ export default function Desktop() {
       return;
     }
     // Un-minimize and focus
-    setWindowStates((prev) => ({
-      ...prev,
-      [id]: { minimized: false, focused: true },
-    }));
+    setWindowStates((prev) => {
+      const next = {
+        ...prev,
+        [id]: { minimized: false, focused: true },
+      };
+      // Update persisted minimized set
+      const minimizedIds = Object.entries(next)
+        .filter(([, v]) => v.minimized)
+        .map(([k]) => k);
+      try { localStorage.setItem("loom.minimized", JSON.stringify(minimizedIds)); } catch { /* ignore */ }
+      return next;
+    });
     setZOrder((prev) => {
       const next = prev.filter((x) => x !== id);
       next.push(id);
       return next;
     });
+    // Re-add to registry using persisted position
+    try {
+      const raw = localStorage.getItem(`loom.win.${id}`);
+      if (raw) {
+        const p = JSON.parse(raw);
+        windowRegistry.set(id, { x: p.x ?? 0, y: p.y ?? 0, w: p.w ?? 420, h: p.h ?? 360 });
+      }
+    } catch { /* ignore */ }
   }
 
   async function handleApprove(id: string) {
@@ -226,8 +282,10 @@ export default function Desktop() {
             <OrganWindow
               state={organ}
               focused={ws.focused}
+              minimized={ws.minimized}
               onFocus={() => handleFocus(id)}
               onMinimize={() => handleMinimize(id)}
+              onDelete={() => handleDelete(id)}
               initial={initial}
             />
           </div>

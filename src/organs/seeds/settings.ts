@@ -36,6 +36,7 @@ const ORGAN_JS = `export default {
       { label: "Models", page: "models", action: "page-models" },
       { label: "Appearance", page: "appearance", action: "page-appearance" },
       { label: "Building", page: "building", action: "page-building" },
+      { label: "System", page: "system", action: "page-system" },
     ];
 
     var activePage = "voice";
@@ -567,6 +568,120 @@ const ORGAN_JS = `export default {
     }
     appearancePage.appendChild(orbRow);
 
+    // Constellation section
+    appearancePage.appendChild(ui.section("Constellation"));
+
+    var constNote = document.createElement("div");
+    constNote.style.fontSize = "12px";
+    constNote.style.color = ui.tokens.t3;
+    constNote.style.marginBottom = "8px";
+    constNote.textContent = "Show the agent constellation ring around the orb.";
+    appearancePage.appendChild(constNote);
+
+    var constOptions = [
+      { label: "On", value: "on", action: "constellation-on" },
+      { label: "Off", value: "off", action: "constellation-off" },
+    ];
+    var constBtns = [];
+    var constRow = document.createElement("div");
+    constRow.style.display = "flex";
+    constRow.style.gap = "6px";
+
+    function refreshConstBtns(current) {
+      for (var i = 0; i < constBtns.length; i++) {
+        var b = constBtns[i];
+        var isActive = b._value === current;
+        b.style.background = isActive ? ui.tokens.accent : "transparent";
+        b.style.color = isActive ? "#04222b" : ui.tokens.t1;
+        b.style.border = isActive ? "none" : "1px solid rgba(255,255,255,.18)";
+        b.style.fontWeight = isActive ? "700" : "600";
+      }
+    }
+
+    for (var ci = 0; ci < constOptions.length; ci++) {
+      (function(opt) {
+        var btn = document.createElement("button");
+        btn.className = "lui-btn";
+        btn.style.borderRadius = "8px";
+        btn.style.padding = "7px 14px";
+        btn.style.fontWeight = "600";
+        btn.style.fontSize = "14px";
+        btn.style.cursor = "pointer";
+        btn.style.fontFamily = "inherit";
+        btn.style.transition = "filter .15s, background .15s, border-color .15s";
+        btn.style.background = "transparent";
+        btn.style.border = "1px solid rgba(255,255,255,.18)";
+        btn.style.color = ui.tokens.t1;
+        btn.dataset.action = opt.action;
+        btn._value = opt.value;
+        btn.textContent = opt.label;
+        btn.addEventListener("click", function() {
+          settings.set("cockpit.constellation", opt.value);
+          refreshConstBtns(opt.value);
+        });
+        constBtns.push(btn);
+        constRow.appendChild(btn);
+      })(constOptions[ci]);
+    }
+    appearancePage.appendChild(constRow);
+
+    // Globe interaction section
+    appearancePage.appendChild(ui.section("Globe interaction"));
+
+    var interactNote = document.createElement("div");
+    interactNote.style.fontSize = "12px";
+    interactNote.style.color = ui.tokens.t3;
+    interactNote.style.marginBottom = "8px";
+    interactNote.textContent = "Allow pointer events on the globe deck (click and pan AUSPEX directly).";
+    appearancePage.appendChild(interactNote);
+
+    var interactOptions = [
+      { label: "On", value: "on", action: "interact-on" },
+      { label: "Off", value: "off", action: "interact-off" },
+    ];
+    var interactBtns = [];
+    var interactRow = document.createElement("div");
+    interactRow.style.display = "flex";
+    interactRow.style.gap = "6px";
+
+    function refreshInteractBtns(current) {
+      for (var i = 0; i < interactBtns.length; i++) {
+        var b = interactBtns[i];
+        var isActive = b._value === current;
+        b.style.background = isActive ? ui.tokens.accent : "transparent";
+        b.style.color = isActive ? "#04222b" : ui.tokens.t1;
+        b.style.border = isActive ? "none" : "1px solid rgba(255,255,255,.18)";
+        b.style.fontWeight = isActive ? "700" : "600";
+      }
+    }
+
+    for (var ii = 0; ii < interactOptions.length; ii++) {
+      (function(opt) {
+        var btn = document.createElement("button");
+        btn.className = "lui-btn";
+        btn.style.borderRadius = "8px";
+        btn.style.padding = "7px 14px";
+        btn.style.fontWeight = "600";
+        btn.style.fontSize = "14px";
+        btn.style.cursor = "pointer";
+        btn.style.fontFamily = "inherit";
+        btn.style.transition = "filter .15s, background .15s, border-color .15s";
+        btn.style.background = "transparent";
+        btn.style.border = "1px solid rgba(255,255,255,.18)";
+        btn.style.color = ui.tokens.t1;
+        btn.dataset.action = opt.action;
+        btn._value = opt.value;
+        btn.textContent = opt.label;
+        btn.addEventListener("click", function() {
+          settings.set("cockpit.interact", opt.value);
+          refreshInteractBtns(opt.value);
+        });
+        interactBtns.push(btn);
+        interactRow.appendChild(btn);
+      })(interactOptions[ii]);
+    }
+    appearancePage.appendChild(interactRow);
+
     // ========================================================================
     // PAGE: Building
     // ========================================================================
@@ -622,6 +737,70 @@ const ORGAN_JS = `export default {
     }
     buildingPage.appendChild(reviewRow);
 
+    // ========================================================================
+    // PAGE: System
+    // ========================================================================
+    var systemPage = document.createElement("div");
+    pages["system"] = systemPage;
+
+    systemPage.appendChild(ui.heading("System", "Reset LOOM to factory defaults."));
+
+    var resetNote = document.createElement("div");
+    resetNote.style.fontSize = "12px";
+    resetNote.style.color = ui.tokens.t3;
+    resetNote.style.marginBottom = "12px";
+    resetNote.textContent = "Organs' code is kept; deleted seed organs will return.";
+    systemPage.appendChild(resetNote);
+
+    var resetBtn = ui.button("Reset LOOM to defaults", { variant: "ghost", action: "system-reset" });
+    resetBtn.style.color = ui.tokens.danger;
+    resetBtn.style.borderColor = ui.tokens.danger;
+
+    var resetConfirmStrip = document.createElement("div");
+    resetConfirmStrip.style.display = "none";
+    resetConfirmStrip.style.gap = "8px";
+    resetConfirmStrip.style.alignItems = "center";
+    resetConfirmStrip.style.marginTop = "8px";
+    resetConfirmStrip.dataset.testid = "system-reset-confirm";
+
+    var resetConfirmLabel = document.createElement("span");
+    resetConfirmLabel.style.fontSize = "12px";
+    resetConfirmLabel.style.color = ui.tokens.t2;
+    resetConfirmLabel.textContent = "This will clear all settings and restart. Organs' code is kept.";
+
+    var resetConfirmBtn = ui.button("RESET", { variant: "primary", action: "system-reset-confirm" });
+    resetConfirmBtn.style.background = ui.tokens.danger;
+    resetConfirmBtn.style.color = "#fff";
+    resetConfirmBtn.style.border = "none";
+
+    var resetCancelBtn = ui.button("KEEP", { variant: "ghost", action: "system-reset-cancel" });
+
+    resetConfirmStrip.appendChild(resetConfirmLabel);
+    resetConfirmStrip.appendChild(resetConfirmBtn);
+    resetConfirmStrip.appendChild(resetCancelBtn);
+
+    resetBtn.addEventListener("click", function() {
+      resetConfirmStrip.style.display = "flex";
+      resetBtn.style.display = "none";
+    });
+
+    resetCancelBtn.addEventListener("click", function() {
+      resetConfirmStrip.style.display = "none";
+      resetBtn.style.display = "";
+    });
+
+    resetConfirmBtn.addEventListener("click", function() {
+      resetConfirmBtn.disabled = true;
+      resetConfirmBtn.textContent = "Resetting...";
+      settings.resetAll().catch(function() {
+        resetConfirmBtn.disabled = false;
+        resetConfirmBtn.textContent = "RESET";
+      });
+    });
+
+    systemPage.appendChild(resetBtn);
+    systemPage.appendChild(resetConfirmStrip);
+
     // -- Assemble -----------------------------------------------------------------
     for (var pi = 0; pi < NAV_ITEMS.length; pi++) {
       var pitem = NAV_ITEMS[pi];
@@ -664,6 +843,8 @@ const ORGAN_JS = `export default {
 
     refreshSpeakBtns(settings.get("voice.speakReplies") || "whenSpoken");
     refreshOrbBtns(settings.get("orb.tier") || "auto");
+    refreshConstBtns(settings.get("cockpit.constellation") || "off");
+    refreshInteractBtns(settings.get("cockpit.interact") || "on");
     refreshReviewBtns(settings.get("loom.reviewBeforeSave") || "0");
     refreshStatus();
     showPage("voice");
@@ -827,6 +1008,51 @@ const TEST_JS = `export const tests = [
       assert(cloudKeySetCalls[0] === "sk-ant-test123", "cloudKeySet called with the key");
       assert(keyInp.value === "", "input cleared after save");
       loom.settings.cloudKeySet = origCloudKeySet;
+    },
+  },
+  {
+    name: "page-system nav exists",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var sysNav = el.querySelector('[data-action="page-system"]');
+      assert(sysNav !== null, "page-system nav button exists");
+    },
+  },
+  {
+    name: "system reset confirm strip appears on reset button click",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var sysNav = el.querySelector('[data-action="page-system"]');
+      assert(sysNav !== null, "page-system nav exists");
+      sysNav.click();
+      await new Promise(function(r) { setTimeout(r, 30); });
+      var resetBtn = el.querySelector('[data-action="system-reset"]');
+      assert(resetBtn !== null, "system-reset button exists");
+      resetBtn.click();
+      var strip = el.querySelector('[data-testid="system-reset-confirm"]');
+      assert(strip !== null, "system-reset-confirm strip exists");
+      assert(strip.style.display !== "none", "confirm strip is visible after click");
+    },
+  },
+  {
+    name: "system reset confirm calls settings.resetAll",
+    fn: async function({ el, loom, assert }) {
+      var resetAllCalls = 0;
+      loom.settings.resetAll = function() {
+        resetAllCalls++;
+        return Promise.resolve();
+      };
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var sysNav = el.querySelector('[data-action="page-system"]');
+      sysNav.click();
+      await new Promise(function(r) { setTimeout(r, 30); });
+      var resetBtn = el.querySelector('[data-action="system-reset"]');
+      resetBtn.click();
+      var confirmBtn = el.querySelector('[data-action="system-reset-confirm"]');
+      assert(confirmBtn !== null, "system-reset-confirm button exists");
+      confirmBtn.click();
+      await new Promise(function(r) { setTimeout(r, 60); });
+      assert(resetAllCalls === 1, "settings.resetAll called once (got: " + resetAllCalls + ")");
     },
   },
 ];`;

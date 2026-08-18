@@ -269,4 +269,35 @@ describe("poll runtime", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fetchSpy.mock.calls.length).toBe(afterStart + SYMBOLS.length);
   });
+
+  it("hidden-pause: no fetch while document.hidden; polling resumes on visible", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => chartBody({ price: 100, prevClose: 100 }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    // Start with the document visible so the poller begins.
+    startQuotes();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const callsAfterStart = fetchSpy.mock.calls.length;
+
+    // Simulate the tab becoming hidden.
+    Object.defineProperty(document, "hidden", { value: true, configurable: true, writable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    // Advance well past one poll interval — no new fetches should fire.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchSpy.mock.calls.length).toBe(callsAfterStart);
+
+    // Simulate the tab becoming visible again.
+    Object.defineProperty(document, "hidden", { value: false, configurable: true, writable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    // The resume path calls poll() immediately — wait for at least one new fetch.
+    await vi.waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(callsAfterStart));
+
+    // Restore document.hidden to false for subsequent tests.
+    Object.defineProperty(document, "hidden", { value: false, configurable: true, writable: true });
+  });
 });

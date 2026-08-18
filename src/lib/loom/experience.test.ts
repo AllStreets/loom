@@ -1,17 +1,37 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { recordExperience, retrieveExemplars, retrieveLessons, exportCorpus } from "./experience";
 import type { BuildRecord } from "./experience";
 
-// Mock localStorage
-const store: Record<string, string> = {};
-const localStorageMock = {
-  getItem: (k: string) => store[k] ?? null,
-  setItem: (k: string, v: string) => { store[k] = v; },
-  removeItem: (k: string) => { delete store[k]; },
-  clear: () => { for (const k of Object.keys(store)) delete store[k]; },
-};
-vi.stubGlobal("localStorage", localStorageMock);
-vi.stubGlobal("window", { __loomExportCorpus: undefined });
+// Each test gets its own isolated localStorage store so tests cannot bleed state
+// into each other — including the large size-guard test that fills ~1.5 MB.
+// A module-level shared store caused intermittent failures under full-suite
+// parallelism because beforeEach.clear() on a shared object is not atomic with
+// respect to async setup in adjacent tests.
+
+function makeLocalStorageMock() {
+  const store: Record<string, string> = {};
+  return {
+    store,
+    mock: {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => { store[k] = v; },
+      removeItem: (k: string) => { delete store[k]; },
+      clear: () => { for (const k of Object.keys(store)) delete store[k]; },
+    },
+  };
+}
+
+let currentStore: ReturnType<typeof makeLocalStorageMock>;
+
+beforeEach(() => {
+  currentStore = makeLocalStorageMock();
+  vi.stubGlobal("localStorage", currentStore.mock);
+  vi.stubGlobal("window", { __loomExportCorpus: undefined });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function makeRecord(overrides: Partial<BuildRecord> = {}): BuildRecord {
   return {
@@ -29,8 +49,6 @@ function makeRecord(overrides: Partial<BuildRecord> = {}): BuildRecord {
 }
 
 describe("experience store", () => {
-  beforeEach(() => { localStorageMock.clear(); });
-
   it("round-trips a record", () => {
     const r = makeRecord();
     recordExperience(r);
@@ -143,8 +161,8 @@ describe("experience store", () => {
     for (let i = 0; i < count; i++) {
       recordExperience(makeRecord({ request: `req-${i}`, organId: `org-${i}`, code: bigCode, ts: i }));
     }
-    // The store should not exceed ~1.5MB
-    const raw = store["loom.exp.v1"] ?? "";
+    // The store should not exceed ~1.5MB (using this test's isolated store)
+    const raw = currentStore.store["loom.exp.v1"] ?? "";
     expect(raw.length).toBeLessThanOrEqual(1.55 * 1024 * 1024);
     // The oldest records (low ts values) must have been evicted
     const records = JSON.parse(raw) as Array<{ organId: string }>;

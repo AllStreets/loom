@@ -96,3 +96,21 @@ describe("Error boundary falls back to Orb2D and sets localStorage", () => {
     });
   });
 });
+
+describe("Orb transparent prop pass-through", () => {
+  it("passes transparent=true to glComponent when transparent prop is set", () => {
+    const spy = vi.fn(() => <div data-testid="spy-gl">spy</div>);
+    render(<Orb transparent glComponent={spy} tierOverride="gl" />);
+    expect(spy).toHaveBeenCalled();
+    const callArgs = spy.mock.calls[0]?.[0];
+    expect(callArgs?.transparent).toBe(true);
+  });
+
+  it("defaults transparent to false/undefined when not specified", () => {
+    const spy = vi.fn(() => <div data-testid="spy-gl">spy</div>);
+    render(<Orb glComponent={spy} tierOverride="gl" />);
+    expect(spy).toHaveBeenCalled();
+    const callArgs = spy.mock.calls[0]?.[0];
+    expect(callArgs?.transparent ?? false).toBe(false);
+  });
+});

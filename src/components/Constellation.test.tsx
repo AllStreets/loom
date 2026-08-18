@@ -10,7 +10,7 @@
  */
 
 import { render, screen, act } from "@testing-library/react";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom";
 
 // matchMedia mock
@@ -36,8 +36,15 @@ global.ResizeObserver = class ResizeObserver {
   disconnect() {}
 };
 
+beforeEach(() => {
+  localStorage.clear();
+  // Constellation defaults to "off"; enable it for all tests
+  localStorage.setItem("cockpit.constellation", "on");
+});
+
 afterEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 import Constellation from "./Constellation";
