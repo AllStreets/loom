@@ -22,7 +22,7 @@ export type BridgeCmd =
 
 export type DeckCommandResult = {
   /** deck switch that must fire BEFORE bridge cmds (only set when needed) */
-  deckSwitch?: "globe" | "void" | "terminal";
+  deckSwitch?: "globe" | "void" | "terminal" | "ember";
   /** bridge commands to post into the AUSPEX iframe (may be empty) */
   bridgeCmds: BridgeCmd[];
   /** short confirmation line for the companion to speak ("Globe up.", etc.) */
@@ -49,6 +49,11 @@ const TERMINAL_HIDE_RE =
 // Deck hide: "hide the globe", "back to void", "close the world", etc.
 const DECK_HIDE_RE =
   /\b(hide|close)\b.{0,20}?\b(globe|world|map)\b|back to (the )?void/i;
+
+// Ember show: "show ember", "show survival", "the failsafe", "open the failsafe"
+// The bare "failsafe" / "the failsafe" trigger without a show/open verb (wake-word style).
+const EMBER_SHOW_RE =
+  /(?:\b(show|open)\b.{0,20}?\b(ember|survival|failsafe)\b)|\bthe failsafe\b|\bfailsafe\b/i;
 
 // Category filter: "show military news", "show geopolitical", "switch to finance", etc.
 // The "all" token requires a news-context word to avoid false positives like
@@ -124,7 +129,7 @@ const CAT_LABELS: Record<string, string> = {
  */
 export function classifyDeckCommand(
   utterance: string,
-  currentDeck: "void" | "globe" | "terminal"
+  currentDeck: "void" | "globe" | "terminal" | "ember"
 ): DeckCommandResult | null {
   // 1. Category filter — highest priority so "show financial markets" routes to
   //    set_cat, NOT to the terminal deck. Globe-only: auto-switch from any non-globe deck.
@@ -170,6 +175,15 @@ export function classifyDeckCommand(
       deckSwitch: "void",
       bridgeCmds: [],
       confirmation: "Back to the void.",
+    };
+  }
+
+  // 3.5. Ember show: "show ember", "show survival", "the failsafe"
+  if (EMBER_SHOW_RE.test(utterance)) {
+    return {
+      deckSwitch: "ember",
+      bridgeCmds: [],
+      confirmation: "Failsafe up.",
     };
   }
 

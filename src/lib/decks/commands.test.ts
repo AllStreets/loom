@@ -275,6 +275,45 @@ describe("classifyDeckCommand — non-deck phrases", () => {
   });
 });
 
+describe("classifyDeckCommand — ember deck", () => {
+  it("'show ember' → deckSwitch:ember, no bridgeCmds", () => {
+    const r = classifyDeckCommand("show ember", "void");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("ember");
+    expect(r!.bridgeCmds).toHaveLength(0);
+    expect(r!.confirmation).toMatch(/failsafe/i);
+  });
+
+  it("'show survival' → deckSwitch:ember", () => {
+    const r = classifyDeckCommand("show survival", "void");
+    expect(r!.deckSwitch).toBe("ember");
+  });
+
+  it("'the failsafe' → deckSwitch:ember", () => {
+    const r = classifyDeckCommand("the failsafe", "void");
+    expect(r!.deckSwitch).toBe("ember");
+  });
+
+  it("'open the failsafe' → deckSwitch:ember", () => {
+    const r = classifyDeckCommand("open the failsafe", "void");
+    expect(r!.deckSwitch).toBe("ember");
+  });
+
+  // Regressions: globe/terminal/category rules untouched
+  it("REGRESSION 'show the globe' still → globe (not ember)", () => {
+    expect(classifyDeckCommand("show the globe", "void")!.deckSwitch).toBe("globe");
+  });
+
+  it("REGRESSION 'show markets' still → terminal (not ember)", () => {
+    expect(classifyDeckCommand("show markets", "void")!.deckSwitch).toBe("terminal");
+  });
+
+  it("REGRESSION 'show military' still → set_cat military (not ember)", () => {
+    const r = classifyDeckCommand("show military", "globe");
+    expect(r!.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "military" });
+  });
+});
+
 describe("classifyDeckCommand — terminal deck", () => {
   it("'show the terminal' → deckSwitch:terminal", () => {
     const r = classifyDeckCommand("show the terminal", "void");

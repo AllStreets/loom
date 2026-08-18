@@ -233,6 +233,34 @@ describe("Shell deck integration", () => {
   });
 });
 
+// ── EmberDeck rendering ───────────────────────────────────────────────────────
+
+describe("DeckLayer — ember deck", () => {
+  it("renders EmberDeck iframe when deck='ember'", () => {
+    render(
+      <DeckLayer deck="ember" interactMode={false} onInteractToggle={() => {}} />
+    );
+    const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute("data-testid")).toBe("ember-deck-iframe");
+  });
+
+  it("ember iframe src contains 'ember'", () => {
+    render(
+      <DeckLayer deck="ember" interactMode={false} onInteractToggle={() => {}} />
+    );
+    const iframe = document.querySelector("iframe") as HTMLIFrameElement;
+    expect(iframe?.getAttribute("src")).toContain("ember");
+  });
+
+  it("renders nothing (no iframe) when deck='void'", () => {
+    render(
+      <DeckLayer deck="void" interactMode={false} onInteractToggle={() => {}} />
+    );
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+});
+
 // ── Bundle existence tests ─────────────────────────────────────────────────────
 
 describe("Bundle existence", () => {

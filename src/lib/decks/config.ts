@@ -25,22 +25,33 @@
  */
 
 /**
- * Build deck configuration for the given environment.
+ * Build deck configuration for the given environment and deck name.
  * Pure factory function — no module-level env reading.
  *
- * @param isDev  true for dev (Vite), false for prod (Tauri bundled)
+ * @param isDev     true for dev (Vite), false for prod (Tauri bundled)
+ * @param deckName  the deck subdirectory name (default: "auspex")
  * @returns { url, origin } — deck iframe URL and postMessage origin
  */
-export function buildDeckConfig(isDev: boolean) {
+export function buildDeckConfig(isDev: boolean, deckName: string = "auspex") {
   return {
-    url: isDev ? "/decks/auspex/index.html" : "deck://localhost/index.html",
+    url: isDev
+      ? `/decks/${deckName}/index.html`
+      : `deck://localhost/${deckName}/index.html`,
     origin: isDev
       ? (typeof window !== "undefined" ? window.location.origin : "http://localhost:1420")
       : "deck://localhost",
   };
 }
 
-// Module-level constants derived from import.meta.env.DEV
-const _config = buildDeckConfig(import.meta.env.DEV);
+/**
+ * Build configuration for the EMBER deck.
+ * Convenience helper — equivalent to buildDeckConfig(isDev, "ember").
+ */
+export function buildEmberConfig(isDev: boolean) {
+  return buildDeckConfig(isDev, "ember");
+}
+
+// Module-level constants derived from import.meta.env.DEV (backward-compat: auspex default)
+const _config = buildDeckConfig(import.meta.env.DEV, "auspex");
 export const DECK_URL: string = _config.url;
 export const DECK_ORIGIN: string = _config.origin;

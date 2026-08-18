@@ -598,6 +598,12 @@ export default function Shell() {
                 selected={deck === "terminal"}
                 onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "terminal" } }))}
               />
+              <SegBtn
+                testid="deck-ember-btn"
+                label="EMBER"
+                selected={deck === "ember"}
+                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "ember" } }))}
+              />
               {deck === "globe" && (
                 <SegBtn
                   testid="deck-interact-btn"

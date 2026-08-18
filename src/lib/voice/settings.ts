@@ -76,7 +76,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "orb.tier": ["auto", "flat"],
   "loom.reviewBeforeSave": ["0", "1"],
   "model.cloudBuilder": ["off", "anthropic"],
-  "cockpit.deck": ["void", "globe", "terminal"],
+  "cockpit.deck": ["void", "globe", "terminal", "ember"],
   "cockpit.interact": ["on", "off"],
   "cockpit.constellation": ["on", "off"],
   "cockpit.watchOpen": ["on", "off"],
