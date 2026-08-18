@@ -3,7 +3,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
-    setupFiles: [],
+    setupFiles: ["src/test-setup.ts"],
     exclude: [
       ...(process.env.SELFTEST ? [] : ["src/selftest/**"]),
       "**/node_modules/**",

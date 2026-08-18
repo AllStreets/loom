@@ -31,13 +31,13 @@ let quakesErrStreak = 0;
 function onAuspexError(err: unknown) {
   auspexErrStreak++;
   if (auspexErrStreak === 1) {
-    console.warn("[watch/sensors] AUSPEX fetch failed — will retry next poll:", err);
+    console.debug("[watch/sensors] AUSPEX fetch failed — will retry next poll:", err);
   }
 }
 
 function onAuspexSuccess() {
   if (auspexErrStreak > 0) {
-    console.warn("[watch/sensors] AUSPEX feed restored after", auspexErrStreak, "failed poll(s)");
+    console.debug("[watch/sensors] AUSPEX feed restored after", auspexErrStreak, "failed poll(s)");
   }
   auspexErrStreak = 0;
 }
@@ -45,13 +45,13 @@ function onAuspexSuccess() {
 function onQuakesError(err: unknown) {
   quakesErrStreak++;
   if (quakesErrStreak === 1) {
-    console.warn("[watch/sensors] USGS quakes fetch failed — will retry next poll:", err);
+    console.debug("[watch/sensors] USGS quakes fetch failed — will retry next poll:", err);
   }
 }
 
 function onQuakesSuccess() {
   if (quakesErrStreak > 0) {
-    console.warn("[watch/sensors] USGS quakes feed restored after", quakesErrStreak, "failed poll(s)");
+    console.debug("[watch/sensors] USGS quakes feed restored after", quakesErrStreak, "failed poll(s)");
   }
   quakesErrStreak = 0;
 }

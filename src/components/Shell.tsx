@@ -18,6 +18,7 @@ import type { DeckId } from './decks/DeckLayer';
 import { startWatch, stopWatch } from '../lib/watch/runtime';
 import Constellation from './Constellation';
 import WatchPanel from './WatchPanel';
+import ErrorBoundary from './ErrorBoundary';
 
 // Active turn moods — fleet-offline cannot override these
 const ACTIVE_MOODS: ReadonlySet<OrbMood> = new Set([
@@ -32,6 +33,90 @@ const SPRING = { type: "spring" as const, stiffness: 260, damping: 24 };
 const IGNITION_KEY = "loom.ignited";
 
 type IgnitionPhase = "igniting" | "done";
+
+// ── Segmented top-bar control button ────────────────────────────────────────────
+// A single segment of the deck/watch pill: mono label, selected = accent text +
+// soft accent underline; hover = background step-up. Reduced-motion safe (CSS).
+function SegBtn({
+  testid,
+  label,
+  selected,
+  onClick,
+  badge,
+}: {
+  testid: string;
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+  badge?: string;
+}) {
+  return (
+    <button
+      data-testid={testid}
+      role="tab"
+      aria-selected={selected}
+      onClick={onClick}
+      className={`loom-seg-btn${selected ? " is-selected" : ""}`}
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        height: "100%",
+        padding: "0 11px",
+        fontFamily: "var(--f-mono)",
+        fontSize: 10,
+        letterSpacing: ".1em",
+        lineHeight: 1,
+        color: selected ? "var(--accent)" : "var(--t3)",
+        background: selected ? "rgba(34,211,238,.10)" : "transparent",
+        border: "none",
+        borderRadius: 999,
+        cursor: "pointer",
+      }}
+    >
+      <span>{label}</span>
+      {badge !== undefined && (
+        <span
+          data-testid="watch-badge"
+          style={{
+            minWidth: 15,
+            height: 15,
+            borderRadius: 999,
+            background: "var(--accent, #22d3ee)",
+            color: "#060b18",
+            fontFamily: "var(--f-mono)",
+            fontSize: 9,
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "0 3px",
+            pointerEvents: "none",
+          }}
+        >
+          {badge}
+        </span>
+      )}
+      {selected && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            left: 11,
+            right: 11,
+            bottom: 3,
+            height: 1.5,
+            borderRadius: 999,
+            background: "var(--accent, #22d3ee)",
+            boxShadow: "0 0 6px rgba(34,211,238,.6)",
+          }}
+        />
+      )}
+    </button>
+  );
+}
 
 export default function Shell() {
   const [mood, setMood] = useState<OrbMood>("idle");
@@ -94,7 +179,7 @@ export default function Shell() {
         if (ids.length) window.dispatchEvent(new CustomEvent("organs-changed"));
       })
       .catch((err) => {
-        console.warn("[Shell] installSeeds failed:", err);
+        console.debug("[Shell] installSeeds failed:", err);
       });
   }, []);
 
@@ -354,13 +439,18 @@ export default function Shell() {
       <style>{`
         details[open] .loom-timeline-chevron { transform: rotate(90deg); }
         @keyframes loom-row-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .loom-seg-btn { transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+        .loom-seg-btn:hover:not(.is-selected) { color: var(--t2); background: rgba(255,255,255,.05); }
+        .loom-seg-btn:active { transform: translateY(.5px); }
         @media (prefers-reduced-motion: reduce) {
           .loom-timeline-chevron { transition: none !important; }
+          .loom-seg-btn { transition: none !important; }
+          .loom-seg-btn:active { transform: none !important; }
         }
       `}</style>
 
       {/* Ambient particle field — behind everything, zIndex:1 */}
-      <Field dim={deck === 'globe'} />
+      <Field dim={deck !== 'void'} />
 
       {/* Deck layer — between ambient Field (z1) and orb-band (z10) */}
       <DeckLayer deck={deck} interactMode={interactMode} />
@@ -399,177 +489,120 @@ export default function Shell() {
       <div aria-hidden className="shell-grain" />
 
       {/* ── Zone A: Top bar (fixed height, never scrolls) ── */}
-      <header
-        data-testid="shell-top-bar"
-        style={{
-          flexShrink: 0,
-          // No explicit width: as a flex-column child the header stretches to the
-          // container; width:100% + padding overflows (no global border-box) and
-          // clips the right-edge controls.
-          display: "flex",
-          alignItems: "baseline",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          padding: "20px 24px 16px",
-          position: "relative",
-          zIndex: 10,
-          borderBottom: reducedMotion ? undefined : `1px solid ${moodColor}20`,
-          transition: reducedMotion ? undefined : "border-color 1.2s ease",
-          ...staggerStyle,
-        }}
-      >
-        <div
+      <ErrorBoundary zone="top-bar">
+        <header
+          data-testid="shell-top-bar"
           style={{
+            flexShrink: 0,
+            // No explicit width: as a flex-column child the header stretches to the
+            // container; width:100% + padding overflows (no global border-box) and
+            // clips the right-edge controls.
             display: "flex",
-            alignItems: "baseline",
-            gap: 10,
-            ...(deck === 'globe' ? {
-              background: 'var(--glass)',
-              border: '1px solid var(--glass-border)',
-              borderRadius: 999,
-              padding: '2px 12px',
-              backdropFilter: 'blur(var(--blur))',
-              WebkitBackdropFilter: 'blur(var(--blur))',
-            } : {}),
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 16,
+            padding: "16px 24px",
+            position: "relative",
+            zIndex: 10,
+            borderBottom: reducedMotion ? undefined : `1px solid ${moodColor}20`,
+            transition: reducedMotion ? undefined : "border-color 1.2s ease",
+            ...staggerStyle,
           }}
         >
-          <b style={{ letterSpacing: ".4em", fontSize: 20, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
-          <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)" }}>sovereign console</small>
-        </div>
-
-        {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
-        <div
-          style={{
-            ...(deck === 'globe' ? {
-              background: 'var(--glass)',
-              border: '1px solid var(--glass-border)',
-              borderRadius: 999,
-              padding: '2px 8px',
-              backdropFilter: 'blur(var(--blur))',
-              WebkitBackdropFilter: 'blur(var(--blur))',
-            } : {}),
-          }}
-        >
-          <FleetHUD roles={roles} />
-        </div>
-
-        {/* Deck controls */}
-        {/* Glass pill keeps the controls legible over bright deck content */}
-        <div
-          data-testid="deck-controls"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 6,
-            background: 'var(--glass)',
-            border: '1px solid var(--glass-border)',
-            borderRadius: 999,
-            padding: '2px 8px',
-            backdropFilter: 'blur(var(--blur))',
-            WebkitBackdropFilter: 'blur(var(--blur))',
-          }}
-        >
-          <button
-            data-testid="deck-void-btn"
-            onClick={() => window.dispatchEvent(new CustomEvent('loom-deck', { detail: { deck: 'void' } }))}
+          {/* Wordmark — baseline-aligned wordmark + subtitle */}
+          <div
             style={{
-              fontFamily: 'var(--f-mono)',
-              fontSize: 10,
-              letterSpacing: '.08em',
-              color: deck === 'void' ? 'var(--accent)' : 'var(--t3)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '2px 6px',
+              display: "flex",
+              alignItems: "baseline",
+              gap: 10,
+              flexShrink: 0,
             }}
           >
-            VOID
-          </button>
-          <button
-            data-testid="deck-globe-btn"
-            onClick={() => window.dispatchEvent(new CustomEvent('loom-deck', { detail: { deck: 'globe' } }))}
-            style={{
-              fontFamily: 'var(--f-mono)',
-              fontSize: 10,
-              letterSpacing: '.08em',
-              color: deck === 'globe' ? 'var(--accent)' : 'var(--t3)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '2px 6px',
-            }}
-          >
-            GLOBE
-          </button>
-          {deck === 'globe' && (
-            <button
-              data-testid="deck-interact-btn"
-              onClick={() => setInteractMode(p => !p)}
+            <b style={{ letterSpacing: ".4em", fontSize: 19, lineHeight: 1, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
+            <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: ".04em" }}>sovereign console</small>
+          </div>
+
+          {/* Right cluster — fleet HUD + one segmented deck control, same height, baseline row */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flexShrink: 1 }}>
+            {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
+            <div
               style={{
-                fontFamily: 'var(--f-mono)',
-                fontSize: 10,
-                letterSpacing: '.08em',
-                color: interactMode ? 'var(--accent)' : 'var(--t3)',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '2px 6px',
+                display: "flex",
+                alignItems: "center",
+                height: 30,
+                padding: "0 12px",
+                minWidth: 0,
+                background: "var(--glass)",
+                border: "1px solid var(--glass-border)",
+                borderRadius: 999,
+                backdropFilter: "blur(var(--blur))",
+                WebkitBackdropFilter: "blur(var(--blur))",
               }}
             >
-              {interactMode ? 'INTERACTING' : 'INTERACT'}
-            </button>
-          )}
-          {/* WATCH toggle */}
-          <button
-            data-testid="watch-toggle-btn"
-            onClick={() => {
-              setWatchOpen((p) => !p);
-              setWatchUnseen(0);
-            }}
-            style={{
-              position: 'relative',
-              fontFamily: 'var(--f-mono)',
-              fontSize: 10,
-              letterSpacing: '.08em',
-              color: watchOpen ? 'var(--accent)' : 'var(--t3)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '2px 6px',
-            }}
-          >
-            WATCH
-            {watchUnseen > 0 && !watchOpen && (
-              <span
-                data-testid="watch-badge"
-                style={{
-                  position: 'absolute',
-                  top: -2,
-                  right: -2,
-                  minWidth: 14,
-                  height: 14,
-                  borderRadius: 999,
-                  background: 'var(--accent, #22d3ee)',
-                  color: '#060b18',
-                  fontFamily: 'var(--f-mono)',
-                  fontSize: 8,
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '0 2px',
-                  pointerEvents: 'none',
+              <FleetHUD roles={roles} />
+            </div>
+
+            {/* Segmented deck control — VOID | GLOBE | INTERACT | WATCH */}
+            <div
+              data-testid="deck-controls"
+              role="tablist"
+              style={{
+                display: "flex",
+                alignItems: "stretch",
+                height: 30,
+                flexShrink: 0,
+                background: "var(--glass)",
+                border: "1px solid var(--glass-border)",
+                borderRadius: 999,
+                padding: 3,
+                gap: 2,
+                backdropFilter: "blur(var(--blur))",
+                WebkitBackdropFilter: "blur(var(--blur))",
+              }}
+            >
+              <SegBtn
+                testid="deck-void-btn"
+                label="VOID"
+                selected={deck === "void"}
+                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "void" } }))}
+              />
+              <SegBtn
+                testid="deck-globe-btn"
+                label="GLOBE"
+                selected={deck === "globe"}
+                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "globe" } }))}
+              />
+              <SegBtn
+                testid="deck-terminal-btn"
+                label="TERMINAL"
+                selected={deck === "terminal"}
+                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "terminal" } }))}
+              />
+              {deck === "globe" && (
+                <SegBtn
+                  testid="deck-interact-btn"
+                  label={interactMode ? "INTERACTING" : "INTERACT"}
+                  selected={interactMode}
+                  onClick={() => setInteractMode((p) => !p)}
+                />
+              )}
+              <SegBtn
+                testid="watch-toggle-btn"
+                label="WATCH"
+                selected={watchOpen}
+                onClick={() => {
+                  setWatchOpen((p) => !p);
+                  setWatchUnseen(0);
                 }}
-              >
-                {watchUnseen > 9 ? '9+' : watchUnseen}
-              </span>
-            )}
-          </button>
-        </div>
-      </header>
+                badge={!watchOpen && watchUnseen > 0 ? (watchUnseen > 9 ? "9+" : String(watchUnseen)) : undefined}
+              />
+            </div>
+          </div>
+        </header>
+      </ErrorBoundary>
 
       {/* ── Zone B: Orb band (fixed height, always visible, never scrolls) ── */}
+      <ErrorBoundary zone="orb-band">
       <div
         data-testid="orb-band"
         style={{
@@ -645,8 +678,10 @@ export default function Shell() {
           {voice.state === "idle" && !voice.error && voiceReady && "hold the orb or Space to talk"}
         </div>
       </div>
+      </ErrorBoundary>
 
       {/* ── Zone C: Content region (scrolls internally) ── */}
+      <ErrorBoundary zone="content">
       <div
         data-testid="shell-content-region"
         style={{
@@ -680,14 +715,14 @@ export default function Shell() {
           {/* Companion panel */}
           <PanelTag
             {...(motionProps as object)}
-            data-deck-active={deck === 'globe' ? 'true' : undefined}
+            data-deck-active={deck !== 'void' ? 'true' : undefined}
             style={{
               background: "var(--glass)",
               backdropFilter: "blur(var(--blur))",
               WebkitBackdropFilter: "blur(var(--blur))",
               border: "1px solid var(--glass-border)",
               borderRadius: 14,
-              ...(deck === 'globe' ? {
+              ...(deck !== 'void' ? {
                 maxHeight: '33vh',
                 overflowY: 'auto' as const,
                 background: 'rgba(6,11,24,0.7)',
@@ -707,7 +742,7 @@ export default function Shell() {
           <details
             data-testid="timeline-details"
             className="glass"
-            style={{ padding: "12px 16px", cursor: "pointer", display: deck === 'globe' ? 'none' : undefined }}
+            style={{ padding: "12px 16px", cursor: "pointer", display: deck !== 'void' ? 'none' : undefined }}
           >
             <summary
               style={{
@@ -765,6 +800,7 @@ export default function Shell() {
           </details>
         </div>
       </div>
+      </ErrorBoundary>
 
       {/* ── Shell-level overlay: Threads bezier canvas (same coordinate space as Desktop plane) ── */}
       <Threads />
@@ -773,10 +809,14 @@ export default function Shell() {
       <Desktop />
 
       {/* ── Constellation: living agent ring around the orb (z 8, OUTSIDE orb-band screen-blend) ── */}
-      <Constellation />
+      <ErrorBoundary zone="constellation">
+        <Constellation />
+      </ErrorBoundary>
 
       {/* ── Watch panel: collapsible salience feed (z 900, right side) ── */}
-      <WatchPanel open={watchOpen} onClose={() => { setWatchOpen(false); setWatchUnseen(0); }} />
+      <ErrorBoundary zone="watch-panel">
+        <WatchPanel open={watchOpen} onClose={() => { setWatchOpen(false); setWatchUnseen(0); }} />
+      </ErrorBoundary>
     </div>
   );
 }

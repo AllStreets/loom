@@ -48,18 +48,25 @@ const NODES: NodeDef[] = [
 ];
 
 // Angles in degrees (0=top, clockwise). Distribute 5 nodes.
-// builder: upper-left, companion: top, rewriter: upper-right,
-// auspex: lower-right, quakes: lower-left
-const ANGLES_DEG = [-135, -90, -45, 45, -180];
+// builder: upper-left, companion: lower-left, rewriter: upper-right,
+// auspex: lower-right, quakes: bottom. A vertically-spread ellipse keeps the
+// nodes clear of the orb glow at default size and off the screen corners.
+// px = cx + rx·sin θ ; py = cy − ry·cos θ (θ=0 top, clockwise).
+// The orb sits HIGH on screen, so the constellation fans across the lower
+// hemisphere and sides — never above the orb band. builder/rewriter flank the
+// orb at mid-height, companion/auspex sit lower on each side, quakes anchors
+// the bottom. Symmetric, vertically generous, clear of the orb glow.
+const ANGLES_DEG = [-88, -134, 88, 134, 180];
 
 function degToRad(d: number): number {
   return (d * Math.PI) / 180;
 }
 
-// Ellipse radii relative to orb center (in px — scaled to actual orb rect)
-// rx/ry are fractions of the half-size of the constellation area
-const RX_FRAC = 1.35; // wider than tall
-const RY_FRAC = 0.88;
+// Ellipse radii relative to orb size (baseR ≈ orb width). Wide horizontal reach
+// keeps the flanking nodes off the orb halo; vertical reach is generous but
+// bounded so the bottom node clears the companion panel / screen edge.
+const RX_FRAC = 1.75; // horizontal reach — flanks the orb, stays on-screen
+const RY_FRAC = 1.35; // vertical reach — spreads down, clears the orb glow
 
 // ── Event types ───────────────────────────────────────────────────────────────
 
@@ -81,9 +88,8 @@ function ensureKeyframes() {
       100% { opacity: 1; }
     }
     @keyframes loom-sensor-pulse {
-      0%   { r: 5; opacity: 0.7; }
-      50%  { r: 8; opacity: 0.15; }
-      100% { r: 5; opacity: 0; }
+      0%   { r: 5; stroke-opacity: 0.75; }
+      100% { r: 18; stroke-opacity: 0; }
     }
     .loom-node-active circle.node-glow {
       animation: loom-node-pulse 0.8s ease-out;
@@ -110,20 +116,6 @@ function launchPacket(
   g.setAttribute("aria-hidden", "true");
   g.setAttribute("pointer-events", "none");
 
-  const circle = document.createElementNS(ns, "circle");
-  circle.setAttribute("r", "3.5");
-  circle.setAttribute("fill", color);
-  circle.setAttribute("opacity", "0.9");
-  circle.setAttribute("filter", `url(#loom-const-glow)`);
-
-  const anim = document.createElementNS(ns, "animateMotion");
-  anim.setAttribute("dur", `${durationMs}ms`);
-  anim.setAttribute("fill", "freeze");
-  anim.setAttribute("calcMode", "spline");
-  anim.setAttribute("keySplines", "0.4 0 0.6 1");
-  anim.setAttribute("keyTimes", "0;1");
-
-  const mpath = document.createElementNS(ns, "mpath");
   const pathId = `loom-pkt-path-${++_packetId}`;
 
   // Create a temporary path element for the mpath href
@@ -134,22 +126,60 @@ function launchPacket(
   tmpPath.setAttribute("stroke", "none");
   svgEl.appendChild(tmpPath);
 
-  mpath.setAttribute("href", `#${pathId}`);
-  anim.appendChild(mpath);
-  circle.appendChild(anim);
-  g.appendChild(circle);
+  // A packet is a bright head plus two fading trail dots, each offset in time
+  // along the same motion path — a comet whose tail dissolves. Pure SMIL, no rAF.
+  const trailSpec = [
+    { r: 4.2, opacity: 0.95, begin: 0 },
+    { r: 3.2, opacity: 0.5, begin: durationMs * 0.08 },
+    { r: 2.3, opacity: 0.28, begin: durationMs * 0.16 },
+  ];
+
+  for (const spec of trailSpec) {
+    const circle = document.createElementNS(ns, "circle");
+    circle.setAttribute("r", String(spec.r));
+    circle.setAttribute("fill", color);
+    circle.setAttribute("opacity", "0");
+    circle.setAttribute("filter", `url(#loom-const-glow)`);
+
+    const anim = document.createElementNS(ns, "animateMotion");
+    anim.setAttribute("dur", `${durationMs}ms`);
+    anim.setAttribute("begin", `${spec.begin}ms`);
+    anim.setAttribute("fill", "remove");
+    anim.setAttribute("calcMode", "spline");
+    anim.setAttribute("keySplines", "0.4 0 0.6 1");
+    anim.setAttribute("keyTimes", "0;1");
+
+    const mpath = document.createElementNS(ns, "mpath");
+    mpath.setAttribute("href", `#${pathId}`);
+    anim.appendChild(mpath);
+    circle.appendChild(anim);
+
+    // Fade the head in fast, then out toward arrival (trail dissolves)
+    const fade = document.createElementNS(ns, "animate");
+    fade.setAttribute("attributeName", "opacity");
+    fade.setAttribute("dur", `${durationMs}ms`);
+    fade.setAttribute("begin", `${spec.begin}ms`);
+    fade.setAttribute("fill", "remove");
+    fade.setAttribute("values", `0;${spec.opacity};${spec.opacity};0`);
+    fade.setAttribute("keyTimes", "0;0.12;0.7;1");
+    circle.appendChild(fade);
+
+    g.appendChild(circle);
+  }
+
   svgEl.appendChild(g);
 
-  anim.addEventListener("endEvent", () => {
+  const headAnim = g.querySelector("animateMotion");
+  headAnim?.addEventListener("endEvent", () => {
     g.remove();
     tmpPath.remove();
   }, { once: true });
 
-  // Fallback cleanup
+  // Fallback cleanup (last trail dot begins latest, +buffer)
   setTimeout(() => {
     if (g.parentNode) g.remove();
     if (tmpPath.parentNode) tmpPath.remove();
-  }, durationMs + 200);
+  }, durationMs + durationMs * 0.16 + 250);
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -195,10 +225,21 @@ export default function Constellation() {
       const rx = baseR * RX_FRAC;
       const ry = baseR * RY_FRAC;
 
+      // Keep nodes on-screen: never under the top bar, never off the viewport
+      // sides, never below the fold. Labels sit ~24px under the node, so leave
+      // headroom below too.
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const MARGIN_X = 70;
+      const MARGIN_TOP = 76; // clears the top bar
+      const MARGIN_BOTTOM = 60; // clears the label chip + screen edge
+
       NODES.forEach((node, i) => {
         const rad = degToRad(ANGLES_DEG[i]);
-        const px = cx + rx * Math.sin(rad);
-        const py = cy - ry * Math.cos(rad);
+        let px = cx + rx * Math.sin(rad);
+        let py = cy - ry * Math.cos(rad);
+        px = Math.min(Math.max(px, MARGIN_X), vw - MARGIN_X);
+        py = Math.min(Math.max(py, MARGIN_TOP), vh - MARGIN_BOTTOM);
         nodePositions.current.set(node.id, { x: px, y: py });
       });
 
@@ -251,6 +292,14 @@ export default function Constellation() {
           const wireGlow = svg!.querySelector(`[data-wireglow="${node.id}"]`) as SVGPathElement | null;
           if (wirePath) wirePath.setAttribute("d", pathD);
           if (wireGlow) wireGlow.setAttribute("d", pathD);
+          // Track the wire gradient to the node→orb direction (dim node, bright orb)
+          const grad = svg!.querySelector(`[data-grad="${node.id}"]`) as SVGLinearGradientElement | null;
+          if (grad) {
+            grad.setAttribute("x1", pos.x.toFixed(1));
+            grad.setAttribute("y1", pos.y.toFixed(1));
+            grad.setAttribute("x2", ex.toFixed(1));
+            grad.setAttribute("y2", ey.toFixed(1));
+          }
         }
       });
 
@@ -363,6 +412,22 @@ export default function Constellation() {
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
+        {/* Per-node wire gradients — dim at the node, brighter toward the orb.
+            gradientUnits=userSpaceOnUse with endpoints updated on layout so the
+            gradient tracks the wire's node→orb direction. */}
+        {NODES.map((node) => (
+          <linearGradient
+            key={`grad-${node.id}`}
+            id={`loom-wire-grad-${node.id}`}
+            gradientUnits="userSpaceOnUse"
+            data-grad={node.id}
+            x1="0" y1="0" x2="0" y2="0"
+          >
+            <stop offset="0%" stopColor={node.color} stopOpacity={0.1} />
+            <stop offset="60%" stopColor={node.color} stopOpacity={0.32} />
+            <stop offset="100%" stopColor={node.color} stopOpacity={0.7} />
+          </linearGradient>
+        ))}
       </defs>
 
       {/* Wires — drawn first (behind nodes) */}
@@ -379,15 +444,14 @@ export default function Constellation() {
             filter="url(#loom-const-glow)"
             strokeLinecap="round"
           />
-          {/* Core wire */}
+          {/* Core wire — gradient stroke, brighter toward the orb */}
           <path
             data-wire={node.id}
             data-testid={`wire-${node.id}`}
             d=""
             fill="none"
-            stroke={node.color}
-            strokeWidth={0.8}
-            strokeOpacity={0.15}
+            stroke={`url(#loom-wire-grad-${node.id})`}
+            strokeWidth={1.1}
             strokeLinecap="round"
           />
         </g>
@@ -432,7 +496,7 @@ export default function Constellation() {
             fillOpacity={0.85}
           />
 
-          {/* Sensor pulse ring (animated on salience) */}
+          {/* Sensor pulse ring — expands outward on salience (ring, not blink) */}
           {node.kind === "sensor" && (
             <circle
               className="sensor-ring"
@@ -444,29 +508,38 @@ export default function Constellation() {
             />
           )}
 
-          {/* Glass chip label */}
-          <g transform="translate(0, 22)">
+          {/* Glass-chip label — panel surface treatment, 9px mono .1em */}
+          <g transform="translate(0, 24)">
             <rect
-              x={-27}
+              x={-(node.label.length * 3.6 + 9)}
               y={-8}
-              width={54}
-              height={13}
-              rx={4}
-              fill="rgba(6,11,24,0.72)"
-              stroke={node.color}
-              strokeWidth={0.5}
-              strokeOpacity={0.3}
+              width={node.label.length * 7.2 + 18}
+              height={16}
+              rx={5}
+              fill="rgba(16,24,43,0.85)"
+              stroke="rgba(255,255,255,0.08)"
+              strokeWidth={1}
+            />
+            {/* accent tick — a hairline color cue at the chip's left edge */}
+            <rect
+              x={-(node.label.length * 3.6 + 9) + 4}
+              y={-3.5}
+              width={2}
+              height={7}
+              rx={1}
+              fill={node.color}
+              fillOpacity={0.85}
             />
             <text
               textAnchor="middle"
-              dominantBaseline="middle"
-              y={-1}
+              dominantBaseline="central"
+              x={2}
+              y={0.5}
               style={{
                 fontFamily: "var(--f-mono, monospace)",
-                fontSize: 7,
-                fill: node.color,
-                fillOpacity: 0.85,
-                letterSpacing: "0.06em",
+                fontSize: 9,
+                fill: "var(--t2, #9fb0cc)",
+                letterSpacing: "0.1em",
                 userSelect: "none",
               }}
             >

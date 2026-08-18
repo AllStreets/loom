@@ -105,7 +105,7 @@ export function classifyByRules(
   utterance: string,
   organIds: string[],
   history: HistoryMsg[] = [],
-  currentDeck: "void" | "globe" = "void"
+  currentDeck: "void" | "globe" | "terminal" = "void"
 ): IntentResult | null {
   const normed = normalize(utterance);
   const lower = normed.toLowerCase();
@@ -205,6 +205,7 @@ User: "make it dark mode" (after assistant: "Built water-tracker: ...") -> {"int
 User: "open the budget tool" -> {"intent":"act_on_organ","organId":"budget-tool"}
 User: "what can you do?" -> {"intent":"converse","organId":null}
 User: "show the globe" -> {"intent":"deck_command","organId":null}
+User: "show me the markets" -> {"intent":"deck_command","organId":null}
 User: "show military news" -> {"intent":"deck_command","organId":null}
 User: "brief me" -> {"intent":"briefing","organId":null}
 User: "what matters right now" -> {"intent":"briefing","organId":null}
@@ -235,15 +236,15 @@ function formatHistoryBlock(history: HistoryMsg[]): string {
  * history (optional) — last few turns, used for anaphora resolution and
  * included in the model fallback prompt for context.
  *
- * currentDeck (optional) — "void"|"globe", used by the deck_command rule to
- * decide whether a globe-only command should auto-switch the deck.
+ * currentDeck (optional) — "void"|"globe"|"terminal", used by the deck_command
+ * rule to decide whether a globe-only command should auto-switch the deck.
  */
 export async function classifyIntent(
   utterance: string,
   organIds: string[],
   askModel: (system: string, prompt: string) => Promise<string>,
   history: HistoryMsg[] = [],
-  currentDeck: "void" | "globe" = "void"
+  currentDeck: "void" | "globe" | "terminal" = "void"
 ): Promise<IntentResult> {
   const rulesResult = classifyByRules(utterance, organIds, history, currentDeck);
   if (rulesResult !== null) return rulesResult;

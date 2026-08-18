@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, type OrganFile, type Msg, type ChatOpts, type Brain } from "../lib/core";
+import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, type OrganFile, type Msg, type ChatOpts, type Brain } from "../lib/core";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
@@ -528,6 +528,28 @@ function ReviewCardView({
 }
 
 // ---------------------------------------------------------------------------
+// Error mapping — raw exceptions never reach the UI
+// ---------------------------------------------------------------------------
+
+function isFleetUnreachable(err: unknown): boolean {
+  if (!err) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  // Ollama connection refused / network errors
+  return /connection refused|econnrefused|network|ECONNREFUSED|No connection|fleet.*unavailable|ollama/i.test(msg);
+}
+
+function mapTurnError(err: unknown): string {
+  if (err instanceof ShellUnavailableError) {
+    return err.message; // "This surface needs the desktop shell."
+  }
+  if (isFleetUnreachable(err)) {
+    return "The fleet is unreachable — is Ollama running?";
+  }
+  console.debug("[Companion] unhandled turn error:", err);
+  return "The turn failed — details in the console.";
+}
+
+// ---------------------------------------------------------------------------
 // Companion
 // ---------------------------------------------------------------------------
 
@@ -760,7 +782,7 @@ export default function Companion() {
       },
       // Provide current deck state to the runtime so deck_command rules can
       // auto-switch from void → globe when needed.
-      currentDeck: () => getSetting("cockpit.deck") as "void" | "globe",
+      currentDeck: () => getSetting("cockpit.deck") as "void" | "globe" | "terminal",
       getSalient: (k: number) => getSalient(k),
     };
 
@@ -778,7 +800,7 @@ export default function Companion() {
       setItems((prev) => prev.filter((item) => item.id !== logId));
       appendItem({
         kind: "failure",
-        error: String(err),
+        error: mapTurnError(err),
         utterance: text,
         id: nextId(),
       });
@@ -829,7 +851,7 @@ export default function Companion() {
         appendItem({
           kind: "failure",
           stage: result.stage,
-          error: result.error,
+          error: result.error ?? "The build failed — details in the console.",
           utterance: text,
           id: nextId(),
         });
@@ -859,7 +881,7 @@ export default function Companion() {
         appendItem({
           kind: "failure",
           stage: result.stage,
-          error: result.error,
+          error: result.error ?? "The edit failed — details in the console.",
           utterance: text,
           id: nextId(),
         });
@@ -938,7 +960,7 @@ export default function Companion() {
           const raw = await ttsSpeak(textToSpeak, getSetting("voice.default"));
           await playWav(new Uint8Array(raw));
         } catch (e) {
-          console.warn("[Companion] ttsSpeak/playWav failed:", e);
+          console.debug("[Companion] ttsSpeak/playWav failed:", e);
         } finally {
           dispatchMood("idle");
         }

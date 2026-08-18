@@ -1,4 +1,4 @@
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom";
 
@@ -276,5 +276,35 @@ describe("Shell Task 4 beauty pass", () => {
     // The ambient glow div exists and shell is rendering
     const shell = screen.getByTestId("loom-shell");
     expect(shell).toBeInTheDocument();
+  });
+});
+
+describe("Shell segmented deck control", () => {
+  it("deck controls form one segmented tablist group", async () => {
+    render(<Shell />);
+    const group = screen.getByTestId("deck-controls");
+    expect(group.getAttribute("role")).toBe("tablist");
+    // VOID + GLOBE + WATCH segments live inside the one group
+    expect(within(group).getByTestId("deck-void-btn")).toBeInTheDocument();
+    expect(within(group).getByTestId("deck-globe-btn")).toBeInTheDocument();
+    expect(within(group).getByTestId("watch-toggle-btn")).toBeInTheDocument();
+  });
+
+  it("the default (void) segment is aria-selected", async () => {
+    render(<Shell />);
+    expect(screen.getByTestId("deck-void-btn")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("watch-toggle-btn")).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("toggling WATCH flips its selected state and opens the panel", async () => {
+    render(<Shell />);
+    expect(screen.queryByTestId("watch-panel")).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("watch-toggle-btn"));
+    });
+
+    expect(screen.getByTestId("watch-toggle-btn")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("watch-panel")).toBeInTheDocument();
   });
 });

@@ -35,7 +35,7 @@ export async function compile(
   organIds: string[],
   askModel: (system: string, prompt: string) => Promise<string>,
   history: HistoryMsg[] = [],
-  currentDeck: "void" | "globe" = "void"
+  currentDeck: "void" | "globe" | "terminal" = "void"
 ): Promise<Compiled> {
   // 1. Normalize for classification
   const normalized = normalize(utterance);

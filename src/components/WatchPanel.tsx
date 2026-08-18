@@ -1,15 +1,18 @@
 /**
- * WatchPanel.tsx
+ * WatchPanel.tsx — "THE WATCH"
  *
- * Collapsible right-side glass panel showing the salience feed.
- * Opened/closed by the WATCH button in the top bar.
+ * Floating right-side glass-raised panel showing the salience feed. Redesigned
+ * against LOOM's micro design language: 4px grid, mono-for-data type hierarchy,
+ * accent discipline (cyan = live/selected only), hover-revealed icon actions.
+ *
+ * Opened/closed by the WATCH segment in the top bar.
  *
  * Props:
  *   open: boolean — controlled by Shell's WATCH toggle
  *   onClose: () => void — called when panel requests close
  *
  * Sizing:
- *   - Fixed right, top below header (top: 64px), maxWidth 380
+ *   - Fixed, width 360, inset right/bottom 16, top 72 (breathing room — NOT flush)
  *   - z 900: below dock (1000), above desktop plane (100)
  *   - pointerEvents auto only on the panel element itself
  *
@@ -18,12 +21,13 @@
  *   - Reads getSalient() on mount for initial state
  *   - Engagement: recordEngagement writes to store; open = clipboard copy
  *     (no Tauri opener plugin required — clipboard is safe in WebView)
+ *   - The live dot pulses on fresh salience (reduced-motion → static)
  *
  * No per-frame React state — list updates are coarse (loom-salience fires only
  * when top-10 ordering changes, ~120s interval).
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { ScoredEvent } from "../lib/watch/types";
 import type { WatchlistEntry } from "../lib/watch/store";
 import { getSalient } from "../lib/watch/runtime";
@@ -33,6 +37,71 @@ import {
   removeWatchlistEntry,
   getWatchlist,
 } from "../lib/watch/store";
+import { IconX, IconPlus, IconCopy, IconChevron, IconWatch } from "./chrome/icons";
+
+// ── Style-injection: hover reveals, thin scrollbar, live-dot pulse ──────────────
+
+const STYLE_ID = "loom-watch-panel-style";
+
+function ensureStyles() {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = `
+    .loom-watch-scroll::-webkit-scrollbar { width: 8px; }
+    .loom-watch-scroll::-webkit-scrollbar-track { background: transparent; }
+    .loom-watch-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,.08);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    .loom-watch-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.16); background-clip: padding-box; }
+
+    .loom-watch-row { transition: background var(--dur-fast, .15s) var(--ease-out, ease); }
+    .loom-watch-row:hover { background: rgba(255,255,255,.03); }
+    .loom-watch-row .loom-row-actions { opacity: 0; transition: opacity var(--dur-fast, .15s) var(--ease-out, ease); }
+    .loom-watch-row:hover .loom-row-actions,
+    .loom-watch-row:focus-within .loom-row-actions { opacity: 1; }
+
+    .loom-icon-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; border-radius: 6px;
+      background: transparent; border: 1px solid transparent;
+      color: var(--t3, #5f6f8c); cursor: pointer; padding: 0;
+      transition: background var(--dur-fast, .15s) var(--ease-out, ease),
+                  color var(--dur-fast, .15s) var(--ease-out, ease),
+                  border-color var(--dur-fast, .15s) var(--ease-out, ease);
+    }
+    .loom-icon-btn:hover { background: rgba(255,255,255,.06); color: var(--t1, #e8edf7); border-color: var(--glass-border, rgba(255,255,255,.08)); }
+    .loom-icon-btn.is-accent:hover { color: var(--accent, #22d3ee); }
+    .loom-icon-btn.is-go:hover { color: var(--go, #4ade80); }
+
+    .loom-watch-chevron { transition: transform var(--dur-fast, .15s) var(--ease-out, ease); }
+    .loom-watch-chevron.is-open { transform: rotate(90deg); }
+
+    .loom-watch-livedot { animation: loom-watch-pulse 2.4s var(--ease-out, ease) infinite; }
+    @keyframes loom-watch-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34,211,238,.5); opacity: 1; }
+      50% { box-shadow: 0 0 0 4px rgba(34,211,238,0); opacity: .55; }
+    }
+    .loom-watch-livedot.is-fresh { animation-duration: .9s; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .loom-watch-row, .loom-watch-row .loom-row-actions,
+      .loom-icon-btn, .loom-watch-chevron { transition: none !important; }
+      .loom-watch-livedot { animation: none !important; }
+      .loom-watch-row .loom-row-actions { opacity: 1 !important; }
+      .loom-score-bar-fill { transition: none !important; }
+    }
+    /* Touch-first devices never hover — actions must be permanently visible */
+    @media (pointer: coarse) {
+      .loom-watch-row .loom-row-actions { opacity: 1 !important; }
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 // ── Time formatting ────────────────────────────────────────────────────────────
 
@@ -44,6 +113,20 @@ function relAge(iso: string): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h`;
   return `${Math.floor(hrs / 24)}d`;
+}
+
+// ── Category → tint (accent discipline: neutral hues, no yellow) ────────────────
+
+function categoryTint(category: string): string {
+  const c = category.toLowerCase();
+  if (c.startsWith("seismic")) return "#f87171"; // danger family — quakes
+  if (c === "finance") return "#4ade80";
+  if (c === "military" || c === "cyber") return "#f97316";
+  if (c === "space" || c === "launch") return "#a78bfa";
+  if (c === "climate" || c === "fire" || c === "flood" || c === "drought")
+    return "#22d3ee";
+  if (c === "tech" || c === "science" || c === "physics") return "#7dd3fc";
+  return "#9fb0cc"; // t2 neutral
 }
 
 // ── Row component ─────────────────────────────────────────────────────────────
@@ -76,150 +159,220 @@ function WatchRow({ item, onDismiss, onWatchPlus }: RowProps) {
   }
 
   const scoreBarPct = Math.round(item.score * 100);
+  const tint = categoryTint(item.category);
+  const hasReasons = item.reasons.length > 0;
 
   return (
     <div
       data-testid="watch-row"
       data-item-id={item.id}
+      className="loom-watch-row"
       style={{
-        padding: "10px 12px",
-        borderBottom: "1px solid rgba(255,255,255,0.04)",
+        padding: "12px 16px",
+        borderBottom: "1px solid var(--line, rgba(255,255,255,.06))",
         display: "flex",
         flexDirection: "column",
-        gap: 6,
+        gap: 8,
       }}
     >
-      {/* Title row */}
+      {/* Title + actions */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, minWidth: 0 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            title={item.title}
-            style={{
-              fontFamily: "var(--f-mono, monospace)",
-              fontSize: 11,
-              color: "var(--t1, #e2e8f0)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              lineHeight: 1.4,
-            }}
-          >
-            {item.title}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
-            <span
-              style={{
-                fontFamily: "var(--f-mono, monospace)",
-                fontSize: 9,
-                color: "var(--t3, #64748b)",
-                textTransform: "uppercase",
-                letterSpacing: "0.06em",
-              }}
-            >
-              {item.source}
-            </span>
-            <span
-              style={{
-                fontFamily: "var(--f-mono, monospace)",
-                fontSize: 9,
-                color: "var(--t3, #64748b)",
-              }}
-            >
-              {relAge(item.publishedAt)}
-            </span>
-          </div>
+        <div
+          title={item.title}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontFamily: "var(--f-mono, monospace)",
+            fontSize: 13,
+            lineHeight: 1.38,
+            color: "var(--t1, #e8edf7)",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {item.title}
         </div>
 
-        {/* Actions */}
-        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+        <div
+          className="loom-row-actions"
+          style={{ display: "flex", gap: 2, flexShrink: 0, marginTop: -2 }}
+        >
           {item.url && (
             <button
               data-testid="watch-open-btn"
               onClick={handleOpen}
-              title="Copy URL"
-              style={actionBtnStyle("#22d3ee")}
+              title="Copy link"
+              aria-label="Copy link"
+              className="loom-icon-btn is-accent"
             >
-              URL
+              <IconCopy size={13} strokeWidth={1.75} />
             </button>
           )}
           <button
             data-testid="watch-plus-btn"
             onClick={handleWatchPlus}
             title="Add to watchlist"
-            style={actionBtnStyle("#4ade80")}
+            aria-label="Add to watchlist"
+            className="loom-icon-btn is-go"
           >
-            +W
+            <IconWatch size={13} strokeWidth={1.6} />
           </button>
           <button
             data-testid="watch-dismiss-btn"
             onClick={handleDismiss}
             title="Dismiss"
-            style={actionBtnStyle("#64748b")}
+            aria-label="Dismiss"
+            className="loom-icon-btn"
           >
-            X
+            <IconX size={13} strokeWidth={1.75} />
           </button>
         </div>
       </div>
 
-      {/* Score bar */}
-      <div
-        data-testid="score-bar"
-        style={{
-          height: 2,
-          background: "rgba(255,255,255,0.06)",
-          borderRadius: 1,
-          overflow: "hidden",
-        }}
-      >
-        <div
+      {/* Meta row: source badge · age · category tint */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span
           style={{
-            height: "100%",
-            width: `${scoreBarPct}%`,
-            background: "var(--accent, #22d3ee)",
-            borderRadius: 1,
-            transition: "width 0.4s ease",
+            fontFamily: "var(--f-mono, monospace)",
+            fontSize: 9,
+            letterSpacing: ".08em",
+            textTransform: "uppercase",
+            color: "var(--t2, #9fb0cc)",
+            background: "rgba(255,255,255,.05)",
+            border: "1px solid var(--glass-border, rgba(255,255,255,.08))",
+            borderRadius: 4,
+            padding: "1px 6px",
+            flexShrink: 0,
           }}
-        />
+        >
+          {item.source}
+        </span>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            fontFamily: "var(--f-mono, monospace)",
+            fontSize: 10,
+            letterSpacing: ".04em",
+            color: "var(--t3, #5f6f8c)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+          title={item.category}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 5,
+              height: 5,
+              borderRadius: "50%",
+              background: tint,
+              boxShadow: `0 0 5px ${tint}80`,
+              flexShrink: 0,
+            }}
+          />
+          {relAge(item.publishedAt)}
+        </span>
+      </div>
+
+      {/* Score bar + tabular pct */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div
+          data-testid="score-bar"
+          style={{
+            flex: 1,
+            height: 2,
+            background: "rgba(255,255,255,.06)",
+            borderRadius: 999,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            className="loom-score-bar-fill"
+            style={{
+              height: "100%",
+              width: `${scoreBarPct}%`,
+              background: "var(--accent, #22d3ee)",
+              borderRadius: 999,
+              transition: "width var(--dur-slow, .4s) var(--ease-out, ease)",
+            }}
+          />
+        </div>
+        <span
+          style={{
+            fontFamily: "var(--f-mono, monospace)",
+            fontSize: 10,
+            color: "var(--t2, #9fb0cc)",
+            fontVariantNumeric: "tabular-nums",
+            width: 34,
+            textAlign: "right",
+            flexShrink: 0,
+          }}
+        >
+          {scoreBarPct}%
+        </span>
       </div>
 
       {/* Expandable reasons */}
-      {item.reasons.length > 0 && (
+      {hasReasons && (
         <div>
           <button
             data-testid="watch-expand-btn"
             onClick={() => setExpanded((p) => !p)}
+            aria-expanded={expanded}
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
               background: "none",
               border: "none",
               cursor: "pointer",
               fontFamily: "var(--f-mono, monospace)",
-              fontSize: 9,
-              color: "var(--t3, #64748b)",
+              fontSize: 10,
+              color: "var(--t3, #5f6f8c)",
               padding: 0,
-              letterSpacing: "0.06em",
+              letterSpacing: ".06em",
+              textTransform: "uppercase",
             }}
           >
-            {expanded ? "- reasons" : "+ reasons"}
+            <IconChevron
+              size={11}
+              strokeWidth={2}
+              className={`loom-watch-chevron${expanded ? " is-open" : ""}`}
+            />
+            {item.reasons.length} {item.reasons.length === 1 ? "reason" : "reasons"}
           </button>
           {expanded && (
             <ul
               data-testid="watch-reasons-list"
-              style={{ margin: "4px 0 0", padding: "0 0 0 12px", listStyle: "disc" }}
+              style={{
+                margin: "6px 0 0",
+                padding: 0,
+                listStyle: "none",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
             >
               {item.reasons.map((r, i) => (
                 <li
                   key={i}
                   style={{
+                    display: "flex",
+                    gap: 6,
                     fontFamily: "var(--f-mono, monospace)",
-                    fontSize: 9,
-                    color: "var(--t3, #64748b)",
-                    lineHeight: 1.6,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    fontSize: 10,
+                    color: "var(--t3, #5f6f8c)",
+                    lineHeight: 1.5,
                   }}
                 >
-                  {r}
+                  <span aria-hidden style={{ color: "var(--accent, #22d3ee)", opacity: 0.55 }}>
+                    ·
+                  </span>
+                  <span style={{ minWidth: 0 }}>{r}</span>
                 </li>
               ))}
             </ul>
@@ -230,24 +383,16 @@ function WatchRow({ item, onDismiss, onWatchPlus }: RowProps) {
   );
 }
 
-function actionBtnStyle(color: string): React.CSSProperties {
-  return {
-    fontFamily: "var(--f-mono, monospace)",
-    fontSize: 8,
-    letterSpacing: "0.06em",
-    color,
-    background: `${color}14`,
-    border: `1px solid ${color}30`,
-    borderRadius: 4,
-    cursor: "pointer",
-    padding: "2px 5px",
-    lineHeight: 1.4,
-  };
-}
-
 // ── Watchlist chips ────────────────────────────────────────────────────────────
 
 type Kind = WatchlistEntry["kind"];
+
+const KIND_GLYPH: Record<Kind, string> = {
+  topic: "#",
+  place: "@",
+  entity: "&",
+  source: "/",
+};
 
 function WatchlistChips() {
   const [entries, setEntries] = useState<WatchlistEntry[]>(() => {
@@ -277,28 +422,42 @@ function WatchlistChips() {
     <div
       data-testid="watchlist-chips"
       style={{
-        padding: "8px 12px",
-        borderBottom: "1px solid rgba(255,255,255,0.06)",
+        padding: "12px 16px",
+        borderBottom: "1px solid var(--line, rgba(255,255,255,.06))",
         display: "flex",
         flexDirection: "column",
-        gap: 6,
+        gap: 8,
       }}
     >
+      <span
+        style={{
+          fontFamily: "var(--f-mono, monospace)",
+          fontSize: 10,
+          letterSpacing: ".12em",
+          textTransform: "uppercase",
+          color: "var(--t3, #5f6f8c)",
+        }}
+      >
+        Watchlist
+      </span>
+
       {/* Add row */}
-      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
         <select
           data-testid="watchlist-kind-select"
           value={kind}
           onChange={(e) => setKind(e.target.value as Kind)}
+          aria-label="Watchlist entry kind"
           style={{
             fontFamily: "var(--f-mono, monospace)",
-            fontSize: 9,
-            color: "var(--t3, #64748b)",
-            background: "rgba(6,11,24,0.8)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 4,
-            padding: "2px 4px",
+            fontSize: 10,
+            color: "var(--t2, #9fb0cc)",
+            background: "rgba(6,11,24,.6)",
+            border: "1px solid var(--glass-border, rgba(255,255,255,.08))",
+            borderRadius: 6,
+            padding: "0 4px",
             cursor: "pointer",
+            outline: "none",
           }}
         >
           <option value="topic">topic</option>
@@ -312,72 +471,69 @@ function WatchlistChips() {
           value={inputVal}
           onChange={(e) => setInputVal(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="add to watch..."
+          placeholder="add to watch…"
           style={{
             flex: 1,
             minWidth: 0,
             fontFamily: "var(--f-mono, monospace)",
-            fontSize: 9,
-            color: "var(--t1, #e2e8f0)",
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            borderRadius: 4,
-            padding: "3px 6px",
+            fontSize: 11,
+            color: "var(--t1, #e8edf7)",
+            background: "rgba(255,255,255,.04)",
+            border: "1px solid var(--glass-border, rgba(255,255,255,.08))",
+            borderRadius: 6,
+            padding: "5px 8px",
             outline: "none",
           }}
         />
         <button
           data-testid="watchlist-add-btn"
           onClick={handleAdd}
-          style={{
-            fontFamily: "var(--f-mono, monospace)",
-            fontSize: 9,
-            color: "var(--accent, #22d3ee)",
-            background: "rgba(34,211,238,0.08)",
-            border: "1px solid rgba(34,211,238,0.2)",
-            borderRadius: 4,
-            cursor: "pointer",
-            padding: "3px 6px",
-          }}
+          aria-label="Add watchlist entry"
+          className="loom-icon-btn is-accent"
+          style={{ width: 28, flexShrink: 0 }}
         >
-          +
+          <IconPlus size={14} strokeWidth={2} />
         </button>
       </div>
 
       {/* Chips */}
       {entries.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {entries.map((entry) => (
             <div
               key={`${entry.kind}:${entry.value}`}
               data-testid="watchlist-chip"
+              className="loom-chip"
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 3,
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.1)",
+                gap: 5,
+                background: "rgba(255,255,255,.04)",
+                border: "1px solid var(--glass-border, rgba(255,255,255,.08))",
                 borderRadius: 999,
-                padding: "2px 7px",
-                maxWidth: 140,
+                padding: "3px 6px 3px 9px",
+                maxWidth: 150,
               }}
             >
               <span
+                aria-hidden
                 style={{
                   fontFamily: "var(--f-mono, monospace)",
-                  fontSize: 8,
-                  color: "var(--t3, #64748b)",
+                  fontSize: 10,
+                  color: "var(--accent, #22d3ee)",
+                  opacity: 0.7,
                   flexShrink: 0,
                 }}
+                title={entry.kind}
               >
-                {entry.kind[0]}:
+                {KIND_GLYPH[entry.kind]}
               </span>
               <span
-                title={entry.value}
+                title={`${entry.kind}: ${entry.value}`}
                 style={{
                   fontFamily: "var(--f-mono, monospace)",
-                  fontSize: 8,
-                  color: "var(--t2, #94a3b8)",
+                  fontSize: 10,
+                  color: "var(--t2, #9fb0cc)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
@@ -389,18 +545,12 @@ function WatchlistChips() {
               <button
                 data-testid="watchlist-chip-remove"
                 onClick={() => handleRemove(entry)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: "var(--t3, #64748b)",
-                  fontSize: 9,
-                  lineHeight: 1,
-                  padding: 0,
-                  flexShrink: 0,
-                }}
+                aria-label={`Remove ${entry.value}`}
+                title="Remove"
+                className="loom-icon-btn"
+                style={{ width: 16, height: 16, flexShrink: 0 }}
               >
-                x
+                <IconX size={10} strokeWidth={2} />
               </button>
             </div>
           ))}
@@ -422,6 +572,12 @@ export default function WatchPanel({ open, onClose }: Props) {
     try { return getSalient(20); } catch { return []; }
   });
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [fresh, setFresh] = useState(false);
+  const freshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    ensureStyles();
+  }, []);
 
   // Subscribe to salience events
   useEffect(() => {
@@ -429,9 +585,16 @@ export default function WatchPanel({ open, onClose }: Props) {
       const detail = (ev as CustomEvent<{ items: ScoredEvent[] }>).detail;
       if (!detail?.items) return;
       setItems(detail.items.slice(0, 20));
+      // Flash the live dot on fresh salience
+      setFresh(true);
+      if (freshTimer.current) clearTimeout(freshTimer.current);
+      freshTimer.current = setTimeout(() => setFresh(false), 2400);
     }
     window.addEventListener("loom-salience", onSalience);
-    return () => window.removeEventListener("loom-salience", onSalience);
+    return () => {
+      window.removeEventListener("loom-salience", onSalience);
+      if (freshTimer.current) clearTimeout(freshTimer.current);
+    };
   }, []);
 
   const handleDismiss = useCallback((id: string) => {
@@ -458,25 +621,23 @@ export default function WatchPanel({ open, onClose }: Props) {
       data-testid="watch-panel"
       style={{
         position: "fixed",
-        top: 64,
-        right: 0,
-        width: 340,
-        maxWidth: "90vw",
-        maxHeight: "calc(100vh - 80px)",
+        top: 72,
+        right: 16,
+        bottom: 16,
+        width: 360,
+        maxWidth: "calc(100vw - 32px)",
         display: "flex",
         flexDirection: "column",
         // z 900: below dock (1000), above desktop plane (100)
         zIndex: 900,
-        background: "rgba(6,11,24,0.92)",
-        backdropFilter: "blur(18px)",
-        WebkitBackdropFilter: "blur(18px)",
-        border: "1px solid rgba(255,255,255,0.07)",
-        borderRight: "none",
-        borderRadius: "12px 0 0 12px",
-        boxShadow: "-8px 0 32px rgba(0,0,0,0.4)",
+        background: "var(--glass-raised, rgba(16,24,43,.85))",
+        backdropFilter: "blur(var(--blur, 18px))",
+        WebkitBackdropFilter: "blur(var(--blur, 18px))",
+        border: "1px solid var(--glass-border, rgba(255,255,255,.08))",
+        borderRadius: 10,
+        boxShadow: "var(--shadow-2, 0 8px 32px rgba(0,0,0,.4))",
         overflow: "hidden",
         pointerEvents: "auto",
-        opacity: 0.97,
       }}
     >
       {/* Panel header */}
@@ -485,36 +646,43 @@ export default function WatchPanel({ open, onClose }: Props) {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "10px 12px 8px",
-          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          padding: "14px 16px",
+          borderBottom: "1px solid var(--line, rgba(255,255,255,.06))",
           flexShrink: 0,
         }}
       >
-        <span
-          style={{
-            fontFamily: "var(--f-mono, monospace)",
-            fontSize: 10,
-            letterSpacing: "0.1em",
-            color: "var(--accent, #22d3ee)",
-            textTransform: "uppercase",
-          }}
-        >
-          Watch Feed
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+          <span
+            aria-hidden
+            className={`loom-watch-livedot${fresh ? " is-fresh" : ""}`}
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: "var(--accent, #22d3ee)",
+              flexShrink: 0,
+            }}
+          />
+          <span
+            style={{
+              fontFamily: "var(--f-mono, monospace)",
+              fontSize: 11,
+              letterSpacing: ".12em",
+              color: "var(--t2, #9fb0cc)",
+              textTransform: "uppercase",
+            }}
+          >
+            The Watch
+          </span>
+        </div>
         <button
           data-testid="watch-panel-close"
           onClick={onClose}
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: "var(--t3, #64748b)",
-            fontFamily: "var(--f-mono, monospace)",
-            fontSize: 11,
-            padding: "2px 4px",
-          }}
+          title="Close"
+          aria-label="Close the watch"
+          className="loom-icon-btn"
         >
-          X
+          <IconX size={14} strokeWidth={1.75} />
         </button>
       </div>
 
@@ -524,26 +692,50 @@ export default function WatchPanel({ open, onClose }: Props) {
       {/* Feed list */}
       <div
         data-testid="watch-feed"
+        className="loom-watch-scroll"
         style={{
           flex: 1,
           overflowY: "auto",
           scrollbarWidth: "thin",
-          scrollbarColor: "rgba(255,255,255,0.08) transparent",
+          scrollbarColor: "rgba(255,255,255,.08) transparent",
         }}
       >
         {visibleItems.length === 0 ? (
           <div
             data-testid="watch-empty-state"
             style={{
-              padding: "32px 16px",
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              padding: "40px 24px",
               textAlign: "center",
-              fontFamily: "var(--f-mono, monospace)",
-              fontSize: 11,
-              color: "var(--t3, #64748b)",
-              letterSpacing: "0.06em",
             }}
           >
-            the watch is quiet
+            <span
+              style={{
+                fontFamily: "var(--f-mono, monospace)",
+                fontSize: 11,
+                letterSpacing: ".14em",
+                textTransform: "uppercase",
+                color: "var(--t2, #9fb0cc)",
+              }}
+            >
+              the watch is quiet
+            </span>
+            <span
+              style={{
+                fontFamily: "var(--f-mono, monospace)",
+                fontSize: 10,
+                lineHeight: 1.55,
+                color: "var(--t3, #5f6f8c)",
+                maxWidth: 220,
+              }}
+            >
+              The sensors are listening. Salient world events will surface here as they break.
+            </span>
           </div>
         ) : (
           visibleItems.map((item) => (

@@ -1,6 +1,33 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getSetting } from "./voice/settings";
 
+// ── Shell availability ─────────────────────────────────────────────────────────
+
+export class ShellUnavailableError extends Error {
+  constructor() {
+    super("This surface needs the desktop shell.");
+    this.name = "ShellUnavailableError";
+  }
+}
+
+function isTauriAvailable(): boolean {
+  return typeof window !== "undefined" &&
+    // @tauri-apps/api v2 uses __TAURI_INTERNALS__; v1 used __TAURI__
+    (
+      "__TAURI_INTERNALS__" in window ||
+      "__TAURI__" in window
+    );
+}
+
+async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauriAvailable()) {
+    return Promise.reject(new ShellUnavailableError());
+  }
+  // Pass args only when provided — avoids changing the call signature for
+  // no-arg commands (which tests assert via toHaveBeenCalledWith(cmd) only).
+  return args !== undefined ? invoke<T>(cmd, args) : invoke<T>(cmd);
+}
+
 // ── Cloud builder types ────────────────────────────────────────────────────────
 
 export type Brain = "local" | "cloud";
@@ -46,53 +73,53 @@ export function modelOverrides(): ModelOverrides {
 }
 
 export const fleetStatus = () =>
-  invoke<RoleStatus[]>("fleet_status", { overrides: modelOverrides() });
+  safeInvoke<RoleStatus[]>("fleet_status", { overrides: modelOverrides() });
 
 export const fleetChat = (role: string, messages: Msg[], opts?: ChatOpts) =>
-  invoke<string>("fleet_chat", {
+  safeInvoke<string>("fleet_chat", {
     role, messages,
     opts: opts ? { num_ctx: opts.numCtx ?? null, temperature: opts.temperature ?? null } : null,
     overrides: modelOverrides(),
   });
 
-export const timelineInit = () => invoke<void>("timeline_init");
-export const timelineCommit = (message: string) => invoke<string>("timeline_commit", { message });
-export const timelineLog = (limit = 20) => invoke<Commit[]>("timeline_log", { limit });
-export const timelineRollback = (sha: string) => invoke<void>("timeline_rollback", { sha });
+export const timelineInit = () => safeInvoke<void>("timeline_init");
+export const timelineCommit = (message: string) => safeInvoke<string>("timeline_commit", { message });
+export const timelineLog = (limit = 20) => safeInvoke<Commit[]>("timeline_log", { limit });
+export const timelineRollback = (sha: string) => safeInvoke<void>("timeline_rollback", { sha });
 
 export type OrganFile = { name: string; content: string };
 export type OrganEntry = { id: string; manifest: string; granted: string | null };
 
 export const organWrite = (id: string, files: OrganFile[], message: string) =>
-  invoke<string>("organ_write", { id, files, message });
-export const organList = () => invoke<OrganEntry[]>("organ_list");
-export const organRead = (id: string, name: string) => invoke<string>("organ_read", { id, name });
+  safeInvoke<string>("organ_write", { id, files, message });
+export const organList = () => safeInvoke<OrganEntry[]>("organ_list");
+export const organRead = (id: string, name: string) => safeInvoke<string>("organ_read", { id, name });
 export const organGrant = (id: string, grantedJson: string) =>
-  invoke<string>("organ_grant", { id, grantedJson });
-export const organDelete = (id: string) => invoke<string>("organ_delete", { id });
+  safeInvoke<string>("organ_grant", { id, grantedJson });
+export const organDelete = (id: string) => safeInvoke<string>("organ_delete", { id });
 
 // ── Voice wrappers ─────────────────────────────────────────────────────────────
 
-export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
-export const voiceSetup = () => invoke<void>("voice_setup");
+export const voiceStatus = () => safeInvoke<VoiceStatus>("voice_status");
+export const voiceSetup = () => safeInvoke<void>("voice_setup");
 export const sttTranscribe = (samples: number[]) =>
-  invoke<string>("stt_transcribe", { samples });
+  safeInvoke<string>("stt_transcribe", { samples });
 export const ttsSpeak = (text: string, voiceId: string) =>
-  invoke<number[]>("tts_speak", { text, voiceId });
+  safeInvoke<number[]>("tts_speak", { text, voiceId });
 
 // ── Cloud builder wrappers ─────────────────────────────────────────────────────
 
 export const cloudChat = (system: string, messages: Msg[], maxTokens?: number) =>
-  invoke<string>("cloud_chat", { system, messages, maxTokens: maxTokens ?? null });
+  safeInvoke<string>("cloud_chat", { system, messages, maxTokens: maxTokens ?? null });
 
 export const cloudKeySet = (key: string) =>
-  invoke<void>("cloud_key_set", { key });
+  safeInvoke<void>("cloud_key_set", { key });
 
 export const cloudKeyPresent = () =>
-  invoke<boolean>("cloud_key_present");
+  safeInvoke<boolean>("cloud_key_present");
 
 export const cloudKeyClear = () =>
-  invoke<void>("cloud_key_clear");
+  safeInvoke<void>("cloud_key_clear");
 
 // ── builderChat — the single cloud-override seam ────────────────────────────────
 //

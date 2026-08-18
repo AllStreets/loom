@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear, ShellUnavailableError } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -178,5 +178,29 @@ describe("voice wrappers", () => {
       voiceId: "en_US-lessac-medium",
     });
     expect(bytes).toEqual([1, 2, 3]);
+  });
+});
+
+// ── ShellUnavailableError / safeInvoke browser-mode rejection ─────────────────
+
+describe("ShellUnavailableError: browser-mode rejection", () => {
+  it("fleetStatus rejects with ShellUnavailableError when Tauri is absent", async () => {
+    // Simulate browser environment: remove Tauri globals
+    const origInternals = (window as Record<string, unknown>).__TAURI_INTERNALS__;
+    const origTauri = (window as Record<string, unknown>).__TAURI__;
+    delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+    delete (window as Record<string, unknown>).__TAURI__;
+    try {
+      await expect(fleetStatus()).rejects.toThrow("This surface needs the desktop shell.");
+    } finally {
+      if (origInternals !== undefined) (window as Record<string, unknown>).__TAURI_INTERNALS__ = origInternals;
+      if (origTauri !== undefined) (window as Record<string, unknown>).__TAURI__ = origTauri;
+    }
+  });
+
+  it("ShellUnavailableError message matches the LOOM-voice copy exactly", () => {
+    const e = new ShellUnavailableError();
+    expect(e.message).toBe("This surface needs the desktop shell.");
+    expect(e.name).toBe("ShellUnavailableError");
   });
 });

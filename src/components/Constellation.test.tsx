@@ -65,6 +65,14 @@ describe("Constellation — node set", () => {
     }
   });
 
+  it("core wires use a per-node gradient stroke (brighter toward the orb)", () => {
+    render(<Constellation />);
+    for (const id of NODE_IDS) {
+      const wire = screen.getByTestId(`wire-${id}`);
+      expect(wire.getAttribute("stroke")).toBe(`url(#loom-wire-grad-${id})`);
+    }
+  });
+
   it("role nodes have data-node-kind='role'", () => {
     render(<Constellation />);
     const roleIds = ["builder", "companion", "rewriter"];

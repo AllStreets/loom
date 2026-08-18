@@ -274,3 +274,56 @@ describe("classifyDeckCommand — non-deck phrases", () => {
     expect(classifyDeckCommand("add a delete button to water-tracker", "void")).toBeNull();
   });
 });
+
+describe("classifyDeckCommand — terminal deck", () => {
+  it("'show the terminal' → deckSwitch:terminal", () => {
+    const r = classifyDeckCommand("show the terminal", "void");
+    expect(r!.deckSwitch).toBe("terminal");
+    expect(r!.bridgeCmds).toEqual([]);
+    expect(r!.confirmation).toMatch(/tape|live/i);
+  });
+
+  it("'show markets' → deckSwitch:terminal", () => {
+    const r = classifyDeckCommand("show markets", "void");
+    expect(r!.deckSwitch).toBe("terminal");
+  });
+
+  it("'show me the markets' → deckSwitch:terminal", () => {
+    const r = classifyDeckCommand("show me the markets", "void");
+    expect(r!.deckSwitch).toBe("terminal");
+  });
+
+  it("'show the tape' → deckSwitch:terminal", () => {
+    const r = classifyDeckCommand("show the tape", "void");
+    expect(r!.deckSwitch).toBe("terminal");
+  });
+
+  it("'hide the terminal' → deckSwitch:void", () => {
+    const r = classifyDeckCommand("hide the terminal", "terminal");
+    expect(r!.deckSwitch).toBe("void");
+  });
+
+  it("'close markets' → deckSwitch:void", () => {
+    const r = classifyDeckCommand("close markets", "terminal");
+    expect(r!.deckSwitch).toBe("void");
+  });
+
+  // Regression: globe/void rules untouched by the new terminal patterns.
+  it("REGRESSION 'show the globe' still → globe (not terminal)", () => {
+    expect(classifyDeckCommand("show the globe", "void")!.deckSwitch).toBe("globe");
+  });
+
+  it("REGRESSION 'show the world' still → globe", () => {
+    expect(classifyDeckCommand("show the world", "void")!.deckSwitch).toBe("globe");
+  });
+
+  it("REGRESSION 'show finance' still → set_cat finance (globe), not terminal", () => {
+    const r = classifyDeckCommand("show finance", "globe");
+    expect(r!.deckSwitch).toBeUndefined();
+    expect(r!.bridgeCmds).toEqual([{ type: "set_cat", cat: "finance" }]);
+  });
+
+  it("REGRESSION 'back to the void' still → void", () => {
+    expect(classifyDeckCommand("back to the void", "terminal")!.deckSwitch).toBe("void");
+  });
+});

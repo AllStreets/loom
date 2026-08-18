@@ -54,7 +54,9 @@ export default function FleetHUD({ roles }: Props) {
           display: "flex",
           alignItems: "center",
           fontFamily: "var(--f-mono)",
-          fontSize: 11,
+          fontSize: 10,
+          letterSpacing: ".08em",
+          textTransform: "uppercase",
           color: "var(--t3)",
         }}
       >
@@ -73,7 +75,7 @@ export default function FleetHUD({ roles }: Props) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 16,
+        gap: 14,
       }}
     >
       {ROLE_ORDER.map((role) => {
@@ -150,7 +152,9 @@ export default function FleetHUD({ roles }: Props) {
             <span
               style={{
                 fontFamily: "var(--f-mono)",
-                fontSize: 11,
+                fontSize: 10,
+                letterSpacing: ".06em",
+                textTransform: "uppercase",
                 color: isActive ? "var(--t1)" : "var(--t3)",
                 flexShrink: 0,
               }}
@@ -163,9 +167,11 @@ export default function FleetHUD({ roles }: Props) {
               title={model}
               style={{
                 fontFamily: "var(--f-mono)",
-                fontSize: 11,
+                fontSize: 10,
+                letterSpacing: ".02em",
                 color: color,
-                maxWidth: 140,
+                opacity: isActive ? 1 : 0.85,
+                maxWidth: 120,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
@@ -180,9 +186,10 @@ export default function FleetHUD({ roles }: Props) {
                 data-testid={`fleet-phase-${role}`}
                 style={{
                   fontFamily: "var(--f-mono)",
-                  fontSize: 11,
+                  fontSize: 10,
+                  letterSpacing: ".04em",
                   color: "var(--accent)",
-                  maxWidth: 120,
+                  maxWidth: 110,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",

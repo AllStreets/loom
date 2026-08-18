@@ -22,7 +22,7 @@ export type BridgeCmd =
 
 export type DeckCommandResult = {
   /** deck switch that must fire BEFORE bridge cmds (only set when needed) */
-  deckSwitch?: "globe" | "void";
+  deckSwitch?: "globe" | "void" | "terminal";
   /** bridge commands to post into the AUSPEX iframe (may be empty) */
   bridgeCmds: BridgeCmd[];
   /** short confirmation line for the companion to speak ("Globe up.", etc.) */
@@ -34,6 +34,17 @@ export type DeckCommandResult = {
 // Deck show: "show the globe", "open the world", "show map", etc.
 const DECK_SHOW_RE =
   /\b(show|open)\b.{0,20}?\b(globe|world|map)\b/i;
+
+// Terminal show: "show the terminal", "show the tape", "show (the) markets", etc.
+// NOTE: category-adjective phrases like "show financial markets" must NOT reach this
+// regex. The classifier checks CAT_RE first (priority fix); by the time this runs the
+// utterance is known not to match a category filter.
+const TERMINAL_SHOW_RE =
+  /\b(show|open)\b.{0,20}?\b(terminal|markets|market|the tape|tape)\b/i;
+
+// Terminal hide: "hide the terminal", "close markets", "close the tape".
+const TERMINAL_HIDE_RE =
+  /\b(hide|close)\b.{0,20}?\b(terminal|markets|market|tape)\b/i;
 
 // Deck hide: "hide the globe", "back to void", "close the world", etc.
 const DECK_HIDE_RE =
@@ -95,18 +106,39 @@ const CAT_LABELS: Record<string, string> = {
  * Classify a (normalized, lowercased) utterance into a DeckCommandResult.
  *
  * @param utterance  — the utterance to classify (already normalized)
- * @param currentDeck — current cockpit.deck value ("void" | "globe")
+ * @param currentDeck — current cockpit.deck value ("void" | "globe" | "terminal")
  * @returns DeckCommandResult if utterance matches a deck command; null otherwise.
  *
  * Globe-only commands ("show vessels", category filters, spin, reset) when
- * currentDeck is "void" will include deckSwitch:"globe" so the shell shows
- * the globe BEFORE applying the bridge command (spec requirement 4).
+ * currentDeck is not "globe" (i.e. "void" or "terminal") will include
+ * deckSwitch:"globe" so the shell shows the globe BEFORE applying the bridge
+ * command (spec requirement 4 — auto-switch must fire from any non-globe deck).
+ *
+ * Precedence (highest → lowest):
+ *   1. Category filter (CAT_RE) — "show financial markets" → set_cat finance.
+ *      Must precede TERMINAL_SHOW_RE so category-adjective phrases are not
+ *      swallowed by the generic markets token in TERMINAL_SHOW_RE.
+ *   2. Deck show/hide (DECK_SHOW_RE / DECK_HIDE_RE)
+ *   3. Terminal show/hide (TERMINAL_SHOW_RE / TERMINAL_HIDE_RE)
+ *   4. Vessels, spin, reset
  */
 export function classifyDeckCommand(
   utterance: string,
-  currentDeck: "void" | "globe"
+  currentDeck: "void" | "globe" | "terminal"
 ): DeckCommandResult | null {
-  // Deck show
+  // 1. Category filter — highest priority so "show financial markets" routes to
+  //    set_cat, NOT to the terminal deck. Globe-only: auto-switch from any non-globe deck.
+  const cat = extractCat(utterance);
+  if (cat !== null) {
+    const result: DeckCommandResult = {
+      bridgeCmds: [{ type: "set_cat", cat }],
+      confirmation: `Filtering: ${CAT_LABELS[cat] ?? cat}.`,
+    };
+    if (currentDeck !== "globe") result.deckSwitch = "globe";
+    return result;
+  }
+
+  // 2. Deck show / hide
   if (DECK_SHOW_RE.test(utterance)) {
     return {
       deckSwitch: "globe",
@@ -115,7 +147,6 @@ export function classifyDeckCommand(
     };
   }
 
-  // Deck hide
   if (DECK_HIDE_RE.test(utterance)) {
     return {
       deckSwitch: "void",
@@ -124,54 +155,63 @@ export function classifyDeckCommand(
     };
   }
 
-  // Category filter — globe-only (auto-switch if in void)
-  const cat = extractCat(utterance);
-  if (cat !== null) {
-    const result: DeckCommandResult = {
-      bridgeCmds: [{ type: "set_cat", cat }],
-      confirmation: `Filtering: ${CAT_LABELS[cat] ?? cat}.`,
+  // 3. Terminal show / hide — "show markets"/"show the tape" reaches here only
+  //    after failing the category-filter check above.
+  if (TERMINAL_SHOW_RE.test(utterance)) {
+    return {
+      deckSwitch: "terminal",
+      bridgeCmds: [],
+      confirmation: "The tape is live.",
     };
-    if (currentDeck === "void") result.deckSwitch = "globe";
-    return result;
   }
 
-  // Vessels overlay — globe-only
+  if (TERMINAL_HIDE_RE.test(utterance)) {
+    return {
+      deckSwitch: "void",
+      bridgeCmds: [],
+      confirmation: "Back to the void.",
+    };
+  }
+
+  // 4. Globe-only overlay / motion commands — auto-switch from any non-globe deck.
+
+  // Vessels overlay
   if (VESSELS_RE.test(utterance)) {
     const result: DeckCommandResult = {
       bridgeCmds: [{ type: "toggle_overlay", overlay: "vessels" }],
       confirmation: "Vessels overlay toggled.",
     };
-    if (currentDeck === "void") result.deckSwitch = "globe";
+    if (currentDeck !== "globe") result.deckSwitch = "globe";
     return result;
   }
 
-  // Spin start — globe-only
+  // Spin start
   if (SPIN_START_RE.test(utterance)) {
     const result: DeckCommandResult = {
       bridgeCmds: [{ type: "set_spin", on: true }],
       confirmation: "Spinning.",
     };
-    if (currentDeck === "void") result.deckSwitch = "globe";
+    if (currentDeck !== "globe") result.deckSwitch = "globe";
     return result;
   }
 
-  // Spin stop — globe-only
+  // Spin stop
   if (SPIN_STOP_RE.test(utterance)) {
     const result: DeckCommandResult = {
       bridgeCmds: [{ type: "set_spin", on: false }],
       confirmation: "Rotation stopped.",
     };
-    if (currentDeck === "void") result.deckSwitch = "globe";
+    if (currentDeck !== "globe") result.deckSwitch = "globe";
     return result;
   }
 
-  // Reset view — globe-only
+  // Reset view
   if (RESET_RE.test(utterance)) {
     const result: DeckCommandResult = {
       bridgeCmds: [{ type: "reset_view" }],
       confirmation: "View reset.",
     };
-    if (currentDeck === "void") result.deckSwitch = "globe";
+    if (currentDeck !== "globe") result.deckSwitch = "globe";
     return result;
   }
 
