@@ -12,6 +12,18 @@
  */
 (function() {
   'use strict';
+
+  // Hide AUSPEX's own top-left brand element (#hdr .logo) when running as a LOOM deck.
+  // Reason: the LOOM shell renders its own wordmark pill in the top-bar (z-index 10, above
+  // the iframe). AUSPEX's .logo renders at position fixed inside the iframe's own document,
+  // but its visual footprint overlaps the LOOM wordmark region when the iframe is full-bleed.
+  // We suppress it here rather than in AUSPEX's CSS to keep upstream AUSPEX untouched.
+  (function() {
+    var style = document.createElement('style');
+    style.textContent = '#hdr .logo { display: none !important; }';
+    document.head.appendChild(style);
+  })();
+
   // Inside the LOOM cockpit the deck must boot straight to the globe — suppress
   // AUSPEX's first-run tour overlay (its own SEEN_KEY, see js/tutorial.js:12).
   try { if (!localStorage.getItem('auspex.tour.seen.v1')) localStorage.setItem('auspex.tour.seen.v1', String(Date.now())); } catch (e) { /* ignore */ }

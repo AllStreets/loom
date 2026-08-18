@@ -983,7 +983,7 @@ export default function Companion() {
     setItems([{
       kind: "bubble",
       role: "assistant",
-      text: "I am LOOM. I run on your machine, entirely offline. To start building: ask me to build something — a water tracker, a reading log, a habit counter. Press Enter or hold the orb and speak.",
+      text: "I am LOOM. I run on your machine, entirely offline. To start building: ask me to build something — a water tracker, a reading log, a habit counter. Press Enter or hold the orb and speak. Say \"show the globe\" to see the living world.",
       id: nextId(),
     }]);
     localStorage.setItem("loom.firstGreeting", "1");

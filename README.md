@@ -2,9 +2,9 @@
 
 <img src=".github/assets/hero.png" alt="LOOM" width="100%"/>
 
-### a sovereign, self-evolving computer
+### the sovereign cockpit
 
-<em>offline &nbsp;·&nbsp; local models &nbsp;·&nbsp; it rewrites itself &nbsp;·&nbsp; yours</em>
+<em>offline &nbsp;·&nbsp; local models &nbsp;·&nbsp; voice command of the world &nbsp;·&nbsp; it builds itself &nbsp;·&nbsp; yours</em>
 
 &nbsp;
 
@@ -25,6 +25,7 @@
 &nbsp;
 
 <a href="#what-this-is"><kbd> &nbsp; <b>What this is</b> &nbsp; </kbd></a> &nbsp;
+<a href="#the-cockpit"><kbd> &nbsp; <b>The Cockpit</b> &nbsp; </kbd></a> &nbsp;
 <a href="#how-it-weaves"><kbd> &nbsp; <b>How it weaves</b> &nbsp; </kbd></a> &nbsp;
 <a href="#anatomy"><kbd> &nbsp; <b>Anatomy</b> &nbsp; </kbd></a> &nbsp;
 <a href="#the-fleet"><kbd> &nbsp; <b>The fleet</b> &nbsp; </kbd></a> &nbsp;
@@ -44,6 +45,33 @@ You describe a capability in one sentence and press Enter. LOOM's local model pl
 > *You shouldn't rent your tools from the cloud. You should own one thing that becomes whatever you need.*
 
 This is a proven idea, generalized. Its predecessor — the Forge engine inside **EMBER**, an offline survival console — first demonstrated that a local model can build and maintain real software offline and verify its own work. LOOM makes that engine the heart, hardened at every layer that ever failed.
+
+---
+
+## The Cockpit
+
+**Phase 9 — Stage 1 — shipped.**
+
+LOOM is now the Sovereign Cockpit: the orb commands a living world. The ambient void is still the default — quiet, offline, yours. Switch on the globe and the AUSPEX globe deck rises behind the orb: live vessels at sea, geolocated news stories, earthquake events, all the feeds AUSPEX carries, running in a sandboxed iframe with no changes to the upstream AUSPEX repo.
+
+**What shipped in Stage 1:**
+
+- **Living globe deck.** A bundled snapshot of the AUSPEX globe app renders as a full-bleed deck behind the orb band. Toggle VOID / GLOBE from the top bar. Live feeds work as-is (AUSPEX's public Supabase reads, USGS, AIS vessels via your AISSTREAM key). Keyed feeds degrade silently when keys are absent — AUSPEX already handles that.
+
+- **Voice command of the world.** Say the phrase and it happens — no wake word, no lag. The companion rules engine resolves globe commands without a model call:
+  - "show the globe" / "show the world" — switches to globe deck
+  - "hide the globe" / "back to the void" — returns to void
+  - "show military" / "show climate" / "show finance" — filters news by category
+  - "show vessels" / "show ships" — toggles the live AIS vessel overlay
+  - "stop spinning" / "start spinning" — controls globe rotation
+  - "reset the view" — resets globe position
+  - The companion speaks a one-line confirmation; the orb pulses on each command.
+
+- **Cloud-override builder (opt-in).** Settings > Models > Cloud builder: toggle it on, paste your Anthropic API key (write-only — it is stored in a Tauri-side file at OS file permissions, never in the webview, never returned after save). When enabled, the builder routes to `claude-opus-4-8` via the Anthropic Messages API. Local Ollama fleet remains the default and the fallback on any cloud error. Each build card shows which brain built it. The companion and rewriter roles always stay local — only the builder gets the cloud option.
+
+**The orb never moves.** Decks change the world behind it.
+
+---
 
 ---
 
@@ -145,7 +173,12 @@ Built in phases, each a working, tested, reviewed milestone.
 | **4.5 · The Atelier** | loom.ui design kit — organs beautiful by construction · OS desktop: glass windows + dock | **shipped** |
 | **5 · Voice** | offline whisper + piper voices · hold-the-orb / Space push-to-talk · spoken replies · Settings organ | **shipped** |
 | **6 · Vitality** | threads of light · ambient field · ignition · kit v2 (hero/spark/section) · DOM-grounded builder · first-run greeting | **shipped** |
-| **later** | full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier | vision |
+| **9 · The Cockpit (Stage 1)** | deck layer · bundled AUSPEX globe · voice command of the world · cloud-override builder (`claude-opus-4-8`, opt-in) | **shipped** |
+| **next · Constellation + Salience** | AgentZeus constellation view as a deck: agents as lights, salience scoring, ledger panel | planned |
+| **next · Terminal deck** | Bloomberg-style data terminal deck (market feeds, macro data, structured query) | planned |
+| **next · EMBER deck** | Offline survival console as a deck: grid-down instrument panel | planned |
+| **next · AGORA deck** | Markets intelligence deck: order flow, positioning, macro | planned |
+| **later** | full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 
