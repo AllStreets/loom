@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { handle, type CompanionDeps } from "./runtime";
+import type { ScoredEvent } from "../watch/types";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -95,5 +96,61 @@ describe("handle — non-deck intents unaffected", () => {
     const deps = makeDeps({ organIds: vi.fn().mockResolvedValue(["water-tracker"]) });
     const turn = await handle("show me a water tracker", [], deps);
     expect(turn.kind).toBe("act");
+  });
+});
+
+// ── briefing fast path ────────────────────────────────────────────────────────
+
+describe("handle — briefing routes without model call", () => {
+  it("'brief me' with salient items returns briefing turn kind, no model call", async () => {
+    const deps = makeDeps({
+      getSalient: (k: number) => ([
+        { id: "e1", title: "Major quake in Japan", source: "USGS", category: "quake", publishedAt: new Date().toISOString(), score: 0.9, reasons: ["M7.2 near Tokyo"] },
+        { id: "e2", title: "Oil reaches $100", source: "Reuters", category: "markets", publishedAt: new Date().toISOString(), score: 0.8, reasons: [] },
+      ] as ScoredEvent[]).slice(0, k),
+    });
+    const turn = await handle("brief me", [], deps);
+    expect(turn.kind).toBe("briefing");
+    expect(deps.chat).not.toHaveBeenCalled();
+    expect(deps.askModel).not.toHaveBeenCalled();
+  });
+
+  it("briefing text includes title and first reason", async () => {
+    const deps = makeDeps({
+      getSalient: (_k: number) => [
+        { id: "e1", title: "Quake in Japan", source: "USGS", category: "quake", publishedAt: new Date().toISOString(), score: 0.9, reasons: ["M7.2 near Tokyo"] },
+      ] as ScoredEvent[],
+    });
+    const turn = await handle("brief me", [], deps);
+    if (turn.kind !== "briefing") throw new Error("Expected briefing");
+    expect(turn.text).toContain("Quake in Japan");
+    expect(turn.text).toContain("M7.2 near Tokyo");
+    expect(turn.text).toMatch(/^Top of the watch:/);
+  });
+
+  it("briefing with item with no reasons omits dash-reason", async () => {
+    const deps = makeDeps({
+      getSalient: (_k: number) => [
+        { id: "e1", title: "Oil reaches $100", source: "Reuters", category: "markets", publishedAt: new Date().toISOString(), score: 0.8, reasons: [] },
+      ] as ScoredEvent[],
+    });
+    const turn = await handle("brief me", [], deps);
+    if (turn.kind !== "briefing") throw new Error("Expected briefing");
+    expect(turn.text).toContain("Oil reaches $100");
+    expect(turn.text).not.toContain(" — ");
+  });
+
+  it("empty watch returns quiet message", async () => {
+    const deps = makeDeps({ getSalient: () => [] });
+    const turn = await handle("brief me", [], deps);
+    if (turn.kind !== "briefing") throw new Error("Expected briefing");
+    expect(turn.text).toBe("The watch is quiet. Nothing crosses your thresholds.");
+  });
+
+  it("briefing without getSalient dep returns quiet message", async () => {
+    const deps = makeDeps(); // no getSalient
+    const turn = await handle("brief me", [], deps);
+    if (turn.kind !== "briefing") throw new Error("Expected briefing");
+    expect(turn.text).toBe("The watch is quiet. Nothing crosses your thresholds.");
   });
 });

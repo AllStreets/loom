@@ -403,6 +403,7 @@ export default function Shell() {
           display: "flex",
           alignItems: "baseline",
           justifyContent: "space-between",
+          flexWrap: "wrap",
           padding: "20px 24px 16px",
           position: "relative",
           zIndex: 10,
@@ -453,6 +454,7 @@ export default function Shell() {
           style={{
             display: 'flex',
             alignItems: 'center',
+            flexWrap: 'wrap',
             gap: 6,
             background: 'var(--glass)',
             border: '1px solid var(--glass-border)',

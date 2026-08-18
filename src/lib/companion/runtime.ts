@@ -3,6 +3,7 @@ import type { BuildResult } from "../loom/build";
 import type { Msg } from "../core";
 import { COMPANION_SYSTEM, windowMessages } from "./persona";
 import type { DeckCommandResult } from "../decks/commands";
+import type { ScoredEvent } from "../watch/types";
 
 export type CompanionDeps = {
   chat: (role: string, messages: Msg[], opts?: object) => Promise<string>;
@@ -12,6 +13,8 @@ export type CompanionDeps = {
   askModel: (system: string, prompt: string) => Promise<string>;
   /** Current cockpit deck state — used for deck_command auto-switch logic */
   currentDeck?: () => "void" | "globe";
+  /** Returns the top-k salient events for the briefing fast path */
+  getSalient?: (k: number) => ScoredEvent[];
 };
 
 export type CompanionTurn =
@@ -19,7 +22,8 @@ export type CompanionTurn =
   | { kind: "build"; result: BuildResult }
   | { kind: "edit"; organId: string; result: BuildResult }
   | { kind: "act"; organId: string }
-  | { kind: "deck_command"; deckCommandResult: DeckCommandResult; confirmation: string };
+  | { kind: "deck_command"; deckCommandResult: DeckCommandResult; confirmation: string }
+  | { kind: "briefing"; text: string };
 
 export async function handle(
   utterance: string,
@@ -31,6 +35,20 @@ export async function handle(
   const c = await compile(utterance, ids, deps.askModel, history, currentDeck);
 
   switch (c.intent) {
+    case "briefing": {
+      // Fast path — zero model calls. Assembles spoken briefing from salient events.
+      const items = deps.getSalient ? deps.getSalient(3) : [];
+      if (items.length === 0) {
+        return { kind: "briefing", text: "The watch is quiet. Nothing crosses your thresholds." };
+      }
+      const sentences = items.map((item) =>
+        item.reasons.length > 0
+          ? `${item.title} — ${item.reasons[0]}.`
+          : `${item.title}.`
+      );
+      return { kind: "briefing", text: "Top of the watch: " + sentences.join(" ") };
+    }
+
     case "deck_command": {
       // Fast path — no model call. The deck command result is already fully
       // resolved by the rule classifier (classifyDeckCommand).

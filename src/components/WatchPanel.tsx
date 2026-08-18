@@ -476,6 +476,7 @@ export default function WatchPanel({ open, onClose }: Props) {
         boxShadow: "-8px 0 32px rgba(0,0,0,0.4)",
         overflow: "hidden",
         pointerEvents: "auto",
+        opacity: 0.97,
       }}
     >
       {/* Panel header */}

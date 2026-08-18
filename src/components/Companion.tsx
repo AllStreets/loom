@@ -9,6 +9,7 @@ import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/
 import { getSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
 import { sendDeckCommands } from "./decks/GlobeDeck";
+import { getSalient } from "../lib/watch/runtime";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -760,6 +761,7 @@ export default function Companion() {
       // Provide current deck state to the runtime so deck_command rules can
       // auto-switch from void → globe when needed.
       currentDeck: () => getSetting("cockpit.deck") as "void" | "globe",
+      getSalient: (k: number) => getSalient(k),
     };
 
     let turn: CompanionTurn;
@@ -897,6 +899,10 @@ export default function Companion() {
 
       // 5. Orb settle to idle
       dispatchMood("idle");
+    } else if (turn.kind === "briefing") {
+      const replyText = turn.text;
+      appendItem({ kind: "bubble", role: "assistant", text: replyText, id: nextId() });
+      history.current.push({ role: "assistant", content: replyText });
     }
 
     // Determine if we should speak the reply
@@ -913,6 +919,8 @@ export default function Companion() {
       speakableText = `Opening ${turn.organId} below.`;
     } else if (turn.kind === "deck_command") {
       speakableText = turn.confirmation;
+    } else if (turn.kind === "briefing") {
+      speakableText = turn.text;
     }
 
     const speakReplies = getSetting("voice.speakReplies");
