@@ -517,6 +517,11 @@ export default function Shell() {
             padding: "16px 24px",
             position: "relative",
             zIndex: 10,
+            // Over a deck the bar needs its own ground — AUSPEX's toolbar sits
+            // directly beneath and double-chrome is unreadable without it.
+            background: deck !== "void"
+              ? "linear-gradient(to bottom, var(--bg) 55%, rgba(6,11,24,0.85) 80%, transparent)"
+              : undefined,
             borderBottom: reducedMotion ? undefined : `1px solid ${moodColor}20`,
             transition: reducedMotion ? undefined : "border-color 1.2s ease",
             ...staggerStyle,
@@ -728,7 +733,8 @@ export default function Shell() {
             : {}),
         }}
       >
-        {/* Main column */}
+        {/* Main column — over a deck the console drops to the bottom edge so the
+            world stays visible; in the void it keeps its centered position */}
         <div
           style={{
             width: "100%",
@@ -737,6 +743,7 @@ export default function Shell() {
             flexDirection: "column",
             gap: 16,
             pointerEvents: "auto",
+            marginTop: deck !== "void" ? "auto" : undefined,
           }}
         >
           {/* Companion panel */}

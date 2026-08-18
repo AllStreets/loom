@@ -24,8 +24,10 @@
    (The content-box default caused a recurring class of right-edge clipping.) */
 *,*::before,*::after{box-sizing:border-box}
 html,body,#root{height:100%;margin:0}
-/* The shell is a fixed instrument — nothing may create horizontal scroll. */
-html,body{overflow-x:clip}
+/* The shell is a fixed instrument — nothing may create horizontal scroll.
+   Scoped to body: clipping the root element changes the browser's compositing
+   of heavy layers (deck iframes) and caused visible flicker on some GPUs. */
+body{overflow-x:clip}
 html{background:var(--bg)}
 body{background:var(--bg);color:var(--t1);font-family:var(--f-sans)}
 
