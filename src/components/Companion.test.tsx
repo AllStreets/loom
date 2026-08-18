@@ -849,3 +849,79 @@ describe("Companion: deck_command turn dispatches events and pushes history", ()
     expect(order.indexOf("loom-deck")).toBeLessThan(order.indexOf("loom-deck-command"));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 2: FailureCard copy mapping — raw errors never reach the user
+// ---------------------------------------------------------------------------
+
+import { ShellUnavailableError } from "../lib/core";
+
+describe("Companion: FailureCard never renders raw error text", () => {
+  beforeEach(() => {
+    mockHandle.mockReset();
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  const rawErrors = [
+    new TypeError("Cannot read properties of undefined (reading 'invoke')"),
+    new TypeError("Cannot read properties of undefined"),
+    new ReferenceError("invoke is not defined"),
+    new Error("undefined is not a function"),
+  ];
+
+  for (const rawErr of rawErrors) {
+    it(`does not render raw error text for: ${rawErr.message.slice(0, 40)}`, async () => {
+      mockHandle.mockRejectedValue(rawErr);
+      render(<Companion />);
+      const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+      await userEvent.type(textarea, "trigger error");
+      await userEvent.keyboard("{Enter}");
+
+      await waitFor(() => {
+        // A failure card must appear (something visible)
+        expect(document.body.textContent).toMatch(/failed|unreachable|shell/i);
+      });
+
+      // The raw error text must NOT appear
+      const bodyText = document.body.textContent ?? "";
+      expect(bodyText).not.toMatch(/TypeError|Cannot read properties|undefined.*reading|ReferenceError/);
+    });
+  }
+
+  it("ShellUnavailableError maps to its own message in the failure card", async () => {
+    mockHandle.mockRejectedValue(new ShellUnavailableError());
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "trigger shell error");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(screen.getByText("This surface needs the desktop shell.")).toBeTruthy();
+    });
+  });
+
+  it("fleet unreachable error maps to Ollama copy", async () => {
+    mockHandle.mockRejectedValue(new Error("connection refused: 11434"));
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "trigger fleet error");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(screen.getByText("The fleet is unreachable — is Ollama running?")).toBeTruthy();
+    });
+  });
+
+  it("unknown error maps to generic LOOM-voice copy", async () => {
+    mockHandle.mockRejectedValue(new Error("something totally unexpected happened"));
+    render(<Companion />);
+    const textarea = screen.getByPlaceholderText(/Talk to LOOM/i);
+    await userEvent.type(textarea, "trigger unknown error");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(screen.getByText("The turn failed — details in the console.")).toBeTruthy();
+    });
+  });
+});

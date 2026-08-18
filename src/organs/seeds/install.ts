@@ -20,7 +20,7 @@ export async function installSeeds(deps: {
     const entries = await deps.list();
     existing = entries.map((e) => e.id);
   } catch (err) {
-    console.warn("[installSeeds] could not load organ list:", err);
+    console.debug("[installSeeds] could not load organ list:", err);
     return [];
   }
 
@@ -32,7 +32,7 @@ export async function installSeeds(deps: {
       await deps.write(seed.id, seed.files, `loom: seed ${seed.id}`);
       installed.push(seed.id);
     } catch (err) {
-      console.warn(`[installSeeds] failed to install seed "${seed.id}":`, err);
+      console.debug(`[installSeeds] failed to install seed "${seed.id}":`, err);
     }
   }
 
