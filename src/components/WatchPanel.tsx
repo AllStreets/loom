@@ -23,7 +23,7 @@
  * when top-10 ordering changes, ~120s interval).
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { ScoredEvent } from "../lib/watch/types";
 import type { WatchlistEntry } from "../lib/watch/store";
 import { getSalient } from "../lib/watch/runtime";
