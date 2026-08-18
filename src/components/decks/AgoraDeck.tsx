@@ -98,8 +98,9 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
             position: "absolute",
             inset: 0,
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-end",
             justifyContent: "center",
+            paddingBottom: "26vh",
             pointerEvents: "none",
           }}
         >
@@ -124,8 +125,11 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
             position: "absolute",
             inset: 0,
             display: "flex",
-            alignItems: "center",
+            // Seated in the lower half: the orb band occupies the upper-center
+            // of the viewport and a dead-center card collides with the orb.
+            alignItems: "flex-end",
             justifyContent: "center",
+            paddingBottom: "22vh",
             pointerEvents: "auto",
           }}
         >
