@@ -53,7 +53,7 @@ const DECK_HIDE_RE =
 // Ember show: "show ember", "show survival", "the failsafe", "open the failsafe"
 // The bare "failsafe" / "the failsafe" trigger without a show/open verb (wake-word style).
 const EMBER_SHOW_RE =
-  /(?:\b(show|open)\b.{0,20}?\b(ember|survival|failsafe)\b)|\bthe failsafe\b|\bfailsafe\b/i;
+  /(?:\b(show|open)\b.{0,20}?\b(ember|survival|failsafe)\b)|\bthe failsafe\b/i;
 
 // Category filter: "show military news", "show geopolitical", "switch to finance", etc.
 // The "all" token requires a news-context word to avoid false positives like
@@ -111,7 +111,7 @@ const CAT_LABELS: Record<string, string> = {
  * Classify a (normalized, lowercased) utterance into a DeckCommandResult.
  *
  * @param utterance  — the utterance to classify (already normalized)
- * @param currentDeck — current cockpit.deck value ("void" | "globe" | "terminal")
+ * @param currentDeck — current cockpit.deck value ("void" | "globe" | "terminal" | "ember")
  * @returns DeckCommandResult if utterance matches a deck command; null otherwise.
  *
  * Globe-only commands ("show vessels", category filters, spin, reset) when

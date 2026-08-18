@@ -24,6 +24,8 @@ rsync -av --delete \
   --exclude='serve.command' \
   --exclude='forge-selftest.mjs' \
   --exclude='sw.js' \
+  --exclude='.claude' \
+  --exclude='.gitignore' \
   "$SRC/" "$DEST/"
 
 echo "[refresh-ember-deck] Done. Bundle at $DEST"

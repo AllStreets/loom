@@ -10,7 +10,7 @@
  *                  (documented reviewer debt I3 from Stage 1).
  *
  *   PROD (isDev === false, Tauri bundled app):
- *     DECK_URL    = "deck://localhost/index.html"
+ *     DECK_URL    = "deck://localhost/auspex/index.html"
  *     DECK_ORIGIN = "deck://localhost"
  *     Consequence: iframe is cross-origin → localStorage ISOLATED from LOOM's
  *                  (closes reviewer I3 — no shared localStorage in production).
