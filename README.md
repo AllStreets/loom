@@ -95,6 +95,35 @@ The cockpit now watches the world for you. A salience engine runs in the kernel,
 
 ---
 
+## Stage 3 — Craft
+
+**Phase 11 — Stage 3 — shipped.**
+
+The cockpit grew a written design language and a live market surface.
+
+**Chrome redesigned.**
+
+Every surface was audited against a formal token set: `--t1/t2/t3` text hierarchy, `--line/glass-border` separators, `--accent` reserved for live/selected state only, `--danger/warn` for deltas and alerts. No raw hex values remain in shell chrome. A screenshot gate enforced every step: no phase advanced until the rendered result matched the spec. The orb band, top bar, dock, watch panel, and deck layer all speak the same language.
+
+**Hardening.**
+
+Raw error strings no longer reach the user. Every async boundary has an error handler. LOOM's voice is consistent whether something succeeds or fails — build failures, model timeouts, and network errors all produce calm, human copy. Error boundaries wrap the watch panel, organ windows, and deck layer so a crash in one surface cannot bring down the cockpit.
+
+**Terminal deck — the tape is live.**
+
+A Bloomberg-grade market surface mounts behind the orb when you say "show the terminal", "show markets", or "show the tape". It drives its own quotes poller by lifecycle: `startQuotes()` on mount, `stopQuotes()` on unmount — no background burn while another deck is active.
+
+Panels:
+- Ticker tape — all symbols scrolling at the top, looped seamlessly, paused when the document is hidden.
+- Index hero cards — SPY, QQQ, DIA, IWM with price, delta, sparkline.
+- Movers table — all tracked equities sorted by |delta%| descending.
+- Macro strip — VIX, 10Y yield, gold, crude oil, bitcoin.
+- Finance wire — salience-ranked finance/geo stories from the watch runtime.
+
+Quote source: Yahoo Finance `/v8/chart` endpoint (`interval=15m&range=1d`). In the Tauri desktop app, requests hit Yahoo directly — no proxy, no key. In plain browser dev mode, requests transit `corsproxy.io` carrying only ticker symbols (no credentials, no personal data). The desktop app never uses the proxy.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -195,10 +224,12 @@ Built in phases, each a working, tested, reviewed milestone.
 | **6 · Vitality** | threads of light · ambient field · ignition · kit v2 (hero/spark/section) · DOM-grounded builder · first-run greeting | **shipped** |
 | **9 · The Cockpit (Stage 1)** | deck layer · bundled AUSPEX globe · voice command of the world · cloud-override builder (`claude-opus-4-8`, opt-in) | **shipped** |
 | **10 · The Cockpit (Stage 2)** | salience engine · live world sensors (AUSPEX stories + USGS quakes) · watchlist + engagement · living constellation · watch panel · voice briefings · deck origin isolation (prod custom protocol) | **shipped** |
-| **next · Terminal deck** | Bloomberg-style data terminal deck (market feeds, macro data, structured query) | planned |
+| **11 · The Cockpit (Stage 3)** | chrome design language · hardening (error boundaries, LOOM-voice failure copy) · Terminal deck (live tape / indices / movers / macro + finance wire) | **shipped** |
 | **next · EMBER deck** | Offline survival console as a deck: grid-down instrument panel | planned |
 | **next · AGORA deck** | Markets intelligence deck: order flow, positioning, macro | planned |
-| **later** | full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
+| **next · Globe fly-to** | Auto-fly the globe to a salience item's lat/lng on briefing | planned |
+| **next · Learned salience** | Replace hand-tuned factor weights with a small learned model seeded by engagement history | planned |
+| **later** | LOOM-owned quote proxy (kill corsproxy dep) · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 

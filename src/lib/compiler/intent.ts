@@ -236,8 +236,8 @@ function formatHistoryBlock(history: HistoryMsg[]): string {
  * history (optional) — last few turns, used for anaphora resolution and
  * included in the model fallback prompt for context.
  *
- * currentDeck (optional) — "void"|"globe", used by the deck_command rule to
- * decide whether a globe-only command should auto-switch the deck.
+ * currentDeck (optional) — "void"|"globe"|"terminal", used by the deck_command
+ * rule to decide whether a globe-only command should auto-switch the deck.
  */
 export async function classifyIntent(
   utterance: string,

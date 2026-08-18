@@ -71,7 +71,7 @@ function Spark({ values, up, w = 72, h = 22 }: { values: number[]; up: boolean; 
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
-  const stroke = up ? POS : "#f87171";
+  const stroke = up ? POS : NEG;
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: "block", overflow: "visible" }} aria-hidden>
       <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" opacity={0.9} />
@@ -97,7 +97,7 @@ const NUM: React.CSSProperties = {
 
 function TickerTape({ quotes, reduced }: { quotes: Quote[]; reduced: boolean }) {
   const cells = quotes.map((q) => (
-    <span key={q.symbol} style={{ display: "inline-flex", alignItems: "baseline", gap: 6, marginRight: 28 }}>
+    <span key={q.symbol} style={{ display: "inline-flex", alignItems: "baseline", gap: 8, marginRight: 28 }}>
       <span style={{ ...NUM, fontSize: 11, color: "var(--t2)", letterSpacing: ".04em" }}>{q.symbol}</span>
       <span style={{ ...NUM, fontSize: 11, color: "var(--t1)" }}>{fmtPrice(q.price)}</span>
       <span style={{ ...NUM, fontSize: 11, color: color(q.chgPct) }}>{fmtPct(q.chgPct)}</span>
@@ -219,7 +219,7 @@ function MoversTable({ quotes }: { quotes: Quote[] }) {
             style={{
               display: "grid",
               gridTemplateColumns: "1fr 88px 88px 76px",
-              padding: "7px 12px",
+              padding: "8px 12px",
               borderBottom: "1px solid var(--line)",
               ...NUM,
               fontSize: 12,
@@ -294,7 +294,7 @@ function WireRow({ e }: { e: ScoredEvent }) {
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 5,
+        gap: 4,
         padding: "9px 12px",
         borderBottom: "1px solid var(--line)",
         textDecoration: "none",
@@ -326,7 +326,7 @@ function WireRow({ e }: { e: ScoredEvent }) {
               position: "absolute",
               inset: 0,
               width: `${pct}%`,
-              background: "var(--accent)",
+              background: "var(--t2)",
               opacity: 0.7,
               borderRadius: 999,
             }}

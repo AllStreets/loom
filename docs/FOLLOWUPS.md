@@ -107,12 +107,18 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Watch panel + voice briefings (T3/T4: WatchPanel.tsx + briefing intent + runtime handler)
 - Deck origin isolation — auspex.localhost custom protocol (T1: deckserve.rs)
 
-### Stage-3 backlog
-- **Terminal deck** — Bloomberg-style data terminal deck (market feeds, macro data, structured query). Design the feed-source abstraction before wiring; must degrade fully offline.
-- **EMBER deck** — Offline survival console as a deck. Source: `~/Downloads/EMBER`. Bridge via the same postMessage adapter; keep EMBER's Forge self-edit loop isolated from LOOM's builder seam.
-- **AGORA deck** — Markets intelligence deck: order flow, positioning, macro. Depends on terminal deck feed-source design.
-- **Globe fly-to on briefing** — when the cockpit speaks a salience item with lat/lng, auto-fly the globe to that location. Requires a new bridge command `fly_to {lat, lng}` in the deck protocol.
-- **Learned salience model** — replace the hand-tuned factor weights with a small learned model (few-shot from engagement history). Fits in the `scoreEvent` pure-function seam.
-- **Watch organ with fetch permission** — the Watch runtime currently runs kernel-side (organs cannot fetch). A future watch ORGAN would need a gated fetch permission token (stage-3 design work required).
-- **Watch panel / AUSPEX feed overlap** — the Watch panel overlaps AUSPEX's intelligence feed when both are visible on the globe deck. Acceptable for now; a future pass should give the panel a z-layering or offset that avoids covering the AUSPEX panel.
-- **Watch→globe cross-highlight** — selecting a salient item with lat/lng in the Watch panel should highlight or fly to that point on the globe deck.
+### Resolved in Stage 3 (Craft, Phase 11)
+- Chrome design language — full token audit, screenshot-gated, no raw hex in shell chrome.
+- Error hardening — LOOM-voice failure copy; no raw error strings; error boundaries on watch panel, organ windows, deck layer.
+- Terminal deck — live tape / index hero cards / movers / macro strip / finance wire. Lifecycle-driven poller (no background burn). Yahoo `/v8/chart` direct in Tauri; corsproxy.io in browser dev mode only.
+
+### Stage-4 backlog
+- **LOOM-owned quote proxy** — kill the corsproxy.io dependency. Run a tiny Rust/Axum sidecar in the Tauri process that proxies Yahoo `/v8/chart` for the webview (no external relay, no CORS). Blocked on: deciding whether it lives in `src-tauri/src/` or as a named Tauri plugin. (`src-tauri/src/`, `src/lib/terminal/quotes.ts` `quoteUrl()`)
+- **installSeeds re-warn on non-ShellUnavailable** — `installSeeds` currently silences all errors; it should re-throw (or at minimum warn) on any error that is NOT a `ShellUnavailable` / sandbox-env signal so genuine seed bugs surface in CI. (`src/lib/loom/seeds.ts`)
+- **Threads / Desktop error boundaries** — `Threads.tsx` and the organ window host do not yet have React error boundaries. A throw in a thread animation or an organ window crashes more than it should. Add boundaries with LOOM-voice failure copy consistent with the Stage-3 hardening pass. (`src/components/ambient/Threads.tsx`, `src/components/desktop/`)
+- **EMBER deck** — offline survival console as a deck. Source: `~/Downloads/EMBER`. Bridge via the same postMessage adapter; keep EMBER's Forge self-edit loop isolated from LOOM's builder seam.
+- **AGORA deck** — markets intelligence deck: order flow, positioning, macro. Depends on terminal deck feed-source design.
+- **Globe fly-to on briefing** — when the cockpit speaks a salience item with lat/lng, auto-fly the globe to that location. Requires a new bridge command `fly_to {lat, lng}` in the deck protocol. (`src/lib/decks/commands.ts`, `public/decks/auspex/js/main.js`)
+- **Learned salience model** — replace the hand-tuned factor weights with a small learned model seeded by engagement history. Fits in the `scoreEvent` pure-function seam. (`src/lib/watch/score.ts`)
+- **Watch organ with fetch permission** — the Watch runtime currently runs kernel-side; a future watch ORGAN would need a gated fetch permission token (design work required before implementation).
+- **Watch panel / AUSPEX feed overlap** — the Watch panel overlaps AUSPEX's intelligence feed on the globe deck. Future pass: z-layering or offset. (`src/components/watch/WatchPanel.tsx`)

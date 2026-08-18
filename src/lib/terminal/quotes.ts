@@ -1,9 +1,10 @@
 /**
  * quotes.ts — keyless market-quote fetcher + 60s poll runtime for the Terminal deck.
  *
- * Endpoint (keyless, browser-CORS-safe — proven by AUSPEX's shipped code in
- * public/decks/auspex/js/ui.js:585):
- *   https://query2.finance.yahoo.com/v8/finance/chart/<SYMBOL>?interval=1d&range=2d
+ * Endpoint (keyless; in Tauri production webview Yahoo CORS headers are not
+ * enforced so the request hits Yahoo direct; in plain browser dev mode the
+ * request is proxied through corsproxy.io carrying only ticker symbols):
+ *   https://query1.finance.yahoo.com/v8/finance/chart/<SYMBOL>?interval=15m&range=1d
  *
  * Response shape (relevant fields):
  *   { chart: { result: [ { meta: { symbol, regularMarketPrice,
@@ -20,8 +21,9 @@
  *
  * Failure policy: a failed poll keeps the last-known snapshot and flips the
  * `stale` flag; getQuotes() never returns blank once it has data. A
- * `loom-quotes` CustomEvent fires whenever the snapshot changes (fresh data or
- * a stale-flag flip).
+ * `loom-quotes` CustomEvent fires on each SUCCESSFUL poll (fresh data). It also
+ * fires once when the stale flag flips (first failure after a run of successes)
+ * so the UI can degrade gracefully.
  */
 
 export interface Quote {
