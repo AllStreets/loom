@@ -1,0 +1,33 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": null,
+  "outputDirectory": ".",
+  "framework": null,
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/snapshot.json", "destination": "/api/snapshot" },
+    { "source": "/news.json", "destination": "/api/news" },
+    { "source": "/flights.json", "destination": "/api/flights" },
+    { "source": "/vessels.json", "destination": "/api/vessels" },
+    { "source": "/js/keys.local.js", "destination": "/js/keys.local.empty.js" }
+  ],
+  "crons": [
+    { "path": "/api/refresh", "schedule": "0 7 * * *" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    },
+    {
+      "source": "/data/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=86400, immutable" }
+      ]
+    }
+  ]
+}
