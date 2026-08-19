@@ -1,4 +1,5 @@
 import type { organList, organWrite } from "../../lib/core";
+import { ShellUnavailableError } from "../../lib/core";
 import { files as notesFiles } from "./notes";
 import { files as timelineFiles } from "./timeline";
 import { files as settingsFiles } from "./settings";
@@ -42,7 +43,11 @@ export async function installSeeds(deps: {
       await deps.write(seed.id, seed.files, `loom: seed ${seed.id}`);
       installed.push(seed.id);
     } catch (err) {
-      console.debug(`[installSeeds] failed to install seed "${seed.id}":`, err);
+      if (err instanceof ShellUnavailableError) {
+        console.debug(`[installSeeds] failed to install seed "${seed.id}":`, err);
+      } else {
+        console.warn(`[installSeeds] failed to install seed "${seed.id}":`, err);
+      }
     }
   }
 

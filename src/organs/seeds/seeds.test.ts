@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { manifestGuard } from "../../lib/loom/validate";
+import { ShellUnavailableError } from "../../lib/core";
 import { files as notesFiles } from "./notes";
 import { files as timelineFiles } from "./timeline";
 import { files as settingsFiles } from "./settings";
@@ -89,6 +90,34 @@ describe("installSeeds", () => {
     const installed = await installSeeds({ list, write });
     expect(installed).toEqual([]);
     expect(write).not.toHaveBeenCalled();
+  });
+});
+
+// ── installSeeds failure logging ──────────────────────────────────────────────
+
+describe("installSeeds failure logging", () => {
+  it("console.debug when write fails with ShellUnavailableError", async () => {
+    const list = vi.fn().mockResolvedValue([]);
+    const write = vi.fn().mockRejectedValue(new ShellUnavailableError());
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await installSeeds({ list, write });
+    expect(debugSpy).toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    debugSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("console.warn when write fails with a non-ShellUnavailableError", async () => {
+    const list = vi.fn().mockResolvedValue([]);
+    const write = vi.fn().mockRejectedValue(new Error("disk full"));
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await installSeeds({ list, write });
+    expect(warnSpy).toHaveBeenCalled();
+    expect(debugSpy).not.toHaveBeenCalled();
+    debugSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });
 

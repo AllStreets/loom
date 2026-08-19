@@ -858,10 +858,16 @@ export default function Shell() {
       </ErrorBoundary>
 
       {/* ── Shell-level overlay: Threads bezier canvas (same coordinate space as Desktop plane) ── */}
-      <Threads />
+      {/* Fallback renders inline (not absolute inset-0) — correct: better than a crash */}
+      <ErrorBoundary zone="threads">
+        <Threads />
+      </ErrorBoundary>
 
       {/* ── Shell-level overlay: Desktop plane — absolute inset 0, windows float above orb band ── */}
-      <Desktop />
+      {/* Fallback renders inline (not absolute inset-0) — correct: better than a crash */}
+      <ErrorBoundary zone="desktop">
+        <Desktop />
+      </ErrorBoundary>
 
       {/* ── Constellation: living agent ring around the orb (z 8, OUTSIDE orb-band screen-blend) ── */}
       <ErrorBoundary zone="constellation">
