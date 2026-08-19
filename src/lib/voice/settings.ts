@@ -35,6 +35,19 @@ export function isValidModelTag(tag: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/.test(tag);
 }
 
+// ── AGORA path validation ─────────────────────────────────────────────────────
+
+/**
+ * Validate a candidate AGORA path.
+ * Empty string is treated as "use default" — Rust uses ~/Downloads/AGORA.
+ * Non-empty: any non-empty string passes client-side; Rust validates existence/structure.
+ */
+export function isValidAgoraPath(_path: string): boolean {
+  // Empty means "use default" — always valid client-side
+  // Non-empty: Rust validates existence, dir-under-home, package.json, scripts.dev
+  return true; // always true — Rust validates
+}
+
 // ── AGORA URL validation ───────────────────────────────────────────────────────
 
 /**
@@ -69,7 +82,8 @@ export type SettingsKey =
   | "cockpit.interact"
   | "cockpit.constellation"
   | "cockpit.watchOpen"
-  | "deck.agora.url";
+  | "deck.agora.url"
+  | "deck.agora.path";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "voice.default",
@@ -85,6 +99,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "cockpit.constellation",
   "cockpit.watchOpen",
   "deck.agora.url",
+  "deck.agora.path",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
@@ -92,6 +107,9 @@ const MODEL_KEYS = new Set<SettingsKey>(["model.builder", "model.companion", "mo
 
 // Keys that use free-text URL validation instead of enumeration
 const URL_KEYS = new Set<SettingsKey>(["deck.agora.url"]);
+
+// Keys that use free-text path validation (Rust validates existence/structure)
+const PATH_KEYS = new Set<SettingsKey>(["deck.agora.path"]);
 
 // Allowed values for enumerated keys (model.* keys validate via isValidModelTag instead)
 const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
@@ -120,6 +138,7 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "cockpit.constellation": "off",
   "cockpit.watchOpen": "off",
   "deck.agora.url": "http://localhost:3000",
+  "deck.agora.path": "",
 };
 
 // Legacy key the orb's detectTier reads
@@ -163,6 +182,11 @@ export function setSetting(key: string, value: string): void {
       throw new Error(
         `Invalid URL "${value}" for key "${key}". Must be http(s)://localhost[:<port>] or http(s)://127.0.0.1[:<port>], or empty to reset to default.`
       );
+    }
+  } else if (PATH_KEYS.has(k)) {
+    // Free-text path: client-side always valid; Rust validates existence/structure
+    if (!isValidAgoraPath(value)) {
+      throw new Error(`Invalid path "${value}" for key "${key}".`);
     }
   } else {
     const allowed = ALLOWED[k]!;

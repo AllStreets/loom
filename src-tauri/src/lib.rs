@@ -1,3 +1,4 @@
+mod agora;
 mod ollama;
 mod error;
 mod fleet;
@@ -7,6 +8,8 @@ mod voice;
 mod cloud;
 mod quotes;
 pub mod deckserve;
+
+use tauri::Manager;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -22,7 +25,14 @@ pub fn run() {
         // globe on its own origin in production.
         // macOS/Linux origin: deck://localhost  (closes Stage-1 reviewer I3)
         .register_uri_scheme_protocol("deck", deckserve::handler)
-        .invoke_handler(tauri::generate_handler![greet, fleet::fleet_status, fleet::fleet_chat, timeline::timeline_init, timeline::timeline_commit, timeline::timeline_log, timeline::timeline_rollback, organs::organ_write, organs::organ_list, organs::organ_read, organs::organ_grant, organs::organ_delete, voice::voice_status, voice::voice_setup, voice::stt_transcribe, voice::tts_speak, cloud::cloud_chat, cloud::cloud_key_set, cloud::cloud_key_present, cloud::cloud_key_clear, quotes::quote_fetch])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .manage(agora::AgoraState::default())
+        .invoke_handler(tauri::generate_handler![greet, fleet::fleet_status, fleet::fleet_chat, timeline::timeline_init, timeline::timeline_commit, timeline::timeline_log, timeline::timeline_rollback, organs::organ_write, organs::organ_list, organs::organ_read, organs::organ_grant, organs::organ_delete, voice::voice_status, voice::voice_setup, voice::stt_transcribe, voice::tts_speak, cloud::cloud_chat, cloud::cloud_key_set, cloud::cloud_key_present, cloud::cloud_key_clear, quotes::quote_fetch, agora::agora_start, agora::agora_stop, agora::agora_status, agora::agora_logs])
+        .build(tauri::generate_context!())
+        .expect("error building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                let agora_state = app_handle.state::<agora::AgoraState>();
+                agora::kill_agora(&agora_state);
+            }
+        });
 }

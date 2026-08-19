@@ -7,7 +7,6 @@
 use crate::error::LoomError;
 use crate::ollama::Msg;
 use crate::timeline::loom_dir;
-use serde::Serialize;
 use tauri::AppHandle;
 
 // ── Constants ─────────────────────────────────────────────────────────────────

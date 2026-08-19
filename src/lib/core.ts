@@ -121,6 +121,22 @@ export const cloudKeyPresent = () =>
 export const cloudKeyClear = () =>
   safeInvoke<void>("cloud_key_clear");
 
+// ── AGORA child-process wrappers ───────────────────────────────────────────────
+
+export type AgoraStatus = { running: boolean; pid?: number };
+
+export const agoraStart = (path: string) =>
+  safeInvoke<string>("agora_start", { path });
+
+export const agoraStop = () =>
+  safeInvoke<void>("agora_stop");
+
+export const agoraStatus = () =>
+  safeInvoke<AgoraStatus>("agora_status");
+
+export const agoraLogs = () =>
+  safeInvoke<string[]>("agora_logs");
+
 // ── Quote proxy ────────────────────────────────────────────────────────────────
 
 /**

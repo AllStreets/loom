@@ -33,7 +33,8 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("cockpit.constellation");
     expect(SETTINGS_KEYS).toContain("cockpit.watchOpen");
     expect(SETTINGS_KEYS).toContain("deck.agora.url");
-    expect(SETTINGS_KEYS).toHaveLength(13);
+    expect(SETTINGS_KEYS).toContain("deck.agora.path");
+    expect(SETTINGS_KEYS).toHaveLength(14);
   });
 
   it("throws on unknown key in getSetting", () => {

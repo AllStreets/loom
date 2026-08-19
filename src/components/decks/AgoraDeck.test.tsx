@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AgoraDeck from "./AgoraDeck";
 
@@ -10,7 +10,19 @@ vi.mock("framer-motion", () => ({
 
 // Mock settings
 vi.mock("../../lib/voice/settings", () => ({
-  getSetting: () => "http://localhost:3000",
+  getSetting: (key: string) => {
+    if (key === "deck.agora.url") return "http://localhost:3000";
+    if (key === "deck.agora.path") return "";
+    return "";
+  },
+}));
+
+// Mock core — agora wrappers
+vi.mock("../../lib/core", () => ({
+  agoraStart: vi.fn().mockResolvedValue("started"),
+  agoraStop: vi.fn().mockResolvedValue(undefined),
+  agoraStatus: vi.fn().mockResolvedValue({ running: false }),
+  agoraLogs: vi.fn().mockResolvedValue([]),
 }));
 
 // Helper to create a fetch that resolves (reachable)
@@ -29,6 +41,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Always restore real timers to prevent state leaking between tests
+  vi.useRealTimers();
 });
 
 describe("AgoraDeck — probe resolves (reachable)", () => {
@@ -346,5 +360,138 @@ describe("AgoraDeck — engine interval lifecycle", () => {
     expect(fetchMock.mock.calls.length).toBe(callsAfterUnmount);
 
     vi.useRealTimers();
+  });
+});
+
+// ── New tests: START button, ignition, STOP chip, Postgres note ──────────────
+
+describe("AgoraDeck — START button", () => {
+  it("offline card has START button with testid agora-start-btn", async () => {
+    vi.stubGlobal("fetch", makeRejectingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-start-btn")).not.toBeNull();
+    });
+  });
+
+  it("clicking START invokes agora_start", async () => {
+    const { agoraStart } = await import("../../lib/core");
+    vi.stubGlobal("fetch", makeRejectingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-start-btn")).not.toBeNull();
+    });
+
+    const startBtn = screen.getByTestId("agora-start-btn");
+    await userEvent.click(startBtn);
+
+    await waitFor(() => {
+      expect(agoraStart).toHaveBeenCalledWith("");
+    });
+  });
+
+  it("after START shows 'IGNITING THE EXCHANGE'", async () => {
+    vi.stubGlobal("fetch", makeRejectingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-start-btn")).not.toBeNull();
+    });
+
+    const startBtn = screen.getByTestId("agora-start-btn");
+    await userEvent.click(startBtn);
+
+    // After click, the igniting overlay should appear synchronously via setState
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("agora-igniting")).not.toBeNull();
+    expect(screen.getByText("IGNITING THE EXCHANGE")).not.toBeNull();
+  });
+});
+
+describe("AgoraDeck — bounded ignition probe", () => {
+  it("after 45s of failed probes shows 'still dark' with RETRY and STOP", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", makeRejectingFetch());
+
+    act(() => {
+      render(<AgoraDeck interact={true} />);
+    });
+
+    // Flush the initial probe (which rejects)
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // After initial probe rejects, offline card + start btn should be visible
+    const startBtn = screen.getByTestId("agora-start-btn");
+
+    // Click START with fireEvent (no internal setTimeout — works with fake timers)
+    act(() => {
+      fireEvent.click(startBtn);
+    });
+
+    // Flush the agoraStart mock promise
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Advance 46s past the 45s timeout
+    await act(async () => {
+      vi.advanceTimersByTime(46_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Should show still-dark state: offline card with RETRY and STOP
+    expect(screen.getByTestId("agora-retry-btn")).not.toBeNull();
+    expect(screen.getByTestId("agora-stop-btn-still-dark")).not.toBeNull();
+
+    vi.useRealTimers();
+  });
+});
+
+describe("AgoraDeck — STOP chip when reachable", () => {
+  it("stop chip (agora-stop-btn) present when reachable", async () => {
+    vi.stubGlobal("fetch", makeResolvingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-stop-btn")).not.toBeNull();
+    });
+  });
+
+  it("clicking STOP invokes agora_stop", async () => {
+    const { agoraStop } = await import("../../lib/core");
+    vi.stubGlobal("fetch", makeResolvingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-stop-btn")).not.toBeNull();
+    });
+
+    const stopBtn = screen.getByTestId("agora-stop-btn");
+    await userEvent.click(stopBtn);
+
+    await waitFor(() => {
+      expect(agoraStop).toHaveBeenCalled();
+    });
+  });
+});
+
+describe("AgoraDeck — Postgres note", () => {
+  it("offline card has Postgres note text", async () => {
+    vi.stubGlobal("fetch", makeRejectingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Postgres must be running (Postgres.app).")).not.toBeNull();
+    });
   });
 });

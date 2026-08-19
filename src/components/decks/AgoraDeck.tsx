@@ -6,28 +6,33 @@
  * on RETRY; renders an iframe when reachable, a designed offline card when not.
  *
  * URL: read from settings key "deck.agora.url" (default http://localhost:3000).
+ * Path: read from settings key "deck.agora.path" (default empty → Rust uses ~/Downloads/AGORA).
+ *
  * Probe: fetch(url, { mode: "no-cors", signal: AbortSignal.timeout(2000) }).
  *   Resolves (even opaque response) → reachable → show iframe.
  *   Rejects/timeout → unreachable → show offline card.
- * NO polling while offline. Probe only on mount, RETRY click, and deck re-activation.
  *
- * sandbox="allow-scripts allow-same-origin allow-forms" — AGORA is a full
- * Next.js app; forms and scripts are required.
+ * START button: calls agora_start(path) → "igniting" overlay with log polling.
+ *   Auto-probes every 2s, up to 45s (22 attempts). If reachable → show iframe.
+ *   After 45s → "still dark" card with RETRY + STOP.
+ * STOP chip: calls agora_stop() → re-probes.
  *
- * interact prop: controls iframe pointer events (same as GlobeDeck/EmberDeck).
- *
- * 400ms fade entrance + reduced-motion guard (same pattern as other decks).
+ * sandbox="allow-scripts allow-same-origin allow-forms"
+ * interact prop: controls iframe pointer events.
+ * 400ms fade entrance + reduced-motion guard.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useReducedMotion } from "framer-motion";
 import { getSetting } from "../../lib/voice/settings";
 import { timeoutSignal } from "../../lib/util/timeoutSignal";
+import { agoraStart, agoraStop, agoraLogs } from "../../lib/core";
 
 interface AgoraDeckProps {
   interact: boolean;
 }
 
 type ProbeState = "probing" | "reachable" | "unreachable";
+type LaunchState = "idle" | "igniting" | "still-dark";
 
 function getAgoraUrl(): string {
   try {
@@ -38,24 +43,35 @@ function getAgoraUrl(): string {
   }
 }
 
+function getAgoraPath(): string {
+  try {
+    return getSetting("deck.agora.path") || "";
+  } catch {
+    return "";
+  }
+}
+
 export default function AgoraDeck({ interact }: AgoraDeckProps) {
   const reducedMotion = useReducedMotion() ?? false;
   const [opacity, setOpacity] = useState(reducedMotion ? 1 : 0);
   const [probeState, setProbeState] = useState<ProbeState>("probing");
+  const [launchState, setLaunchState] = useState<LaunchState>("idle");
   const [engineHealth, setEngineHealth] = useState<"probing" | "healthy" | "down">("probing");
+  const [logs, setLogs] = useState<string[]>([]);
   const agoraUrl = getAgoraUrl();
 
   // Monotonic probe id: a settled probe only writes state if it is still the
-  // LATEST probe AND the component is mounted — rapid deck switching within
-  // the 2s window can neither warn (setState-on-unmounted) nor write stale.
+  // LATEST probe AND the component is mounted.
   const probeSeq = useRef(0);
   const mountedRef = useRef(true);
+  const ignitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ignitionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const logIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const probe = useCallback(async () => {
     const seq = ++probeSeq.current;
     setProbeState("probing");
     try {
-      // no-cors: response will be opaque (type "opaque") but no error = reachable.
       await fetch(agoraUrl, {
         mode: "no-cors",
         signal: timeoutSignal(2000),
@@ -76,14 +92,31 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
     }
   }, []);
 
+  // Clear ignition timers helper
+  const clearIgnitionTimers = useCallback(() => {
+    if (ignitionTimerRef.current) {
+      clearTimeout(ignitionTimerRef.current);
+      ignitionTimerRef.current = null;
+    }
+    if (ignitionIntervalRef.current) {
+      clearInterval(ignitionIntervalRef.current);
+      ignitionIntervalRef.current = null;
+    }
+    if (logIntervalRef.current) {
+      clearInterval(logIntervalRef.current);
+      logIntervalRef.current = null;
+    }
+  }, []);
+
   // Probe on mount (and re-probe when deck re-activates via key change)
   useEffect(() => {
     mountedRef.current = true;
     probe();
     return () => {
       mountedRef.current = false;
+      clearIgnitionTimers();
     };
-  }, [probe]);
+  }, [probe, clearIgnitionTimers]);
 
   // Engine health interval — only while reachable
   useEffect(() => {
@@ -112,6 +145,85 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
     }
   }, [probeState, reducedMotion]);
 
+  // When igniting becomes reachable, clear ignition state
+  useEffect(() => {
+    if (probeState === "reachable" && launchState === "igniting") {
+      clearIgnitionTimers();
+      setLaunchState("idle");
+    }
+  }, [probeState, launchState, clearIgnitionTimers]);
+
+  const handleStart = useCallback(async () => {
+    setLaunchState("igniting");
+    setLogs([]);
+
+    const path = getAgoraPath();
+
+    try {
+      await agoraStart(path);
+    } catch {
+      // Spawn error — still show igniting for a moment, it may still come up
+    }
+
+    // Poll logs every 2s
+    logIntervalRef.current = setInterval(async () => {
+      try {
+        const lines = await agoraLogs();
+        if (mountedRef.current) setLogs(lines);
+      } catch {
+        // Ignore log fetch errors
+      }
+    }, 2000);
+
+    // Auto-probe every 2s while igniting
+    ignitionIntervalRef.current = setInterval(async () => {
+      const seq = ++probeSeq.current;
+      try {
+        await fetch(agoraUrl, {
+          mode: "no-cors",
+          signal: timeoutSignal(2000),
+        });
+        if (mountedRef.current && seq === probeSeq.current) {
+          clearIgnitionTimers();
+          setProbeState("reachable");
+          setLaunchState("idle");
+        }
+      } catch {
+        // Not reachable yet — keep igniting
+      }
+    }, 2000);
+
+    // 45s timeout → still dark
+    ignitionTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) {
+        clearIgnitionTimers();
+        setLaunchState("still-dark");
+        setProbeState("unreachable");
+      }
+    }, 45_000);
+  }, [agoraUrl, clearIgnitionTimers]);
+
+  const handleStop = useCallback(async () => {
+    clearIgnitionTimers();
+    setLaunchState("idle");
+    try {
+      await agoraStop();
+    } catch {
+      // Ignore stop errors
+    }
+    // Re-probe — will land at unreachable
+    probe();
+  }, [probe, clearIgnitionTimers]);
+
+  const handleRetry = useCallback(() => {
+    setLaunchState("idle");
+    probe();
+  }, [probe]);
+
+  // ── Render helpers ──────────────────────────────────────────────────────────
+
+  const lastThreeLogs = logs.slice(-3);
+
   return (
     <div
       data-testid="agora-deck"
@@ -121,7 +233,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
         pointerEvents: "none",
       }}
     >
-      {probeState === "probing" && (
+      {probeState === "probing" && launchState === "idle" && (
         <div
           data-testid="agora-probing"
           style={{
@@ -148,15 +260,86 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
         </div>
       )}
 
-      {probeState === "unreachable" && (
+      {launchState === "igniting" && (
+        <div
+          data-testid="agora-igniting"
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "center",
+            paddingBottom: "22vh",
+            pointerEvents: "auto",
+          }}
+        >
+          <div
+            style={{
+              background: "var(--glass-raised, rgba(255,255,255,0.06))",
+              border: "1px solid var(--glass-border, rgba(255,255,255,0.1))",
+              boxShadow: "var(--shadow-2, 0 8px 32px rgba(0,0,0,0.4))",
+              borderRadius: 10,
+              padding: "20px 24px",
+              maxWidth: 480,
+              width: "100%",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div
+              style={{
+                fontFamily: "var(--f-mono, monospace)",
+                fontSize: 11,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: "var(--t2, rgba(255,255,255,0.6))",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: "rgba(255,255,255,0.4)",
+                  animation: "pulse 1s ease-in-out infinite",
+                }}
+              />
+              IGNITING THE EXCHANGE
+            </div>
+            {lastThreeLogs.length > 0 && (
+              <div
+                style={{
+                  fontFamily: "var(--f-mono, monospace)",
+                  fontSize: 10,
+                  color: "rgba(255,255,255,0.35)",
+                  lineHeight: 1.6,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                  wordBreak: "break-all",
+                }}
+              >
+                {lastThreeLogs.map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {probeState === "unreachable" && launchState !== "igniting" && (
         <div
           data-testid="agora-offline-card"
           style={{
             position: "absolute",
             inset: 0,
             display: "flex",
-            // Seated in the lower half: the orb band occupies the upper-center
-            // of the viewport and a dead-center card collides with the orb.
             alignItems: "flex-end",
             justifyContent: "center",
             paddingBottom: "22vh",
@@ -196,45 +379,114 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
                 lineHeight: 1.5,
               }}
             >
-              AGORA is not running. Start it:{" "}
-              <span style={{ color: "var(--t3, rgba(255,255,255,0.35))" }}>
-                cd ~/Downloads/AGORA &amp;&amp; npm run dev
-              </span>{" "}
-              — engine, web, and Postgres required.
+              AGORA is not running.
             </div>
-            <button
-              data-testid="agora-retry-btn"
-              onClick={probe}
+            <div
               style={{
-                alignSelf: "flex-start",
-                background: "transparent",
-                border: "1px solid rgba(255,255,255,0.18)",
-                borderRadius: 6,
-                color: "var(--t1, rgba(255,255,255,0.85))",
                 fontFamily: "var(--f-mono, monospace)",
                 fontSize: 11,
-                letterSpacing: "0.12em",
-                textTransform: "uppercase",
-                padding: "6px 12px",
-                cursor: "pointer",
-                transition: "background var(--dur-fast, 120ms) var(--ease-out, ease-out)",
-                pointerEvents: "auto",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.08)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = "transparent";
-              }}
-              onMouseDown={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.12)";
-              }}
-              onMouseUp={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.08)";
+                color: "var(--t3, rgba(255,255,255,0.35))",
+                lineHeight: 1.5,
               }}
             >
-              RETRY
-            </button>
+              Postgres must be running (Postgres.app).
+            </div>
+            {launchState === "still-dark" && (
+              <div
+                style={{
+                  fontFamily: "var(--f-mono, monospace)",
+                  fontSize: 11,
+                  color: "var(--danger, #ef4444)",
+                  letterSpacing: "0.08em",
+                }}
+              >
+                STILL DARK — exchange did not come up in 45s.
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                data-testid="agora-start-btn"
+                onClick={handleStart}
+                style={{
+                  background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  borderRadius: 6,
+                  color: "var(--t1, rgba(255,255,255,0.85))",
+                  fontFamily: "var(--f-mono, monospace)",
+                  fontSize: 11,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  transition: "background var(--dur-fast, 120ms) var(--ease-out, ease-out)",
+                  pointerEvents: "auto",
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.14)";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.08)";
+                }}
+              >
+                START
+              </button>
+              <button
+                data-testid="agora-retry-btn"
+                onClick={handleRetry}
+                style={{
+                  alignSelf: "flex-start",
+                  background: "transparent",
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  borderRadius: 6,
+                  color: "var(--t1, rgba(255,255,255,0.85))",
+                  fontFamily: "var(--f-mono, monospace)",
+                  fontSize: 11,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  transition: "background var(--dur-fast, 120ms) var(--ease-out, ease-out)",
+                  pointerEvents: "auto",
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.08)";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                }}
+                onMouseDown={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.12)";
+                }}
+                onMouseUp={(e) => {
+                  (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.08)";
+                }}
+              >
+                RETRY
+              </button>
+              {launchState === "still-dark" && (
+                <button
+                  data-testid="agora-stop-btn-still-dark"
+                  onClick={handleStop}
+                  style={{
+                    alignSelf: "flex-start",
+                    background: "transparent",
+                    border: "1px solid rgba(239,68,68,0.4)",
+                    borderRadius: 6,
+                    color: "var(--danger, #ef4444)",
+                    fontFamily: "var(--f-mono, monospace)",
+                    fontSize: 11,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                    padding: "6px 12px",
+                    cursor: "pointer",
+                    transition: "background var(--dur-fast, 120ms) var(--ease-out, ease-out)",
+                    pointerEvents: "auto",
+                  }}
+                >
+                  STOP
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -250,7 +502,8 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
               zIndex: 2,
               display: "flex",
               gap: 4,
-              pointerEvents: "none",
+              alignItems: "center",
+              pointerEvents: "auto",
             }}
           >
             {/* WEB chip */}
@@ -266,6 +519,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
                 gap: 4,
                 backdropFilter: "blur(8px)",
                 WebkitBackdropFilter: "blur(8px)",
+                pointerEvents: "none",
               }}
             >
               <div style={{ width: 6, height: 6, borderRadius: 999, background: "#4ade80", flexShrink: 0 }} />
@@ -284,6 +538,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
                 gap: 4,
                 backdropFilter: "blur(8px)",
                 WebkitBackdropFilter: "blur(8px)",
+                pointerEvents: "none",
               }}
             >
               <div
@@ -303,6 +558,38 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
               />
               <span style={{ fontFamily: "var(--f-mono, monospace)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--t2, rgba(255,255,255,0.6))" }}>ENGINE</span>
             </div>
+            {/* STOP chip */}
+            <button
+              data-testid="agora-stop-btn"
+              onClick={handleStop}
+              title="Stop AGORA"
+              style={{
+                background: "var(--glass, rgba(255,255,255,0.05))",
+                border: "1px solid var(--glass-border, rgba(255,255,255,0.1))",
+                borderRadius: 999,
+                padding: "2px 10px",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+                cursor: "pointer",
+                fontFamily: "var(--f-mono, monospace)",
+                fontSize: 9,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: "var(--t2, rgba(255,255,255,0.6))",
+                transition: "background var(--dur-fast, 120ms) var(--ease-out, ease-out)",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.1)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = "var(--glass, rgba(255,255,255,0.05))";
+              }}
+            >
+              STOP
+            </button>
           </div>
           <iframe
             src={agoraUrl}
