@@ -21,6 +21,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useReducedMotion } from "framer-motion";
 import { getSetting } from "../../lib/voice/settings";
+import { timeoutSignal } from "../../lib/util/timeoutSignal";
 
 interface AgoraDeckProps {
   interact: boolean;
@@ -41,6 +42,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
   const reducedMotion = useReducedMotion() ?? false;
   const [opacity, setOpacity] = useState(reducedMotion ? 1 : 0);
   const [probeState, setProbeState] = useState<ProbeState>("probing");
+  const [engineHealth, setEngineHealth] = useState<"probing" | "healthy" | "down">("probing");
   const agoraUrl = getAgoraUrl();
 
   // Monotonic probe id: a settled probe only writes state if it is still the
@@ -56,13 +58,23 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
       // no-cors: response will be opaque (type "opaque") but no error = reachable.
       await fetch(agoraUrl, {
         mode: "no-cors",
-        signal: AbortSignal.timeout(2000),
+        signal: timeoutSignal(2000),
       });
       if (mountedRef.current && seq === probeSeq.current) setProbeState("reachable");
     } catch {
       if (mountedRef.current && seq === probeSeq.current) setProbeState("unreachable");
     }
   }, [agoraUrl]);
+
+  const probeEngine = useCallback(async () => {
+    try {
+      const res = await fetch("http://localhost:8080/health", { signal: timeoutSignal(2000) });
+      const json = await res.json();
+      if (mountedRef.current) setEngineHealth(json.ok === true ? "healthy" : "down");
+    } catch {
+      if (mountedRef.current) setEngineHealth("down");
+    }
+  }, []);
 
   // Probe on mount (and re-probe when deck re-activates via key change)
   useEffect(() => {
@@ -72,6 +84,19 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
       mountedRef.current = false;
     };
   }, [probe]);
+
+  // Engine health interval — only while reachable
+  useEffect(() => {
+    if (probeState !== "reachable") return;
+    probeEngine();
+    const id = setInterval(probeEngine, 60_000);
+    return () => clearInterval(id);
+  }, [probeState, probeEngine]);
+
+  // Reset engine health when leaving reachable
+  useEffect(() => {
+    if (probeState !== "reachable") setEngineHealth("probing");
+  }, [probeState]);
 
   // Fade entrance
   useEffect(() => {
@@ -215,22 +240,87 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
       )}
 
       {probeState === "reachable" && (
-        <iframe
-          src={agoraUrl}
-          sandbox="allow-scripts allow-same-origin allow-forms"
-          title="AGORA Exchange"
-          data-testid="agora-deck-iframe"
-          style={{
-            width: "100%",
-            height: "100%",
-            border: "none",
-            display: "block",
-            opacity: reducedMotion ? 1 : opacity,
-            transition: reducedMotion ? "none" : "opacity 400ms ease",
-            pointerEvents: interact ? "auto" : "none",
-            transform: "translateZ(0)",
-          }}
-        />
+        <>
+          <div
+            data-testid="agora-health-strip"
+            style={{
+              position: "absolute",
+              top: 8,
+              right: 12,
+              zIndex: 2,
+              display: "flex",
+              gap: 4,
+              pointerEvents: "none",
+            }}
+          >
+            {/* WEB chip */}
+            <div
+              data-testid="agora-health-web"
+              style={{
+                background: "var(--glass, rgba(255,255,255,0.05))",
+                border: "1px solid var(--glass-border, rgba(255,255,255,0.1))",
+                borderRadius: 999,
+                padding: "2px 8px 2px 6px",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+              }}
+            >
+              <div style={{ width: 6, height: 6, borderRadius: 999, background: "#4ade80", flexShrink: 0 }} />
+              <span style={{ fontFamily: "var(--f-mono, monospace)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--t2, rgba(255,255,255,0.6))" }}>WEB</span>
+            </div>
+            {/* ENGINE chip */}
+            <div
+              data-testid="agora-health-engine"
+              style={{
+                background: "var(--glass, rgba(255,255,255,0.05))",
+                border: "1px solid var(--glass-border, rgba(255,255,255,0.1))",
+                borderRadius: 999,
+                padding: "2px 8px 2px 6px",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+              }}
+            >
+              <div
+                data-health={engineHealth}
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 999,
+                  background:
+                    engineHealth === "healthy"
+                      ? "#4ade80"
+                      : engineHealth === "down"
+                      ? "var(--danger, #ef4444)"
+                      : "rgba(255,255,255,0.2)",
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ fontFamily: "var(--f-mono, monospace)", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--t2, rgba(255,255,255,0.6))" }}>ENGINE</span>
+            </div>
+          </div>
+          <iframe
+            src={agoraUrl}
+            sandbox="allow-scripts allow-same-origin allow-forms"
+            title="AGORA Exchange"
+            data-testid="agora-deck-iframe"
+            style={{
+              width: "100%",
+              height: "100%",
+              border: "none",
+              display: "block",
+              opacity: reducedMotion ? 1 : opacity,
+              transition: reducedMotion ? "none" : "opacity 400ms ease",
+              pointerEvents: interact ? "auto" : "none",
+              transform: "translateZ(0)",
+            }}
+          />
+        </>
       )}
     </div>
   );

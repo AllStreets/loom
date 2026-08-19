@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AgoraDeck from "./AgoraDeck";
 
@@ -177,5 +177,174 @@ describe("AgoraDeck — RETRY button re-probes", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe("AgoraDeck — health strip renders when reachable", () => {
+  it("health strip is present when reachable", async () => {
+    // web probe resolves; engine probe will be called after
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    );
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-health-strip")).not.toBeNull();
+    });
+  });
+
+  it("WEB chip is present when reachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    );
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-health-web")).not.toBeNull();
+    });
+  });
+
+  it("ENGINE chip is present when reachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    );
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-health-engine")).not.toBeNull();
+    });
+  });
+
+  it("health strip is NOT present when unreachable", async () => {
+    vi.stubGlobal("fetch", makeRejectingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-offline-card")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("agora-health-strip")).toBeNull();
+  });
+});
+
+describe("AgoraDeck — engine health probe (HTTP /health)", () => {
+  it("engine dot shows healthy when engine returns ok:true", async () => {
+    // Both the web probe and engine probe resolve with ok:true
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    );
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      const dot = screen.getByTestId("agora-health-engine").querySelector("[data-health]");
+      expect(dot?.getAttribute("data-health")).toBe("healthy");
+    });
+  });
+
+  it("engine dot shows down when engine fetch rejects", async () => {
+    // Web probe (localhost:3000) resolves; engine probe (localhost:8080) rejects
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (typeof url === "string" && url.includes("8080")) {
+          return Promise.reject(new Error("ECONNREFUSED"));
+        }
+        return Promise.resolve(new Response(null, { status: 200 }));
+      })
+    );
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      const dot = screen.getByTestId("agora-health-engine").querySelector("[data-health]");
+      expect(dot?.getAttribute("data-health")).toBe("down");
+    });
+  });
+
+  it("engine dot shows down when engine returns ok:false", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (typeof url === "string" && url.includes("8080")) {
+          return Promise.resolve(new Response(JSON.stringify({ ok: false }), { status: 200 }));
+        }
+        return Promise.resolve(new Response(null, { status: 200 }));
+      })
+    );
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      const dot = screen.getByTestId("agora-health-engine").querySelector("[data-health]");
+      expect(dot?.getAttribute("data-health")).toBe("down");
+    });
+  });
+});
+
+describe("AgoraDeck — engine interval lifecycle", () => {
+  it("re-probes engine after 60s", async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => {
+      render(<AgoraDeck interact={true} />);
+    });
+
+    // Wait for web probe + initial engine probe to settle
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const callsBefore = fetchMock.mock.calls.length;
+
+    // Advance 60s to trigger the interval
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
+
+    vi.useRealTimers();
+  });
+
+  it("clears engine interval on unmount", async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let unmount!: () => void;
+    await act(async () => {
+      ({ unmount } = render(<AgoraDeck interact={true} />));
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => { unmount(); });
+
+    const callsAfterUnmount = fetchMock.mock.calls.length;
+
+    // Advance well past 60s; no additional calls should fire
+    await act(async () => {
+      vi.advanceTimersByTime(120_000);
+      await Promise.resolve();
+    });
+
+    expect(fetchMock.mock.calls.length).toBe(callsAfterUnmount);
+
+    vi.useRealTimers();
   });
 });

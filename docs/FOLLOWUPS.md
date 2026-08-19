@@ -112,17 +112,24 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Error hardening — LOOM-voice failure copy; no raw error strings; error boundaries on watch panel, organ windows, deck layer.
 - Terminal deck — live tape / index hero cards / movers / macro strip / finance wire. Lifecycle-driven poller (no background burn). Yahoo `/v8/chart` direct in Tauri; corsproxy.io in browser dev mode only.
 
-### Stage-5 backlog (post-Stage-4b)
-- **LOOM-owned quote proxy** — kill the corsproxy.io dependency. Run a tiny Rust/Axum sidecar in the Tauri process that proxies Yahoo `/v8/chart` for the webview (no external relay, no CORS). Blocked on: deciding whether it lives in `src-tauri/src/` or as a named Tauri plugin. (`src-tauri/src/`, `src/lib/terminal/quotes.ts` `quoteUrl()`)
-- **Globe fly-to on briefing** — when the cockpit speaks a salience item with lat/lng, auto-fly the globe to that location. Requires a new bridge command `fly_to {lat, lng}` in the deck protocol. (`src/lib/decks/commands.ts`, `public/decks/auspex/js/main.js`)
-- **Learned salience model** — replace the hand-tuned factor weights with a small learned model seeded by engagement history. Fits in the `scoreEvent` pure-function seam. (`src/lib/watch/score.ts`)
-- **AGORA engine health strip** — when the AGORA deck is live and reachable, show a small status strip (engine ws, Postgres) pulled from AGORA's health endpoint. Design the strip in the AGORA offline card area so it appears on reconnect without layout shift.
-- **EMBER Forge-in-deck story** — Forge (File System Access API) is unavailable inside a sandboxed iframe. Design a path: either a Tauri command bridge that proxies file reads/writes for EMBER's Forge loop, or a companion read-file/write-file postMessage protocol scoped to the organs directory.
-- **AGORA iframe live-state screenshot unverified** — the offline card acceptance state is tested and screenshot-gated; live iframe state (AGORA running) was not captured during 4b because Postgres/engine were not started. Verify and screenshot in a follow-up session.
-- **AbortSignal.timeout wkwebview fallback** — `AbortSignal.timeout()` is used for AGORA reachability probes; wkwebview (Tauri macOS) may not support it on older OS targets. Add a `setTimeout`/`AbortController` polyfill path in the probe if support gaps surface. (`src/components/decks/AgoraDeck.tsx`)
-- **Paint discipline audit clean 2026-08-18** — all LOOM-owned painters above deck z2 verified event-driven or void-only: cursor spotlight suppressed when `deck !== "void"`; listening ring rAF runs only while `voice.state === "listening"`; Constellation (z8) uses one-shot SMIL packets on events, no rAF loop; Field canvas (z1) is below decks. No continuous per-frame painters above z2 while a deck is active.
-- **Mid-Earth chat overlay polish for narrow heights** — the companion chat panel renders over the deck at a fixed vertical position that compresses it on short viewports. A min-height / scroll-container pass is needed for 768px and below. (`src/components/Companion.tsx`, `src/components/Shell.tsx`)
-- **Threads / Desktop error boundaries** — `Threads.tsx` and the organ window host do not yet have React error boundaries. A throw in a thread animation or an organ window crashes more than it should. Add boundaries with LOOM-voice failure copy consistent with the Stage-3 hardening pass. (`src/components/ambient/Threads.tsx`, `src/components/desktop/`)
+### Stage-6 backlog (post-Stage-5)
+
+- **EMBER Forge-in-deck** — Forge (File System Access API) is unavailable inside a sandboxed iframe. Path options: Tauri command bridge proxying file reads/writes for EMBER's loop, or a companion read-file/write-file postMessage protocol scoped to the organs directory.
+- **AGORA command bridge** — AGORA currently docks as a passive iframe. Add a postMessage command channel so LOOM can send orders (route, focus market, trigger agent action) and receive live state back.
+- **Learned-weights inspection UI** — the salience engine persists per-feature weights in localStorage; there is no UI surface for inspecting or resetting them. A minimal panel (token/category/source weight table + reset button) would close the transparency gap.
+- **LoRA fine-tune bridge** — a lightweight path for the owner to fine-tune a local model on engagement history without leaving the cockpit. Depends on learned-weights inspection and the Ollama LoRA import path.
+- **Salience place-field** — track lat/lng engagement signals and build a geographic affinity map; use it to weight fly-to suggestions and boost geographically relevant Watch items.
+- **AGORA iframe live-state screenshot unverified** — the offline card is tested and screenshot-gated; the live iframe state (AGORA running) was not captured during 4b because Postgres/engine were not started. Verify and screenshot in a follow-up session.
+- **AbortSignal.timeout wkwebview fallback** — `AbortSignal.timeout()` may not be available on older macOS wkwebview targets. The `timeoutSignal()` helper already polyfills this; monitor for gaps. (`src/lib/util/timeoutSignal.ts`)
+- **Mid-Earth chat overlay polish for narrow heights** — companion chat panel compresses on short viewports; needs a min-height / scroll-container pass for 768px and below. (`src/components/Companion.tsx`, `src/components/Shell.tsx`)
+
+### Resolved in Stage 5 (Deepening, Phase 14)
+- LOOM-owned Rust quote proxy — `quote_fetch` Tauri command (reqwest, symbol validation, 10s timeout); desktop never touches corsproxy; browser dev path unchanged. (`src-tauri/src/quotes.rs`, `src/lib/terminal/quotes.ts`, `src/lib/core.ts`)
+- Globe fly-to — `fly_to {lat, lng, altitude?}` verb in the LOOM-owned adapter; WatchPanel locate action (deck switch + fly-to + engagement); briefing handler emits fly-to when globe is active and top item has coords. (`public/decks/auspex/loom-adapter.js`, `src/components/WatchPanel.tsx`, `src/lib/companion/runtime.ts`)
+- Learned salience — transparent per-feature weight table (category / source / token); online update from engagement signals (recompute-from-signals on poll = stateless + auditable); weights clamped [-0.5, +0.5], persisted in `loom.watch.v1`; reasons emitted with human phrasing. (`src/lib/watch/learned.ts`, `src/lib/watch/score.ts`)
+- AGORA engine health strip — WEB and ENGINE glass chips (mono 9px, dot #4ade80 healthy / --danger down); ENGINE probed via HTTP `GET /health` (AGORA engine exposes this at `:8080/health`); re-probed on 60s interval while deck mounted and reachable; interval cleaned on unmount. (`src/components/decks/AgoraDeck.tsx`)
+- Threads / Desktop error boundaries — Shell wraps both overlay components in ErrorBoundary zones ("threads", "desktop"); fallbacks render inline (not position:absolute) which is intentional — the fallback card is clickable without needing pointer-events override. (`src/components/Shell.tsx`)
+- installSeeds failure logging — non-ShellUnavailableError failures now re-warn via `console.warn`; ShellUnavailableError keeps `console.debug`. (`src/organs/seeds/install.ts`)
 
 ### Resolved in Stage 4a (Ownership, Phase 12)
 - Organ deletion with full residue cleanup (git files, storage keys, registry, dock).
@@ -141,3 +148,7 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Deckserve generalized — `src-tauri/src/deckserve.rs` now resolves any `deck://localhost/<deckname>/` path from `public/decks/<deckname>/`; auspex and ember paths both tested.
 - Five-deck plumbing — DeckId union, DeckLayer, Shell SegBtns, commands.ts CAT_RE precedence, few-shot examples all updated and regression-tested.
 - Settings gains a Decks section — AGORA URL field (localhost/127.0.0.1 only; remote URLs rejected).
+
+## Stage-5 final-review notes (2026-08-18)
+- Engagement double-influence: score factor 5 (applyEngagement) and factor 6 (learnedBoost) both derive from the same signals on source/category — bounded (0.15 cap + clamps + final [0,1]) and acceptable; unify when the learned model matures.
+- AGORA engine health probes hardcoded localhost:8080 while the web URL is configurable — derive engine host from deck.agora.url when engine port config lands.

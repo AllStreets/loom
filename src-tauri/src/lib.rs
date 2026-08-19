@@ -5,6 +5,7 @@ mod timeline;
 mod organs;
 mod voice;
 mod cloud;
+mod quotes;
 pub mod deckserve;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -21,7 +22,7 @@ pub fn run() {
         // globe on its own origin in production.
         // macOS/Linux origin: deck://localhost  (closes Stage-1 reviewer I3)
         .register_uri_scheme_protocol("deck", deckserve::handler)
-        .invoke_handler(tauri::generate_handler![greet, fleet::fleet_status, fleet::fleet_chat, timeline::timeline_init, timeline::timeline_commit, timeline::timeline_log, timeline::timeline_rollback, organs::organ_write, organs::organ_list, organs::organ_read, organs::organ_grant, organs::organ_delete, voice::voice_status, voice::voice_setup, voice::stt_transcribe, voice::tts_speak, cloud::cloud_chat, cloud::cloud_key_set, cloud::cloud_key_present, cloud::cloud_key_clear])
+        .invoke_handler(tauri::generate_handler![greet, fleet::fleet_status, fleet::fleet_chat, timeline::timeline_init, timeline::timeline_commit, timeline::timeline_log, timeline::timeline_rollback, organs::organ_write, organs::organ_list, organs::organ_read, organs::organ_grant, organs::organ_delete, voice::voice_status, voice::voice_setup, voice::stt_transcribe, voice::tts_speak, cloud::cloud_chat, cloud::cloud_key_set, cloud::cloud_key_present, cloud::cloud_key_clear, quotes::quote_fetch])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

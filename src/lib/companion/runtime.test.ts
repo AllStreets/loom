@@ -154,3 +154,71 @@ describe("handle — briefing routes without model call", () => {
     expect(turn.text).toBe("The watch is quiet. Nothing crosses your thresholds.");
   });
 });
+
+// ── briefing fly_to ───────────────────────────────────────────────────────────
+
+describe("handle — briefing fly_to steering", () => {
+  const tokyoEvent: ScoredEvent = {
+    id: "e-tokyo",
+    title: "Earthquake near Tokyo",
+    source: "USGS",
+    category: "seismic",
+    publishedAt: new Date().toISOString(),
+    score: 0.95,
+    reasons: ["M6.8"],
+    lat: 35.68,
+    lng: 139.69,
+  };
+
+  it("fires fly_to when globe active and top item has coords", async () => {
+    const mockSendDeckCommands = vi.fn();
+    const deps = makeDeps({
+      currentDeck: () => "globe",
+      getSalient: (_k: number) => [tokyoEvent],
+      sendDeckCommands: mockSendDeckCommands,
+    });
+    await handle("brief me", [], deps);
+    expect(mockSendDeckCommands).toHaveBeenCalledWith([
+      { type: "fly_to", lat: 35.68, lng: 139.69 },
+    ]);
+  });
+
+  it("skips fly_to when globe NOT active", async () => {
+    const mockSendDeckCommands = vi.fn();
+    const deps = makeDeps({
+      currentDeck: () => "void",
+      getSalient: (_k: number) => [tokyoEvent],
+      sendDeckCommands: mockSendDeckCommands,
+    });
+    await handle("brief me", [], deps);
+    expect(mockSendDeckCommands).not.toHaveBeenCalled();
+  });
+
+  it("skips fly_to when no item has coords", async () => {
+    const mockSendDeckCommands = vi.fn();
+    const deps = makeDeps({
+      currentDeck: () => "globe",
+      getSalient: (_k: number) => [
+        { id: "e1", title: "Market news", source: "Reuters", category: "finance", publishedAt: new Date().toISOString(), score: 0.8, reasons: [] },
+      ],
+      sendDeckCommands: mockSendDeckCommands,
+    });
+    await handle("brief me", [], deps);
+    expect(mockSendDeckCommands).not.toHaveBeenCalled();
+  });
+
+  it("uses first located item coords even if not the highest scored", async () => {
+    const mockSendDeckCommands = vi.fn();
+    const noCoords: ScoredEvent = { id: "e-nc", title: "No coords", source: "Reuters", category: "finance", publishedAt: new Date().toISOString(), score: 1.0, reasons: [] };
+    const withCoords: ScoredEvent = { ...tokyoEvent, id: "e-c", score: 0.7 };
+    const deps = makeDeps({
+      currentDeck: () => "globe",
+      getSalient: (_k: number) => [noCoords, withCoords],
+      sendDeckCommands: mockSendDeckCommands,
+    });
+    await handle("brief me", [], deps);
+    expect(mockSendDeckCommands).toHaveBeenCalledWith([
+      { type: "fly_to", lat: 35.68, lng: 139.69 },
+    ]);
+  });
+});

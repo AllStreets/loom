@@ -15,6 +15,8 @@ export type CompanionDeps = {
   currentDeck?: () => "void" | "globe" | "terminal";
   /** Returns the top-k salient events for the briefing fast path */
   getSalient?: (k: number) => ScoredEvent[];
+  /** Send bridge commands to the globe deck (fly_to steering from briefings) */
+  sendDeckCommands?: (cmds: import("../decks/commands").BridgeCmd[]) => void;
 };
 
 export type CompanionTurn =
@@ -46,6 +48,17 @@ export async function handle(
           ? `${item.title} — ${item.reasons[0]}.`
           : `${item.title}.`
       );
+      // Steer the globe when active and top item has coords
+      if (
+        deps.sendDeckCommands &&
+        deps.currentDeck &&
+        deps.currentDeck() === "globe"
+      ) {
+        const located = items.find((item) => typeof item.lat === "number" && typeof item.lng === "number");
+        if (located) {
+          deps.sendDeckCommands([{ type: "fly_to", lat: located.lat!, lng: located.lng! }]);
+        }
+      }
       return { kind: "briefing", text: "Top of the watch: " + sentences.join(" ") };
     }
 

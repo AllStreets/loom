@@ -552,6 +552,8 @@ function initGlobe() {
     .pointsData([]).pointLat('lat').pointLng('lng').pointAltitude(0.025).pointRadius(0.55).pointColor(()=>'rgba(0,0,0,0)')
     (document.getElementById('globe-wrap'));
 
+  window._auspexGlobe = G; // <!-- LOOM --> fly_to access
+
   // Default view — Eurasian supercontinent
   G.pointOfView({ lat: 48, lng: 68, altitude: 1.8 });
 

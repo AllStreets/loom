@@ -784,6 +784,7 @@ export default function Companion() {
       // auto-switch from void → globe when needed.
       currentDeck: () => getSetting("cockpit.deck") as "void" | "globe" | "terminal",
       getSalient: (k: number) => getSalient(k),
+      sendDeckCommands: (cmds: import("../lib/decks/commands").BridgeCmd[]) => sendDeckCommands(cmds),
     };
 
     let turn: CompanionTurn;

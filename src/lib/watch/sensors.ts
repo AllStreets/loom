@@ -10,6 +10,7 @@
  */
 
 import type { WatchEvent } from "./types";
+import { timeoutSignal } from "../util/timeoutSignal";
 
 // AUSPEX's public Supabase instance (publishable, RLS-protected anon key —
 // the same one AUSPEX ships to every browser and AgentZeus already reads).
@@ -110,7 +111,7 @@ export async function fetchAuspexStories(limit = 50): Promise<WatchEvent[]> {
         Authorization: `Bearer ${AUSPEX_SUPA_KEY}`,
       },
       cache: "no-store",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: timeoutSignal(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const rows: AuspexStoryRow[] = await res.json();
@@ -161,7 +162,7 @@ export async function fetchQuakes(minMag = 4.5): Promise<WatchEvent[]> {
   try {
     const res = await fetch(USGS_ALL_DAY_URL, {
       cache: "no-store",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: timeoutSignal(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: UsgsGeoJson = await res.json();

@@ -39,6 +39,8 @@ rsync -av --delete \
   --exclude='package-lock.json' \
   --exclude='vercel.json' \
   --exclude='keys.local.js' \
+  --exclude='vitest.config.js' \
+  --exclude='.gitignore' \
   "$SRC/" "$DEST/"
 
 # -- 3. Restore LOOM-patched files (never clobber with upstream versions) ------
@@ -50,3 +52,23 @@ done
 cp "$DEST/js/keys.local.empty.js" "$DEST/js/keys.local.js"
 
 echo "[refresh-auspex-deck] Done. Bundle at $DEST"
+
+# Re-apply the LOOM fly_to handle to the freshly-synced globe.js: the adapter's
+# fly_to verb reads window._auspexGlobe, and upstream globe.js keeps G module-
+# scoped. Anchored on the globe-wrap mount call inside initGlobe().
+GLOBE_JS="$DEST/js/globe.js"
+if ! grep -q "_auspexGlobe" "$GLOBE_JS"; then
+  python3 - "$GLOBE_JS" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = "(document.getElementById('globe-wrap'));"
+if anchor not in s:
+    sys.exit("LOOM patch anchor not found in globe.js — upstream changed; re-anchor the fly_to handle manually")
+s = s.replace(anchor, anchor + "\n\n  window._auspexGlobe = G; // <!-- LOOM --> fly_to access", 1)
+open(p, "w").write(s)
+print("LOOM fly_to handle re-applied to globe.js")
+PYEOF
+fi
+
+echo 'refresh complete'

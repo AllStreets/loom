@@ -1,7 +1,18 @@
 /**
- * quotes.test.ts — normalization, poll lifecycle, stale path, no-poll-when-inactive.
+ * quotes.test.ts — normalization, poll lifecycle, stale path, no-poll-when-inactive,
+ * and Tauri routing (fetchAllQuotesTauri path).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// Mock core so quoteFetch (the Rust IPC wrapper) can be controlled in tests.
+const mockQuoteFetch = vi.fn<[string[]], Promise<string>>();
+vi.mock("../core", () => ({
+  quoteFetch: (...args: unknown[]) => mockQuoteFetch(...(args as [string[]])),
+  ShellUnavailableError: class ShellUnavailableError extends Error {
+    constructor() { super("This surface needs the desktop shell."); this.name = "ShellUnavailableError"; }
+  },
+}));
+
 import {
   normalizeQuote,
   fetchQuote,
@@ -15,6 +26,26 @@ import {
   SYMBOL_LABELS,
   _resetQuotesForTests,
 } from "./quotes";
+
+// inTauri() now mirrors safeInvoke (checks __TAURI_INTERNALS__ too, which
+// test-setup.ts injects globally) — browser-path tests must strip BOTH.
+function withNoTauri<T>(fn: () => T): T {
+  const restore = stripTauriGlobals();
+  try { return fn(); } finally { restore(); }
+}
+
+/** Strip both Tauri globals; returns a restore fn. For async suites use in
+ *  beforeEach/afterEach so restoration happens after awaited work. */
+function stripTauriGlobals(): () => void {
+  const w = window as unknown as { __TAURI__?: object; __TAURI_INTERNALS__?: object };
+  const t = w.__TAURI__; const ti = w.__TAURI_INTERNALS__;
+  delete w.__TAURI__; delete w.__TAURI_INTERNALS__;
+  return () => {
+    if (t !== undefined) w.__TAURI__ = t;
+    if (ti !== undefined) w.__TAURI_INTERNALS__ = ti;
+  };
+}
+
 
 // A minimal well-formed Yahoo /v8/chart body.
 function chartBody(opts: {
@@ -141,16 +172,19 @@ describe("fetchQuote", () => {
 
 describe("quoteUrl", () => {
   it("routes through a keyless CORS proxy in the browser (no __TAURI__)", () => {
-    // jsdom has no window.__TAURI__ → proxy path.
-    const u = quoteUrl("SPY");
-    expect(u).toContain("corsproxy.io");
-    expect(u).toContain(encodeURIComponent("query1.finance.yahoo.com"));
-    expect(u).toContain(encodeURIComponent("SPY"));
+    withNoTauri(() => {
+      const u = quoteUrl("SPY");
+      expect(u).toContain("corsproxy.io");
+      expect(u).toContain(encodeURIComponent("query1.finance.yahoo.com"));
+      expect(u).toContain(encodeURIComponent("SPY"));
+    });
   });
 
   it("encodes special-char symbols safely (nested-encoded through the proxy)", () => {
     // '=' → %3D (inner symbol encode) → %253D (outer proxy-url encode).
-    expect(quoteUrl("GC=F")).toContain("GC%253DF");
+    withNoTauri(() => {
+      expect(quoteUrl("GC=F")).toContain("GC%253DF");
+    });
   });
 
   it("hits Yahoo directly inside the Tauri webview", () => {
@@ -166,7 +200,10 @@ describe("quoteUrl", () => {
 });
 
 describe("fetchAllQuotes", () => {
-  afterEach(() => vi.restoreAllMocks());
+  // These exercise the BROWSER fetch chain — strip Tauri globals per test.
+  let restoreTauri: () => void;
+  beforeEach(() => { restoreTauri = stripTauriGlobals(); });
+  afterEach(() => { restoreTauri(); vi.restoreAllMocks(); });
   it("drops failed symbols but returns the rest", async () => {
     let call = 0;
     vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => {
@@ -181,6 +218,9 @@ describe("fetchAllQuotes", () => {
 });
 
 describe("poll runtime", () => {
+  let restoreTauriPR: () => void;
+  beforeEach(() => { restoreTauriPR = stripTauriGlobals(); });
+  afterEach(() => { restoreTauriPR(); });
   beforeEach(() => {
     _resetQuotesForTests();
     vi.useFakeTimers();
@@ -299,5 +339,64 @@ describe("poll runtime", () => {
 
     // Restore document.hidden to false for subsequent tests.
     Object.defineProperty(document, "hidden", { value: false, configurable: true, writable: true });
+  });
+});
+
+// ── Tauri routing path (fetchAllQuotesTauri) ──────────────────────────────────
+describe("fetchAllQuotes — Tauri path (LOOM's Rust proxy)", () => {
+  beforeEach(() => {
+    mockQuoteFetch.mockReset();
+    // Set __TAURI__ so inTauri() returns true
+    (window as unknown as { __TAURI__?: object }).__TAURI__ = {};
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { __TAURI__?: object }).__TAURI__;
+    vi.restoreAllMocks();
+  });
+
+  it("routes through quoteFetch (invoke) when Tauri is present, not browser fetch", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const raw = JSON.stringify(SYMBOLS.map((s) => ({ symbol: s, body: chartBody({ price: 100, prevClose: 99 }) })));
+    mockQuoteFetch.mockResolvedValue(raw);
+    const quotes = await fetchAllQuotes();
+    expect(mockQuoteFetch).toHaveBeenCalledWith([...SYMBOLS]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(quotes.length).toBe(SYMBOLS.length);
+  });
+
+  it("normalizes the Rust array shape through the existing normalizer", async () => {
+    const body = chartBody({ price: 450, prevClose: 440, shortName: "S&P 500" });
+    const raw = JSON.stringify([{ symbol: "SPY", body }]);
+    mockQuoteFetch.mockResolvedValue(raw);
+    const quotes = await fetchAllQuotes();
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0].symbol).toBe("SPY");
+    expect(quotes[0].price).toBe(450);
+    expect(quotes[0].name).toBe("S&P 500");
+  });
+
+  it("null body entries are dropped (partial success — individual fetch failures)", async () => {
+    const raw = JSON.stringify([
+      { symbol: "SPY", body: chartBody({ price: 450, prevClose: 440 }) },
+      { symbol: "^VIX", body: null },
+    ]);
+    mockQuoteFetch.mockResolvedValue(raw);
+    const quotes = await fetchAllQuotes();
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0].symbol).toBe("SPY");
+  });
+
+  it("returns empty array on quoteFetch rejection (never throws)", async () => {
+    mockQuoteFetch.mockRejectedValue(new Error("IPC error"));
+    const quotes = await fetchAllQuotes();
+    expect(quotes).toEqual([]);
+  });
+
+  it("returns empty array on malformed JSON from quoteFetch", async () => {
+    mockQuoteFetch.mockResolvedValue("not-json");
+    const quotes = await fetchAllQuotes();
+    expect(quotes).toEqual([]);
   });
 });

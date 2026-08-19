@@ -31,13 +31,15 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { ScoredEvent } from "../lib/watch/types";
 import type { WatchlistEntry } from "../lib/watch/store";
 import { getSalient } from "../lib/watch/runtime";
+import { tokenize } from "../lib/watch/learned";
 import {
   recordEngagement,
   addWatchlistEntry,
   removeWatchlistEntry,
   getWatchlist,
 } from "../lib/watch/store";
-import { IconX, IconPlus, IconCopy, IconChevron, IconWatch } from "./chrome/icons";
+import { IconX, IconPlus, IconCopy, IconChevron, IconWatch, IconLocate } from "./chrome/icons";
+import { sendDeckCommands } from "./decks/GlobeDeck";
 
 // ── Style-injection: hover reveals, thin scrollbar, live-dot pulse ──────────────
 
@@ -105,6 +107,13 @@ function ensureStyles() {
 
 // ── Time formatting ────────────────────────────────────────────────────────────
 
+
+// Feature snapshot at signal-write time — without this the learner has nothing
+// to learn from (old signals lacking features are skipped by computeWeights).
+function engagementFeatures(item: { category: string; source: string; title: string }) {
+  return { category: item.category, source: item.source, titleTokens: tokenize(item.title) };
+}
+
 function relAge(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 60_000) return "<1m";
@@ -135,13 +144,14 @@ interface RowProps {
   item: ScoredEvent;
   onDismiss: (id: string) => void;
   onWatchPlus: (item: ScoredEvent) => void;
+  onLocate: (item: ScoredEvent) => void;
 }
 
-function WatchRow({ item, onDismiss, onWatchPlus }: RowProps) {
+function WatchRow({ item, onDismiss, onWatchPlus, onLocate }: RowProps) {
   const [expanded, setExpanded] = useState(false);
 
   function handleOpen() {
-    recordEngagement({ eventKey: item.id, action: "open", ts: Date.now() });
+    recordEngagement({ eventKey: item.id, action: "open", ts: Date.now(), ...engagementFeatures(item) });
     if (item.url) {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         navigator.clipboard.writeText(item.url).catch(() => {});
@@ -150,12 +160,16 @@ function WatchRow({ item, onDismiss, onWatchPlus }: RowProps) {
   }
 
   function handleDismiss() {
-    recordEngagement({ eventKey: item.id, action: "dismiss", ts: Date.now() });
+    recordEngagement({ eventKey: item.id, action: "dismiss", ts: Date.now(), ...engagementFeatures(item) });
     onDismiss(item.id);
   }
 
   function handleWatchPlus() {
     onWatchPlus(item);
+  }
+
+  function handleLocate() {
+    onLocate(item);
   }
 
   const scoreBarPct = Math.round(item.score * 100);
@@ -200,6 +214,17 @@ function WatchRow({ item, onDismiss, onWatchPlus }: RowProps) {
           className="loom-row-actions"
           style={{ display: "flex", gap: 2, flexShrink: 0, marginTop: -2 }}
         >
+          {typeof item.lat === "number" && typeof item.lng === "number" && (
+            <button
+              data-testid="watch-locate-btn"
+              onClick={handleLocate}
+              title="Locate on globe"
+              aria-label="Locate on globe"
+              className="loom-icon-btn is-accent"
+            >
+              <IconLocate size={13} strokeWidth={1.75} />
+            </button>
+          )}
           {item.url && (
             <button
               data-testid="watch-open-btn"
@@ -606,10 +631,16 @@ export default function WatchPanel({ open, onClose }: Props) {
   }, []);
 
   const handleWatchPlus = useCallback((item: ScoredEvent) => {
-    recordEngagement({ eventKey: item.id, action: "act", ts: Date.now() });
+    recordEngagement({ eventKey: item.id, action: "act", ts: Date.now(), ...engagementFeatures(item) });
     // Extract a topic from the title (first 3 words)
     const topic = item.title.split(/\s+/).slice(0, 3).join(" ");
     addWatchlistEntry({ kind: "topic", value: topic });
+  }, []);
+
+  const handleLocate = useCallback((item: ScoredEvent) => {
+    recordEngagement({ eventKey: item.id, action: "act", ts: Date.now(), ...engagementFeatures(item) });
+    window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "globe" } }));
+    sendDeckCommands([{ type: "fly_to", lat: item.lat!, lng: item.lng! }]);
   }, []);
 
   const visibleItems = items.filter((item) => !dismissed.has(item.id));
@@ -744,6 +775,7 @@ export default function WatchPanel({ open, onClose }: Props) {
               item={item}
               onDismiss={handleDismiss}
               onWatchPlus={handleWatchPlus}
+              onLocate={handleLocate}
             />
           ))
         )}

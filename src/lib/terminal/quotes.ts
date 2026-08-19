@@ -15,6 +15,12 @@
  * requires a crumb; the /v8/chart endpoint stays keyless). Requests run in
  * parallel via Promise.allSettled so one hanging symbol never blocks the rest.
  *
+ * Fetch routing:
+ *   - Desktop (Tauri present): quotes flow through LOOM's own Rust via
+ *     `quoteFetch` (quotes::quote_fetch command). Third-party corsproxy dead
+ *     in the desktop product.
+ *   - Browser dev: existing Yahoo-direct → corsproxy chain UNCHANGED (dev-only).
+ *
  * The poll runtime runs ONLY while the terminal deck is active: TerminalDeck
  * calls startQuotes() on mount and stopQuotes() on unmount. There is no global
  * autostart — no background burn.
@@ -25,6 +31,9 @@
  * fires once when the stale flag flips (first failure after a run of successes)
  * so the UI can degrade gracefully.
  */
+
+import { quoteFetch } from "../core";
+import { timeoutSignal } from "../util/timeoutSignal";
 
 export interface Quote {
   symbol: string;
@@ -99,7 +108,14 @@ const CORS_PROXY = "https://corsproxy.io/?url=";
 
 /** True when running inside the Tauri desktop webview (direct Yahoo works). */
 function inTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window;
+  // Must mirror safeInvoke's detection: real Tauri v2 injects __TAURI_INTERNALS__;
+  // __TAURI__ only exists with withGlobalTauri (which LOOM does not enable) —
+  // checking only __TAURI__ would silently route the DESKTOP through the
+  // browser fallback chain, defeating the Rust proxy entirely.
+  return (
+    typeof window !== "undefined" &&
+    ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)
+  );
 }
 
 /** Build the fetch URL for a symbol, proxying in the browser. */
@@ -158,7 +174,7 @@ export function normalizeQuote(symbol: string, body: unknown): Quote | null {
  * shape). Honours the provided AbortSignal AND its own 10s timeout.
  */
 export async function fetchQuote(symbol: string, signal?: AbortSignal): Promise<Quote | null> {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const timeout = timeoutSignal(REQUEST_TIMEOUT_MS);
   // Combine our per-request timeout with any external (deck-unmount) signal.
   // AbortSignal.any avoids one addEventListener per fetch on a shared parent
   // signal (which triggered a MaxListeners warning under the 16-symbol fan-out).
@@ -174,10 +190,40 @@ export async function fetchQuote(symbol: string, signal?: AbortSignal): Promise<
 }
 
 /**
- * Fetch all SYMBOLS in parallel. Preserves SYMBOLS order in the returned array,
- * dropping any symbol that failed. Never throws.
+ * Fetch all SYMBOLS via LOOM's own Rust proxy (Tauri path).
+ * Parses the array returned by quotes::quote_fetch into Quote objects using
+ * the existing normalizer. Returns empty array on any failure.
+ */
+async function fetchAllQuotesTauri(): Promise<Quote[]> {
+  try {
+    const raw = await quoteFetch([...SYMBOLS]);
+    const arr: Array<{ symbol: string; body: unknown }> = JSON.parse(raw);
+    const out: Quote[] = [];
+    for (const entry of arr) {
+      if (entry.body !== null && entry.body !== undefined) {
+        const q = normalizeQuote(entry.symbol, entry.body);
+        if (q) out.push(q);
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch all SYMBOLS. Routes through LOOM's own Rust when inside Tauri (killing
+ * the third-party corsproxy dependency in the desktop product); falls back to
+ * the browser fetch chain (Yahoo-direct → corsproxy) in dev. // dev-only
+ * Preserves SYMBOLS order in the returned array, dropping any symbol that
+ * failed. Never throws.
  */
 export async function fetchAllQuotes(signal?: AbortSignal): Promise<Quote[]> {
+  if (inTauri()) {
+    // Desktop: quotes flow through LOOM's Rust — third-party proxy dead here.
+    return fetchAllQuotesTauri();
+  }
+  // dev-only: browser fetch chain (Yahoo-direct in webview, corsproxy in plain browser)
   const settled = await Promise.allSettled(SYMBOLS.map((s) => fetchQuote(s, signal)));
   const out: Quote[] = [];
   for (const r of settled) {

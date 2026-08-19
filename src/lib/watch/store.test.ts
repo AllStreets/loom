@@ -156,6 +156,37 @@ describe("store — engagementMap", () => {
     vi.restoreAllMocks();
   });
 
+  it("stores feature snapshot fields (category, source, titleTokens) alongside signal", () => {
+    const sig: EngagementSignal = {
+      eventKey: "auspex:test1",
+      action: "open",
+      ts: Date.now(),
+      category: "geo",
+      source: "auspex",
+      titleTokens: ["earthquake", "volcano"],
+    };
+    recordEngagement(sig);
+    const signals = getSignals();
+    expect(signals).toHaveLength(1);
+    expect(signals[0].category).toBe("geo");
+    expect(signals[0].source).toBe("auspex");
+    expect(signals[0].titleTokens).toEqual(["earthquake", "volcano"]);
+  });
+
+  it("feature snapshot fields are optional (old format works)", () => {
+    const sig: EngagementSignal = {
+      eventKey: "auspex:old1",
+      action: "dismiss",
+      ts: Date.now(),
+    };
+    recordEngagement(sig);
+    const signals = getSignals();
+    expect(signals).toHaveLength(1);
+    expect(signals[0].category).toBeUndefined();
+    expect(signals[0].source).toBeUndefined();
+    expect(signals[0].titleTokens).toBeUndefined();
+  });
+
   it("64KB byte-guard trims large signals to fit payload", () => {
     // Create a signal with an 80KB eventKey value (simulating large data)
     const largeKey = "x:" + "a".repeat(80 * 1024);

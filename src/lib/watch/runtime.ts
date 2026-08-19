@@ -16,8 +16,9 @@
 
 import type { WatchEvent, ScoredEvent } from "./types";
 import { scoreEvent } from "./score";
-import { getWatchlist, engagementMap } from "./store";
+import { getWatchlist, engagementMap, getSignals } from "./store";
 import { fetchAuspexStories, fetchQuakes } from "./sensors";
+import { computeWeights } from "./learned";
 
 const DEFAULT_INTERVAL_MS = 120_000; // 2 minutes
 const MIN_INTERVAL_MS = 60_000; // 1 minute (guard)
@@ -89,8 +90,9 @@ async function poll(): Promise<void> {
     // Score all events
     const watchlist = getWatchlist();
     const engagement = engagementMap(merged);
+    const weights = computeWeights(getSignals());
     const scored: ScoredEvent[] = merged.map((e) =>
-      scoreEvent(e, watchlist, engagement)
+      scoreEvent(e, watchlist, engagement, weights)
     );
 
     // Sort descending, keep top N

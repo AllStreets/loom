@@ -121,6 +121,17 @@ export const cloudKeyPresent = () =>
 export const cloudKeyClear = () =>
   safeInvoke<void>("cloud_key_clear");
 
+// ── Quote proxy ────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch Yahoo chart data for the given symbols via LOOM's own Rust proxy.
+ * Returns the raw JSON array string produced by quotes.rs:
+ *   `[{"symbol":"SPY","body":<raw JSON or null>},...]`
+ * Rejects with ShellUnavailableError in the browser (safeInvoke contract).
+ */
+export const quoteFetch = (symbols: string[]) =>
+  safeInvoke<string>("quote_fetch", { symbols });
+
 // ── builderChat — the single cloud-override seam ────────────────────────────────
 //
 // This is the ONLY entry point for builder-role model calls.

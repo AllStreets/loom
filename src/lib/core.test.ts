@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear, ShellUnavailableError } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear, ShellUnavailableError, quoteFetch } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -202,5 +202,18 @@ describe("ShellUnavailableError: browser-mode rejection", () => {
     const e = new ShellUnavailableError();
     expect(e.message).toBe("This surface needs the desktop shell.");
     expect(e.name).toBe("ShellUnavailableError");
+  });
+
+  it("quoteFetch invokes quote_fetch with camelCase symbols arg", async () => {
+    invoke.mockResolvedValue('[{"symbol":"SPY","body":null}]');
+    const result = await quoteFetch(["SPY"]);
+    expect(invoke).toHaveBeenCalledWith("quote_fetch", { symbols: ["SPY"] });
+    expect(result).toBe('[{"symbol":"SPY","body":null}]');
+  });
+
+  it("quoteFetch passes multiple symbols as an array", async () => {
+    invoke.mockResolvedValue('[{"symbol":"SPY","body":null},{"symbol":"^VIX","body":null}]');
+    await quoteFetch(["SPY", "^VIX"]);
+    expect(invoke).toHaveBeenCalledWith("quote_fetch", { symbols: ["SPY", "^VIX"] });
   });
 });
