@@ -148,3 +148,7 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Deckserve generalized — `src-tauri/src/deckserve.rs` now resolves any `deck://localhost/<deckname>/` path from `public/decks/<deckname>/`; auspex and ember paths both tested.
 - Five-deck plumbing — DeckId union, DeckLayer, Shell SegBtns, commands.ts CAT_RE precedence, few-shot examples all updated and regression-tested.
 - Settings gains a Decks section — AGORA URL field (localhost/127.0.0.1 only; remote URLs rejected).
+
+## Stage-5 final-review notes (2026-08-18)
+- Engagement double-influence: score factor 5 (applyEngagement) and factor 6 (learnedBoost) both derive from the same signals on source/category — bounded (0.15 cap + clamps + final [0,1]) and acceptable; unify when the learned model matures.
+- AGORA engine health probes hardcoded localhost:8080 while the web URL is configurable — derive engine host from deck.agora.url when engine port config lands.
