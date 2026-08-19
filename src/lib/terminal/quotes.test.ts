@@ -27,6 +27,26 @@ import {
   _resetQuotesForTests,
 } from "./quotes";
 
+// inTauri() now mirrors safeInvoke (checks __TAURI_INTERNALS__ too, which
+// test-setup.ts injects globally) — browser-path tests must strip BOTH.
+function withNoTauri<T>(fn: () => T): T {
+  const restore = stripTauriGlobals();
+  try { return fn(); } finally { restore(); }
+}
+
+/** Strip both Tauri globals; returns a restore fn. For async suites use in
+ *  beforeEach/afterEach so restoration happens after awaited work. */
+function stripTauriGlobals(): () => void {
+  const w = window as unknown as { __TAURI__?: object; __TAURI_INTERNALS__?: object };
+  const t = w.__TAURI__; const ti = w.__TAURI_INTERNALS__;
+  delete w.__TAURI__; delete w.__TAURI_INTERNALS__;
+  return () => {
+    if (t !== undefined) w.__TAURI__ = t;
+    if (ti !== undefined) w.__TAURI_INTERNALS__ = ti;
+  };
+}
+
+
 // A minimal well-formed Yahoo /v8/chart body.
 function chartBody(opts: {
   price: number;
@@ -152,16 +172,19 @@ describe("fetchQuote", () => {
 
 describe("quoteUrl", () => {
   it("routes through a keyless CORS proxy in the browser (no __TAURI__)", () => {
-    // jsdom has no window.__TAURI__ → proxy path.
-    const u = quoteUrl("SPY");
-    expect(u).toContain("corsproxy.io");
-    expect(u).toContain(encodeURIComponent("query1.finance.yahoo.com"));
-    expect(u).toContain(encodeURIComponent("SPY"));
+    withNoTauri(() => {
+      const u = quoteUrl("SPY");
+      expect(u).toContain("corsproxy.io");
+      expect(u).toContain(encodeURIComponent("query1.finance.yahoo.com"));
+      expect(u).toContain(encodeURIComponent("SPY"));
+    });
   });
 
   it("encodes special-char symbols safely (nested-encoded through the proxy)", () => {
     // '=' → %3D (inner symbol encode) → %253D (outer proxy-url encode).
-    expect(quoteUrl("GC=F")).toContain("GC%253DF");
+    withNoTauri(() => {
+      expect(quoteUrl("GC=F")).toContain("GC%253DF");
+    });
   });
 
   it("hits Yahoo directly inside the Tauri webview", () => {
@@ -177,7 +200,10 @@ describe("quoteUrl", () => {
 });
 
 describe("fetchAllQuotes", () => {
-  afterEach(() => vi.restoreAllMocks());
+  // These exercise the BROWSER fetch chain — strip Tauri globals per test.
+  let restoreTauri: () => void;
+  beforeEach(() => { restoreTauri = stripTauriGlobals(); });
+  afterEach(() => { restoreTauri(); vi.restoreAllMocks(); });
   it("drops failed symbols but returns the rest", async () => {
     let call = 0;
     vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => {
@@ -192,6 +218,9 @@ describe("fetchAllQuotes", () => {
 });
 
 describe("poll runtime", () => {
+  let restoreTauriPR: () => void;
+  beforeEach(() => { restoreTauriPR = stripTauriGlobals(); });
+  afterEach(() => { restoreTauriPR(); });
   beforeEach(() => {
     _resetQuotesForTests();
     vi.useFakeTimers();

@@ -108,7 +108,14 @@ const CORS_PROXY = "https://corsproxy.io/?url=";
 
 /** True when running inside the Tauri desktop webview (direct Yahoo works). */
 function inTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window;
+  // Must mirror safeInvoke's detection: real Tauri v2 injects __TAURI_INTERNALS__;
+  // __TAURI__ only exists with withGlobalTauri (which LOOM does not enable) —
+  // checking only __TAURI__ would silently route the DESKTOP through the
+  // browser fallback chain, defeating the Rust proxy entirely.
+  return (
+    typeof window !== "undefined" &&
+    ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)
+  );
 }
 
 /** Build the fetch URL for a symbol, proxying in the browser. */
