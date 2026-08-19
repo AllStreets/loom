@@ -31,6 +31,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { ScoredEvent } from "../lib/watch/types";
 import type { WatchlistEntry } from "../lib/watch/store";
 import { getSalient } from "../lib/watch/runtime";
+import { tokenize } from "../lib/watch/learned";
 import {
   recordEngagement,
   addWatchlistEntry,
@@ -106,6 +107,13 @@ function ensureStyles() {
 
 // ── Time formatting ────────────────────────────────────────────────────────────
 
+
+// Feature snapshot at signal-write time — without this the learner has nothing
+// to learn from (old signals lacking features are skipped by computeWeights).
+function engagementFeatures(item: { category: string; source: string; title: string }) {
+  return { category: item.category, source: item.source, titleTokens: tokenize(item.title) };
+}
+
 function relAge(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 60_000) return "<1m";
@@ -143,7 +151,7 @@ function WatchRow({ item, onDismiss, onWatchPlus, onLocate }: RowProps) {
   const [expanded, setExpanded] = useState(false);
 
   function handleOpen() {
-    recordEngagement({ eventKey: item.id, action: "open", ts: Date.now() });
+    recordEngagement({ eventKey: item.id, action: "open", ts: Date.now(), ...engagementFeatures(item) });
     if (item.url) {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         navigator.clipboard.writeText(item.url).catch(() => {});
@@ -152,7 +160,7 @@ function WatchRow({ item, onDismiss, onWatchPlus, onLocate }: RowProps) {
   }
 
   function handleDismiss() {
-    recordEngagement({ eventKey: item.id, action: "dismiss", ts: Date.now() });
+    recordEngagement({ eventKey: item.id, action: "dismiss", ts: Date.now(), ...engagementFeatures(item) });
     onDismiss(item.id);
   }
 
@@ -623,14 +631,14 @@ export default function WatchPanel({ open, onClose }: Props) {
   }, []);
 
   const handleWatchPlus = useCallback((item: ScoredEvent) => {
-    recordEngagement({ eventKey: item.id, action: "act", ts: Date.now() });
+    recordEngagement({ eventKey: item.id, action: "act", ts: Date.now(), ...engagementFeatures(item) });
     // Extract a topic from the title (first 3 words)
     const topic = item.title.split(/\s+/).slice(0, 3).join(" ");
     addWatchlistEntry({ kind: "topic", value: topic });
   }, []);
 
   const handleLocate = useCallback((item: ScoredEvent) => {
-    recordEngagement({ eventKey: item.id, action: "act", ts: Date.now() });
+    recordEngagement({ eventKey: item.id, action: "act", ts: Date.now(), ...engagementFeatures(item) });
     window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "globe" } }));
     sendDeckCommands([{ type: "fly_to", lat: item.lat!, lng: item.lng! }]);
   }, []);

@@ -206,6 +206,17 @@ describe("WatchPanel — engagement actions", () => {
     );
   });
 
+  it("engagement signals carry the feature snapshot the learner needs", () => {
+    makePanel();
+    fireEvent.click(screen.getByTestId("watch-dismiss-btn"));
+    const call = mockRecordEngagement.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(typeof call.category).toBe("string");
+    expect((call.category as string).length).toBeGreaterThan(0);
+    expect(typeof call.source).toBe("string");
+    expect(Array.isArray(call.titleTokens)).toBe(true);
+    expect((call.titleTokens as string[]).length).toBeGreaterThan(0);
+  });
+
   it("clicking watch+ calls recordEngagement with action='act'", () => {
     makePanel();
     fireEvent.click(screen.getByTestId("watch-plus-btn"));
@@ -400,3 +411,4 @@ describe("WatchPanel — locate action", () => {
     );
   });
 });
+
