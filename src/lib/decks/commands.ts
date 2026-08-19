@@ -18,7 +18,8 @@ export type BridgeCmd =
   | { type: "set_cat"; cat: string }
   | { type: "toggle_overlay"; overlay: string }
   | { type: "reset_view" }
-  | { type: "set_spin"; on: boolean };
+  | { type: "set_spin"; on: boolean }
+  | { type: "fly_to"; lat: number; lng: number; altitude?: number };
 
 export type DeckCommandResult = {
   /** deck switch that must fire BEFORE bridge cmds (only set when needed) */

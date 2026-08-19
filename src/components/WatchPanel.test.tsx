@@ -22,6 +22,7 @@ const mockAddWatchlistEntry = vi.fn().mockReturnValue([]);
 const mockRemoveWatchlistEntry = vi.fn().mockReturnValue([]);
 const mockGetWatchlist = vi.fn().mockReturnValue([]);
 const mockGetSalient = vi.fn().mockReturnValue([]);
+const mockSendDeckCommands = vi.fn();
 
 vi.mock("../lib/watch/store", () => ({
   recordEngagement: (...args: unknown[]) => mockRecordEngagement(...args),
@@ -32,6 +33,10 @@ vi.mock("../lib/watch/store", () => ({
 
 vi.mock("../lib/watch/runtime", () => ({
   getSalient: (...args: unknown[]) => mockGetSalient(...args),
+}));
+
+vi.mock("./decks/GlobeDeck", () => ({
+  sendDeckCommands: (...args: unknown[]) => mockSendDeckCommands(...args),
 }));
 
 // matchMedia mock
@@ -56,6 +61,7 @@ beforeEach(() => {
   mockGetSalient.mockReturnValue([]);
   mockAddWatchlistEntry.mockReturnValue([]);
   mockRemoveWatchlistEntry.mockReturnValue([]);
+  mockSendDeckCommands.mockClear();
 });
 
 afterEach(() => {
@@ -345,5 +351,52 @@ describe("WatchPanel — badge count (integration hint)", () => {
     ];
     makePanel(true, items);
     expect(screen.getAllByTestId("watch-row")).toHaveLength(3);
+  });
+});
+
+describe("WatchPanel — locate action", () => {
+  it("locate button renders only for items with lat/lng", () => {
+    const withCoords = makeItem({ lat: 35.68, lng: 139.69 });
+    const noCoords = makeItem({ id: "no-coords", title: "No coords item" });
+    makePanel(true, [withCoords, noCoords]);
+    const locateBtns = screen.queryAllByTestId("watch-locate-btn");
+    expect(locateBtns).toHaveLength(1);
+  });
+
+  it("locate button not rendered when item has no coords", () => {
+    makePanel(true, [makeItem()]); // makeItem has no lat/lng by default
+    expect(screen.queryByTestId("watch-locate-btn")).not.toBeInTheDocument();
+  });
+
+  it("clicking locate dispatches loom-deck globe THEN sendDeckCommands fly_to", async () => {
+    const deckEvents: string[] = [];
+    window.addEventListener("loom-deck", (e) => {
+      deckEvents.push((e as CustomEvent).detail.deck);
+    });
+
+    const item = makeItem({ lat: 35.68, lng: 139.69 });
+    makePanel(true, [item]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("watch-locate-btn"));
+    });
+
+    expect(deckEvents).toContain("globe");
+    expect(mockSendDeckCommands).toHaveBeenCalledWith([
+      { type: "fly_to", lat: 35.68, lng: 139.69 },
+    ]);
+  });
+
+  it("clicking locate records engagement with action='act'", async () => {
+    const item = makeItem({ lat: 35.68, lng: 139.69 });
+    makePanel(true, [item]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("watch-locate-btn"));
+    });
+
+    expect(mockRecordEngagement).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "act", eventKey: item.id })
+    );
   });
 });

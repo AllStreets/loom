@@ -31,7 +31,7 @@
   // Allowed command types (AUSPEX executeCmd verb whitelist)
   const ALLOWED_CMDS = new Set([
     'set_cat', 'toggle_overlay', 'toggle_tool', 'open_page',
-    'reset_view', 'set_spin', 'open_meridian'
+    'reset_view', 'set_spin', 'open_meridian', 'fly_to'
   ]);
 
   window.addEventListener('message', function(event) {
@@ -41,6 +41,29 @@
     if (!cmd || !cmd.type) return;
     if (!ALLOWED_CMDS.has(cmd.type)) {
       console.warn('[loom-adapter] Unknown cmd type:', cmd.type);
+      return;
+    }
+    // Handle fly_to specially — calls globe.pointOfView directly
+    if (cmd.type === 'fly_to') {
+      var lat = cmd.lat, lng = cmd.lng;
+      if (typeof lat !== 'number' || lat < -90 || lat > 90) {
+        console.warn('[loom-adapter] fly_to: invalid lat', lat);
+        return;
+      }
+      if (typeof lng !== 'number' || lng < -180 || lng > 180) {
+        console.warn('[loom-adapter] fly_to: invalid lng', lng);
+        return;
+      }
+      var gInst = window._auspexGlobe;
+      if (gInst && typeof gInst.pointOfView === 'function') {
+        gInst.pointOfView({ lat: lat, lng: lng, altitude: cmd.altitude || 1.6 }, 1200);
+      } else {
+        console.warn('[loom-adapter] fly_to: globe instance not ready');
+      }
+      // Ack and return — skip executeCmd
+      if (event.source && event.origin) {
+        try { event.source.postMessage({ loomDeckAck: true, type: cmd.type }, event.origin); } catch(e) {}
+      }
       return;
     }
     // Execute via AUSPEX's own dispatch function
