@@ -12,6 +12,7 @@
  */
 
 import type { WatchEvent, ScoredEvent } from "./types";
+import { tokenize, type LearnedWeights } from "./learned";
 
 export interface WatchlistEntry {
   kind: "entity" | "topic" | "place" | "source";
@@ -82,6 +83,60 @@ function norm(s: string): string {
 export type EngagementMap = Record<string, number>;
 
 /**
+ * learnedBoost — applies the user's learned weight table to an event.
+ * Sums: category weight + source weight + top-3 |weight| matched title tokens.
+ * Emits a reason for each contribution with |w| >= 0.02.
+ */
+export function learnedBoost(
+  event: WatchEvent,
+  weights: LearnedWeights
+): { boost: number; reasons: string[] } {
+  const reasons: string[] = [];
+  let boost = 0;
+
+  // Category contribution
+  if (event.category) {
+    const w = weights.category[event.category] ?? 0;
+    if (Math.abs(w) >= 0.02) {
+      boost += w;
+      const sign = w >= 0 ? `+${w.toFixed(2)}` : w.toFixed(2);
+      const verb = w >= 0 ? "often open" : "tend to dismiss";
+      reasons.push(`learned: you ${verb} ${event.category} stories (${sign})`);
+    }
+  }
+
+  // Source contribution
+  {
+    const w = weights.source[event.source] ?? 0;
+    if (Math.abs(w) >= 0.02) {
+      boost += w;
+      const sign = w >= 0 ? `+${w.toFixed(2)}` : w.toFixed(2);
+      const verb = w >= 0 ? "favor" : "avoid";
+      reasons.push(`learned: you ${verb} ${event.source} (${sign})`);
+    }
+  }
+
+  // Token contributions — top 3 by |weight|
+  if (weights.token && Object.keys(weights.token).length > 0) {
+    const titleToks = new Set(tokenize(event.title ?? "", 50));
+    const matched = Object.entries(weights.token)
+      .filter(([tok]) => titleToks.has(tok))
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+      .slice(0, 3);
+    for (const [tok, w] of matched) {
+      if (Math.abs(w) >= 0.02) {
+        boost += w;
+        const sign = w >= 0 ? `+${w.toFixed(2)}` : w.toFixed(2);
+        const verb = w >= 0 ? "draws you" : "you avoid";
+        reasons.push(`learned: "${tok}" ${verb} (${sign})`);
+      }
+    }
+  }
+
+  return { boost, reasons };
+}
+
+/**
  * Score a single WatchEvent against the user's watchlist and engagement history.
  * Returns a ScoredEvent with a score in [0, 1] and human-readable reason strings.
  *
@@ -90,7 +145,8 @@ export type EngagementMap = Record<string, number>;
 export function scoreEvent(
   event: WatchEvent,
   watchlist: WatchlistEntry[] = [],
-  engagement: EngagementMap = {}
+  engagement: EngagementMap = {},
+  learnedWeights?: LearnedWeights
 ): ScoredEvent {
   const reasons: string[] = [];
   let score = 0;
@@ -162,6 +218,13 @@ export function scoreEvent(
   };
   applyEngagement(`source:${event.source}`, event.source);
   if (event.category) applyEngagement(`category:${event.category}`, event.category);
+
+  // 6. Learned weights — transparent per-feature weights from engagement signals
+  if (learnedWeights) {
+    const lb = learnedBoost(event, learnedWeights);
+    score += lb.boost;
+    reasons.push(...lb.reasons);
+  }
 
   return { ...event, score: Math.max(0, Math.min(1, score)), reasons };
 }

@@ -26,6 +26,10 @@ export interface EngagementSignal {
   eventKey: string;
   action: "open" | "dismiss" | "act";
   ts: number;
+  // Feature snapshot — added at write time so computeWeights doesn't need live events
+  category?: string;
+  source?: string;
+  titleTokens?: string[];  // lowercase unigrams, stopword-filtered, capped at 10
 }
 
 interface StoreData {
