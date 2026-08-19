@@ -50,9 +50,6 @@ pub const WHISPER: (&str, &str) = (
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
 );
 
-/// Default voice id
-pub const DEFAULT_VOICE_ID: &str = "en_US-lessac-medium";
-
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
 pub fn voice_dir(app: &AppHandle) -> Result<PathBuf, LoomError> {
@@ -400,12 +397,17 @@ pub async fn voice_setup(app: AppHandle, window: tauri::Window) -> Result<(), Lo
     Ok(())
 }
 
+static WHISPER_LOG_INIT: std::sync::Once = std::sync::Once::new();
+
 #[tauri::command]
 pub async fn stt_transcribe(
     app: AppHandle,
     samples: Vec<f32>,
 ) -> Result<String, LoomError> {
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+    // Silence whisper/ggml C-level log spam (token spew) — runs once per process.
+    WHISPER_LOG_INIT.call_once(|| whisper_rs::install_logging_hooks());
 
     let dir = voice_dir(&app)?;
     let (wname, _) = WHISPER;
@@ -550,9 +552,11 @@ mod tests {
 
     #[test]
     fn default_voice_id_present() {
+        // Default is the first voice: en_US-lessac-medium
+        let default_id = "en_US-lessac-medium";
         assert!(
-            VOICES.iter().any(|v| v.id == DEFAULT_VOICE_ID),
-            "DEFAULT_VOICE_ID '{DEFAULT_VOICE_ID}' not in VOICES"
+            VOICES.iter().any(|v| v.id == default_id),
+            "default voice id '{default_id}' not in VOICES"
         );
     }
 
