@@ -31,12 +31,15 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { ScoredEvent } from "../lib/watch/types";
 import type { WatchlistEntry } from "../lib/watch/store";
 import { getSalient } from "../lib/watch/runtime";
-import { tokenize } from "../lib/watch/learned";
+import { tokenize, computeWeights, topWeights } from "../lib/watch/learned";
+import type { FeatureKind, WeightEntry } from "../lib/watch/learned";
 import {
   recordEngagement,
   addWatchlistEntry,
   removeWatchlistEntry,
   getWatchlist,
+  getSignals,
+  clearSignals,
 } from "../lib/watch/store";
 import { IconX, IconPlus, IconCopy, IconChevron, IconWatch, IconLocate } from "./chrome/icons";
 import { sendDeckCommands } from "./decks/GlobeDeck";
@@ -585,6 +588,251 @@ function WatchlistChips() {
   );
 }
 
+// ── Learned weights section ────────────────────────────────────────────────────
+
+// Kind glyph prefix — category / source / word (matches watchlist glyph language)
+const LEARNED_GLYPH: Record<FeatureKind, string> = {
+  category: "#",
+  source: "/",
+  token: "~",
+};
+
+const LEARNED_K = 5;
+
+function fmtWeight(w: number): string {
+  return `${w >= 0 ? "+" : "-"}${Math.abs(w).toFixed(2)}`;
+}
+
+// Recompute-from-signals: the weight table is never stored, so the inspection
+// surface reads the same source of truth as the scorer (auditable by design).
+function readTopWeights(): { positive: WeightEntry[]; negative: WeightEntry[] } {
+  try {
+    return topWeights(computeWeights(getSignals()), LEARNED_K);
+  } catch {
+    return { positive: [], negative: [] };
+  }
+}
+
+function LearnedChip({ entry, positive }: { entry: WeightEntry; positive: boolean }) {
+  const tint = positive ? "var(--accent, #22d3ee)" : "var(--danger, #f87171)";
+  return (
+    <div
+      data-testid={positive ? "learned-chip-pos" : "learned-chip-neg"}
+      title={`${entry.kind}: ${entry.key} ${fmtWeight(entry.weight)}`}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        color: tint,
+        background: "rgba(255,255,255,.04)",
+        border: "1px solid var(--glass-border, rgba(255,255,255,.08))",
+        borderRadius: 999,
+        padding: "3px 9px",
+        maxWidth: 150,
+        fontFamily: "var(--f-mono, monospace)",
+        fontSize: 10,
+      }}
+    >
+      <span aria-hidden style={{ opacity: 0.7, flexShrink: 0 }} title={entry.kind}>
+        {LEARNED_GLYPH[entry.kind]}
+      </span>
+      <span
+        style={{
+          color: "var(--t2, #9fb0cc)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          minWidth: 0,
+        }}
+      >
+        {entry.key}
+      </span>
+      <span style={{ fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+        {fmtWeight(entry.weight)}
+      </span>
+    </div>
+  );
+}
+
+function LearnedSection() {
+  const [expanded, setExpanded] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [weights, setWeights] = useState(readTopWeights);
+
+  // Signals change as the owner engages — recompute alongside every salience poll
+  useEffect(() => {
+    function onSalience() {
+      setWeights(readTopWeights());
+    }
+    window.addEventListener("loom-salience", onSalience);
+    return () => window.removeEventListener("loom-salience", onSalience);
+  }, []);
+
+  const hasLearned = weights.positive.length > 0 || weights.negative.length > 0;
+
+  function handleToggle() {
+    setExpanded((p) => !p);
+    setConfirming(false);
+    setWeights(readTopWeights()); // fresh read on toggle — cheap, signals are local
+  }
+
+  function handleConfirmClear() {
+    clearSignals();
+    setWeights(readTopWeights());
+    setConfirming(false);
+  }
+
+  return (
+    <div
+      data-testid="learned-section"
+      style={{
+        padding: "12px 16px",
+        borderBottom: "1px solid var(--line, rgba(255,255,255,.06))",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        flexShrink: 0,
+      }}
+    >
+      <button
+        data-testid="learned-toggle"
+        onClick={handleToggle}
+        aria-expanded={expanded}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          fontFamily: "var(--f-mono, monospace)",
+          fontSize: 10,
+          color: "var(--t3, #5f6f8c)",
+          padding: 0,
+          letterSpacing: ".12em",
+          textTransform: "uppercase",
+        }}
+      >
+        <IconChevron
+          size={11}
+          strokeWidth={2}
+          className={`loom-watch-chevron${expanded ? " is-open" : ""}`}
+        />
+        Learned
+      </button>
+
+      {expanded &&
+        (hasLearned ? (
+          <>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {weights.positive.map((entry) => (
+                <LearnedChip key={`${entry.kind}:${entry.key}`} entry={entry} positive />
+              ))}
+              {weights.negative.map((entry) => (
+                <LearnedChip key={`${entry.kind}:${entry.key}`} entry={entry} positive={false} />
+              ))}
+            </div>
+            {confirming ? (
+              <div
+                data-testid="learned-confirm-strip"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "var(--glass-raised, rgba(255,255,255,.06))",
+                  borderRadius: 6,
+                  padding: "4px 6px",
+                }}
+              >
+                <span
+                  style={{
+                    fontFamily: "var(--f-mono, monospace)",
+                    fontSize: 10,
+                    color: "var(--t2, #9fb0cc)",
+                    flex: 1,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  Forget everything the watch learned?
+                </span>
+                <button
+                  data-testid="learned-confirm-btn"
+                  onClick={handleConfirmClear}
+                  style={{
+                    background: "var(--danger, #f87171)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 4,
+                    padding: "2px 10px",
+                    fontFamily: "var(--f-mono, monospace)",
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: ".06em",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  CLEAR
+                </button>
+                <button
+                  data-testid="learned-cancel-btn"
+                  onClick={() => setConfirming(false)}
+                  style={{
+                    background: "none",
+                    color: "var(--t2, #9fb0cc)",
+                    border: "1px solid var(--glass-border, rgba(255,255,255,.08))",
+                    borderRadius: 4,
+                    padding: "2px 8px",
+                    fontFamily: "var(--f-mono, monospace)",
+                    fontSize: 10,
+                    letterSpacing: ".06em",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  KEEP
+                </button>
+              </div>
+            ) : (
+              <button
+                data-testid="learned-clear-btn"
+                onClick={() => setConfirming(true)}
+                style={{
+                  alignSelf: "flex-start",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  fontFamily: "var(--f-mono, monospace)",
+                  fontSize: 10,
+                  color: "var(--t3, #5f6f8c)",
+                  padding: 0,
+                  letterSpacing: ".06em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Clear learning
+              </button>
+            )}
+          </>
+        ) : (
+          <span
+            data-testid="learned-empty"
+            style={{
+              fontFamily: "var(--f-mono, monospace)",
+              fontSize: 10,
+              lineHeight: 1.55,
+              color: "var(--t3, #5f6f8c)",
+            }}
+          >
+            nothing learned yet — open, dismiss, and act to teach the watch
+          </span>
+        ))}
+    </div>
+  );
+}
+
 // ── Main WatchPanel ────────────────────────────────────────────────────────────
 
 interface Props {
@@ -719,6 +967,9 @@ export default function WatchPanel({ open, onClose }: Props) {
 
       {/* Watchlist chips */}
       <WatchlistChips />
+
+      {/* Learned weights — the watch's mind, inspectable */}
+      <LearnedSection />
 
       {/* Feed list */}
       <div

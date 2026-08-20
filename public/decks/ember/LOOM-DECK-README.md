@@ -27,9 +27,23 @@ requests. EMBER already degrades gracefully (LLM chip shows "offline").
 FOLLOWUP: `OLLAMA_ORIGINS=deck://localhost` enables the Advisor in packaged
 builds.
 
-### Forge (File System Access API)
-The File System Access API may be unavailable inside an iframe; EMBER degrades
-per its own design.
+### Forge (File System Access API) — verified 2026-08-19
+Forge's boot guard is `'showDirectoryPicker' in window` (js/forge.js). LOOM's
+WebView is WKWebView (Tauri v2 on macOS), which does not implement the File
+System Access API — so inside the deck iframe (dev AND packaged deck://
+origin) the guard fails and Forge renders EMBER's own unsupported callout
+("FORGE needs the File System Access API… use Chrome, Edge, or Brave").
+Nothing breaks; the rest of EMBER is unaffected.
+
+**Bottom line: Forge (self-editing) requires the standalone EMBER app in a
+Chromium browser; the deck is read/advise mode.** A secondary guard in
+`connect()` (blocks `file:` / non-secure contexts) is never reached here.
+
+Edge case: if LOOM's Vite dev URL is opened directly in Chrome, the API
+exists and Forge could technically connect — but it would edit LOOM's
+bundled snapshot (this directory), which `refresh-ember-deck.sh` overwrites.
+Not a supported flow. Forge-through-LOOM (a Tauri file bridge) is stage-7
+backlog, see docs/FOLLOWUPS.md.
 
 ### sw.js excluded deliberately
 A service worker inside the deck iframe would cache-fight the bundled copy;

@@ -130,6 +130,16 @@ export function getSignals(): EngagementSignal[] {
 }
 
 /**
+ * Wipe all engagement signals. The watchlist is untouched. Learned weights are
+ * recomputed from signals on every poll, so they come back empty on the next one.
+ */
+export function clearSignals(): void {
+  const data = load();
+  data.signals = [];
+  save(data);
+}
+
+/**
  * Build and return the EngagementMap consumed by the scorer.
  * Accepts optional event metadata for source/category lookup.
  */

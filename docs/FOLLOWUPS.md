@@ -114,7 +114,7 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 
 ### Stage-6 backlog (post-Stage-5)
 
-- **EMBER Forge-in-deck** — Forge (File System Access API) is unavailable inside a sandboxed iframe. Path options: Tauri command bridge proxying file reads/writes for EMBER's loop, or a companion read-file/write-file postMessage protocol scoped to the organs directory.
+- **EMBER Forge-in-deck** — VERIFIED 2026-08-19: Forge's boot guard (`'showDirectoryPicker' in window`, `public/decks/ember/js/forge.js`) fails inside LOOM's WKWebView (Tauri v2 macOS has no File System Access API), in dev and under the packaged `deck://` origin alike; EMBER renders its own unsupported callout and everything else works. Forge requires the standalone EMBER app in a Chromium browser; the deck is read/advise mode. Path options if Forge-through-LOOM is ever wanted (stage-7 backlog): Tauri command bridge proxying file reads/writes for EMBER's loop, or a companion read-file/write-file postMessage protocol scoped to the organs directory.
 - **AGORA command bridge** — AGORA currently docks as a passive iframe. Add a postMessage command channel so LOOM can send orders (route, focus market, trigger agent action) and receive live state back.
 - **Learned-weights inspection UI** — the salience engine persists per-feature weights in localStorage; there is no UI surface for inspecting or resetting them. A minimal panel (token/category/source weight table + reset button) would close the transparency gap.
 - **LoRA fine-tune bridge** — a lightweight path for the owner to fine-tune a local model on engagement history without leaving the cockpit. Depends on learned-weights inspection and the Ollama LoRA import path.

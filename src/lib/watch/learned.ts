@@ -20,6 +20,14 @@ export interface LearnedWeights {
   token: Record<string, number>;
 }
 
+export type FeatureKind = keyof LearnedWeights;
+
+export interface WeightEntry {
+  kind: FeatureKind;
+  key: string;
+  weight: number;
+}
+
 const DELTAS: Record<string, number> = { open: 0.05, act: 0.10, dismiss: -0.08 };
 const CLAMP = 0.5;
 const TOKEN_CAP = 200;
@@ -96,5 +104,26 @@ export function computeWeights(
     category,
     source,
     token: trimTokenTable(token),
+  };
+}
+
+/**
+ * Top-k positive and top-k negative weights across all feature kinds.
+ * Positive sorted descending, negative sorted most-negative first; zero
+ * weights excluded from both sides. Pure function — inspection surface only.
+ */
+export function topWeights(
+  weights: LearnedWeights,
+  k: number
+): { positive: WeightEntry[]; negative: WeightEntry[] } {
+  const all: WeightEntry[] = [];
+  for (const kind of ["category", "source", "token"] as const) {
+    for (const [key, weight] of Object.entries(weights[kind])) {
+      if (weight !== 0) all.push({ kind, key, weight });
+    }
+  }
+  return {
+    positive: all.filter((e) => e.weight > 0).sort((a, b) => b.weight - a.weight).slice(0, k),
+    negative: all.filter((e) => e.weight < 0).sort((a, b) => a.weight - b.weight).slice(0, k),
   };
 }

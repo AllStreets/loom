@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { tokenize, computeWeights } from "./learned";
+import { tokenize, computeWeights, topWeights } from "./learned";
 import { learnedBoost, scoreEvent } from "./score";
 import type { WatchEvent } from "./types";
 
@@ -297,6 +297,88 @@ describe("computeWeights — empty signals", () => {
     expect(weights.category).toEqual({});
     expect(weights.source).toEqual({});
     expect(weights.token).toEqual({});
+  });
+});
+
+// ── topWeights ────────────────────────────────────────────────────────────────
+
+describe("topWeights", () => {
+  it("returns empty arrays for empty weights", () => {
+    const { positive, negative } = topWeights({ category: {}, source: {}, token: {} }, 5);
+    expect(positive).toEqual([]);
+    expect(negative).toEqual([]);
+  });
+
+  it("collects entries across all three feature kinds", () => {
+    const { positive } = topWeights(
+      {
+        category: { finance: 0.18 },
+        source: { auspex: 0.1 },
+        token: { earthquake: 0.05 },
+      },
+      5
+    );
+    expect(positive).toHaveLength(3);
+    const kinds = positive.map((e) => e.kind);
+    expect(kinds).toContain("category");
+    expect(kinds).toContain("source");
+    expect(kinds).toContain("token");
+  });
+
+  it("positive entries sorted descending by weight", () => {
+    const { positive } = topWeights(
+      { category: { a: 0.05, b: 0.3 }, source: { c: 0.15 }, token: {} },
+      5
+    );
+    expect(positive.map((e) => e.key)).toEqual(["b", "c", "a"]);
+  });
+
+  it("negative entries sorted most-negative first", () => {
+    const { negative } = topWeights(
+      { category: { a: -0.05, b: -0.3 }, source: {}, token: { c: -0.15 } },
+      5
+    );
+    expect(negative.map((e) => e.key)).toEqual(["b", "c", "a"]);
+  });
+
+  it("respects k on both sides", () => {
+    const category: Record<string, number> = {};
+    for (let i = 0; i < 8; i++) category[`pos${i}`] = 0.1 + i * 0.01;
+    for (let i = 0; i < 8; i++) category[`neg${i}`] = -(0.1 + i * 0.01);
+    const { positive, negative } = topWeights({ category, source: {}, token: {} }, 5);
+    expect(positive).toHaveLength(5);
+    expect(negative).toHaveLength(5);
+    // Highest |weight| retained
+    expect(positive[0].key).toBe("pos7");
+    expect(negative[0].key).toBe("neg7");
+  });
+
+  it("excludes zero weights from both sides", () => {
+    const { positive, negative } = topWeights(
+      { category: { flat: 0 }, source: { up: 0.1 }, token: { down: -0.1 } },
+      5
+    );
+    expect(positive.map((e) => e.key)).toEqual(["up"]);
+    expect(negative.map((e) => e.key)).toEqual(["down"]);
+  });
+
+  it("entries carry kind, key and weight", () => {
+    const { positive, negative } = topWeights(
+      { category: { finance: 0.18 }, source: { dailymail: -0.12 }, token: {} },
+      5
+    );
+    expect(positive[0]).toEqual({ kind: "category", key: "finance", weight: 0.18 });
+    expect(negative[0]).toEqual({ kind: "source", key: "dailymail", weight: -0.12 });
+  });
+
+  it("composes with computeWeights output", () => {
+    const weights = computeWeights([
+      { action: "act", category: "finance" },
+      { action: "dismiss", source: "dailymail" },
+    ]);
+    const { positive, negative } = topWeights(weights, 5);
+    expect(positive[0]).toMatchObject({ kind: "category", key: "finance" });
+    expect(negative[0]).toMatchObject({ kind: "source", key: "dailymail" });
   });
 });
 

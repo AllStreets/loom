@@ -6,6 +6,7 @@ import {
   clearWatchlist,
   recordEngagement,
   getSignals,
+  clearSignals,
   engagementMap,
 } from "./store";
 import type { WatchlistEntry, EngagementSignal } from "./store";
@@ -114,6 +115,30 @@ describe("store — engagement signals", () => {
     expect(actions).toContain("open");
     expect(actions).toContain("dismiss");
     expect(actions).toContain("act");
+  });
+});
+
+// ── clearSignals ───────────────────────────────────────────────────────────────
+
+describe("store — clearSignals", () => {
+  it("wipes all engagement signals", () => {
+    recordEngagement({ eventKey: "q:1", action: "open", ts: 1 });
+    recordEngagement({ eventKey: "q:2", action: "dismiss", ts: 2 });
+    clearSignals();
+    expect(getSignals()).toHaveLength(0);
+  });
+
+  it("leaves the watchlist intact", () => {
+    addWatchlistEntry({ kind: "topic", value: "climate" });
+    recordEngagement({ eventKey: "q:1", action: "act", ts: 1 });
+    clearSignals();
+    expect(getWatchlist()).toHaveLength(1);
+    expect(getSignals()).toHaveLength(0);
+  });
+
+  it("is a no-op when no signals stored", () => {
+    expect(() => clearSignals()).not.toThrow();
+    expect(getSignals()).toHaveLength(0);
   });
 });
 

@@ -21,6 +21,8 @@ const mockRecordEngagement = vi.fn();
 const mockAddWatchlistEntry = vi.fn().mockReturnValue([]);
 const mockRemoveWatchlistEntry = vi.fn().mockReturnValue([]);
 const mockGetWatchlist = vi.fn().mockReturnValue([]);
+const mockGetSignals = vi.fn().mockReturnValue([]);
+const mockClearSignals = vi.fn();
 const mockGetSalient = vi.fn().mockReturnValue([]);
 const mockSendDeckCommands = vi.fn();
 
@@ -29,6 +31,8 @@ vi.mock("../lib/watch/store", () => ({
   addWatchlistEntry: (...args: unknown[]) => mockAddWatchlistEntry(...args),
   removeWatchlistEntry: (...args: unknown[]) => mockRemoveWatchlistEntry(...args),
   getWatchlist: (...args: unknown[]) => mockGetWatchlist(...args),
+  getSignals: (...args: unknown[]) => mockGetSignals(...args),
+  clearSignals: (...args: unknown[]) => mockClearSignals(...args),
 }));
 
 vi.mock("../lib/watch/runtime", () => ({
@@ -58,6 +62,7 @@ Object.defineProperty(window, "matchMedia", {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetWatchlist.mockReturnValue([]);
+  mockGetSignals.mockReturnValue([]);
   mockGetSalient.mockReturnValue([]);
   mockAddWatchlistEntry.mockReturnValue([]);
   mockRemoveWatchlistEntry.mockReturnValue([]);
@@ -362,6 +367,130 @@ describe("WatchPanel — badge count (integration hint)", () => {
     ];
     makePanel(true, items);
     expect(screen.getAllByTestId("watch-row")).toHaveLength(3);
+  });
+});
+
+describe("WatchPanel — learned section", () => {
+  // act on finance → category +0.10 (positive); dismiss dailymail → source -0.08 (negative)
+  function learnedSignals() {
+    return [
+      { eventKey: "a", action: "act", ts: 1, category: "finance" },
+      { eventKey: "b", action: "dismiss", ts: 2, source: "dailymail" },
+    ];
+  }
+
+  it("renders the LEARNED section with its toggle", () => {
+    makePanel();
+    expect(screen.getByTestId("learned-section")).toBeInTheDocument();
+    expect(screen.getByTestId("learned-toggle")).toBeInTheDocument();
+  });
+
+  it("is collapsed by default — no chips, no empty state", () => {
+    mockGetSignals.mockReturnValue(learnedSignals());
+    makePanel();
+    expect(screen.queryAllByTestId("learned-chip-pos")).toHaveLength(0);
+    expect(screen.queryAllByTestId("learned-chip-neg")).toHaveLength(0);
+    expect(screen.queryByTestId("learned-empty")).not.toBeInTheDocument();
+  });
+
+  it("expanding with no signals shows the empty state", () => {
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    expect(screen.getByTestId("learned-empty")).toBeInTheDocument();
+    expect(
+      screen.getByText("nothing learned yet — open, dismiss, and act to teach the watch")
+    ).toBeInTheDocument();
+  });
+
+  it("expanding with signals shows positive and negative chips", () => {
+    mockGetSignals.mockReturnValue(learnedSignals());
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    const pos = screen.getAllByTestId("learned-chip-pos");
+    const neg = screen.getAllByTestId("learned-chip-neg");
+    expect(pos).toHaveLength(1);
+    expect(neg).toHaveLength(1);
+    expect(pos[0].textContent).toContain("finance");
+    expect(pos[0].textContent).toContain("+0.10");
+    expect(neg[0].textContent).toContain("dailymail");
+    expect(neg[0].textContent).toContain("-0.08");
+  });
+
+  it("positive chips are accent-tinted, negative danger-tinted", () => {
+    mockGetSignals.mockReturnValue(learnedSignals());
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    const pos = screen.getAllByTestId("learned-chip-pos")[0];
+    const neg = screen.getAllByTestId("learned-chip-neg")[0];
+    expect(pos.getAttribute("style") || "").toContain("--accent");
+    expect(neg.getAttribute("style") || "").toContain("--danger");
+  });
+
+  it("caps at 5 positive and 5 negative chips", () => {
+    const signals = [];
+    for (let i = 0; i < 7; i++) {
+      signals.push({ eventKey: `p${i}`, action: "act", ts: i, category: `cat${i}` });
+      signals.push({ eventKey: `n${i}`, action: "dismiss", ts: i, source: `src${i}` });
+    }
+    mockGetSignals.mockReturnValue(signals);
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    expect(screen.getAllByTestId("learned-chip-pos")).toHaveLength(5);
+    expect(screen.getAllByTestId("learned-chip-neg")).toHaveLength(5);
+  });
+
+  it("no clear button when nothing learned", () => {
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    expect(screen.queryByTestId("learned-clear-btn")).not.toBeInTheDocument();
+  });
+
+  it("CLEAR LEARNING opens the confirm strip without clearing yet", () => {
+    mockGetSignals.mockReturnValue(learnedSignals());
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    fireEvent.click(screen.getByTestId("learned-clear-btn"));
+    expect(screen.getByTestId("learned-confirm-strip")).toBeInTheDocument();
+    expect(mockClearSignals).not.toHaveBeenCalled();
+  });
+
+  it("confirming wipes signals and recomputes weights empty", async () => {
+    mockGetSignals.mockReturnValue(learnedSignals());
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    fireEvent.click(screen.getByTestId("learned-clear-btn"));
+    // The store is now empty — the section recomputes from getSignals()
+    mockGetSignals.mockReturnValue([]);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("learned-confirm-btn"));
+    });
+    expect(mockClearSignals).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId("learned-confirm-strip")).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId("learned-chip-pos")).toHaveLength(0);
+    expect(screen.getByTestId("learned-empty")).toBeInTheDocument();
+  });
+
+  it("cancel closes the strip without clearing", () => {
+    mockGetSignals.mockReturnValue(learnedSignals());
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    fireEvent.click(screen.getByTestId("learned-clear-btn"));
+    fireEvent.click(screen.getByTestId("learned-cancel-btn"));
+    expect(screen.queryByTestId("learned-confirm-strip")).not.toBeInTheDocument();
+    expect(mockClearSignals).not.toHaveBeenCalled();
+    // Chips remain
+    expect(screen.getAllByTestId("learned-chip-pos")).toHaveLength(1);
+  });
+
+  it("refreshes weights when loom-salience fires", async () => {
+    makePanel();
+    fireEvent.click(screen.getByTestId("learned-toggle"));
+    expect(screen.getByTestId("learned-empty")).toBeInTheDocument();
+    mockGetSignals.mockReturnValue(learnedSignals());
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("loom-salience", { detail: { items: [] } }));
+    });
+    expect(screen.getAllByTestId("learned-chip-pos")).toHaveLength(1);
   });
 });
 
