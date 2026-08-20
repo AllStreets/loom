@@ -116,12 +116,25 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 
 - **EMBER Forge-in-deck** — VERIFIED 2026-08-19: Forge's boot guard (`'showDirectoryPicker' in window`, `public/decks/ember/js/forge.js`) fails inside LOOM's WKWebView (Tauri v2 macOS has no File System Access API), in dev and under the packaged `deck://` origin alike; EMBER renders its own unsupported callout and everything else works. Forge requires the standalone EMBER app in a Chromium browser; the deck is read/advise mode. Path options if Forge-through-LOOM is ever wanted (stage-7 backlog): Tauri command bridge proxying file reads/writes for EMBER's loop, or a companion read-file/write-file postMessage protocol scoped to the organs directory.
 - **AGORA command bridge** — AGORA currently docks as a passive iframe. Add a postMessage command channel so LOOM can send orders (route, focus market, trigger agent action) and receive live state back.
-- **Learned-weights inspection UI** — the salience engine persists per-feature weights in localStorage; there is no UI surface for inspecting or resetting them. A minimal panel (token/category/source weight table + reset button) would close the transparency gap.
-- **LoRA fine-tune bridge** — a lightweight path for the owner to fine-tune a local model on engagement history without leaving the cockpit. Depends on learned-weights inspection and the Ollama LoRA import path.
+- **LoRA fine-tune bridge** — a lightweight path for the owner to fine-tune a local model on engagement history without leaving the cockpit. Depends on the Ollama LoRA import path. (Learned-weights inspection prerequisite resolved in Stage 6.)
 - **Salience place-field** — track lat/lng engagement signals and build a geographic affinity map; use it to weight fly-to suggestions and boost geographically relevant Watch items.
 - **AGORA iframe live-state screenshot unverified** — the offline card is tested and screenshot-gated; the live iframe state (AGORA running) was not captured during 4b because Postgres/engine were not started. Verify and screenshot in a follow-up session.
 - **AbortSignal.timeout wkwebview fallback** — `AbortSignal.timeout()` may not be available on older macOS wkwebview targets. The `timeoutSignal()` helper already polyfills this; monitor for gaps. (`src/lib/util/timeoutSignal.ts`)
 - **Mid-Earth chat overlay polish for narrow heights** — companion chat panel compresses on short viewports; needs a min-height / scroll-container pass for 768px and below. (`src/components/Companion.tsx`, `src/components/Shell.tsx`)
+
+### Stage-7 backlog (post-Stage-6)
+
+- **AGORA db:setup helper** — LOOM starts the web process but Postgres setup (createdb, migrations) is still manual. A guided `db:setup` command surface (validated like the dev spawn) would close the last "not working" gap for fresh machines.
+- **AGORA engine host from setting** — engine health probes hardcode `localhost:8080` while the web URL is configurable; derive the engine host from `deck.agora.url` when engine port config lands. (Carried from stage-5 notes.)
+- **Forge-through-LOOM** — see the verified EMBER item above; if wanted, a Tauri command bridge or scoped read/write postMessage protocol are the options.
+- **`agora_logs` full surface** — the ring buffer (200 lines) is readable via the `agora_logs` command; the card shows the last lines while starting. A settings-gated full log viewer remains open.
+
+### Resolved in Stage 6 (Command, Phase 15)
+
+- AGORA launch control — `agora_start/stop/status/logs` Tauri commands; fixed-argv spawn (`npm run dev`, no shell), home-prefix + package.json `scripts.dev` validation, single-child mutex, piped stdout/stderr → 200-line ring buffer, kill on stop and on LOOM exit; offline card START → IGNITING (live log lines, bounded 2s×45s probing) → iframe; STOP chip in the health strip. (`src-tauri/src/agora.rs`, `src/components/decks/AgoraDeck.tsx`)
+- Learned-weights inspection — WatchPanel LEARNED section (top ±5 chips, kind glyphs, accent/danger tints), CLEAR LEARNING confirm strip → `clearSignals()`; `topWeights(weights, k)` helper. (`src/components/WatchPanel.tsx`, `src/lib/watch/learned.ts`, `src/lib/watch/store.ts`)
+- Whisper token spew silenced via whisper-rs log hook at model init; cargo warnings fixed (LOOM's own code builds warning-free). (`src-tauri/src/voice.rs`, `src-tauri/src/cloud.rs`)
+- EMBER Forge-in-deck verified honestly (see stage-6 backlog entry above): WKWebView lacks the File System Access API; deck is read/advise mode. Docs updated.
 
 ### Resolved in Stage 5 (Deepening, Phase 14)
 - LOOM-owned Rust quote proxy — `quote_fetch` Tauri command (reqwest, symbol validation, 10s timeout); desktop never touches corsproxy; browser dev path unchanged. (`src-tauri/src/quotes.rs`, `src/lib/terminal/quotes.ts`, `src/lib/core.ts`)

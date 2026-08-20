@@ -170,6 +170,28 @@ When AGORA is reachable the iframe mounts live; pointer events follow the intera
 
 ---
 
+## Stage 6 — Command
+
+**Phase 15 — Stage 6 — shipped.**
+
+The cockpit commands its fleet. AGORA is no longer a dock you have to feed — LOOM starts and stops the exchange itself. The watch's mind is open for inspection. The noisy edges went quiet.
+
+**LOOM starts AGORA.**
+
+Say "show agora" and, if the exchange is dark, the offline card now carries a START control. Press it and LOOM spawns AGORA's dev server as a managed child process — fixed argv (`npm run dev`, no shell, no user-supplied arguments), working directory from Settings > Decks > AGORA path, validated Rust-side before anything spawns: the path must exist, sit under your home directory, and contain a `package.json` with a real `dev` script. One child max. The card shows "IGNITING THE EXCHANGE" with the last lines of live process output while LOOM auto-probes the web URL (every 2s, bounded at 45s); when AGORA answers, the iframe mounts and a STOP chip joins the health strip. The child is killed on STOP and on LOOM exit — no orphaned processes.
+
+**Honest boundary:** LOOM manages the AGORA web process only. Postgres is a system service and stays yours to run — the card says so ("Postgres must be running").
+
+**The owner can read the watch's mind.**
+
+The watch panel gains a LEARNED section: the top positive and negative weights the salience engine has learned from your behavior, as tinted chips with kind glyphs (`#` category, `/` source, `~` word) — `#finance +0.18`, `/dailymail -0.12`. Nothing hidden, nothing cloud: these are the actual weights, recomputed from your local engagement signals. CLEAR LEARNING (with a confirm strip) wipes the signals and the watch forgets everything it inferred about you. Sovereignty includes your own model of yourself.
+
+**Hygiene.** Whisper's C-level token spew is silenced at the log-hook level — voice transcription no longer floods the console. LOOM's own Rust code builds warning-free.
+
+**Verified honestly:** EMBER's Forge cannot run inside the deck — WKWebView has no File System Access API, so EMBER shows its own unsupported callout and everything else works. Forge requires the standalone EMBER app in a Chromium browser; the deck is read/advise mode. Documented, not papered over.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -274,7 +296,8 @@ Built in phases, each a working, tested, reviewed milestone.
 | **12 · The Cockpit (Stage 4a)** | ownership: organ delete + tombstones · reset-to-defaults · persistence (watchOpen, minimized set) · constellation off-by-default · interact-by-default · deck-mode legibility · orb transparent-mode over decks | **shipped** |
 | **13 · The Cockpit (Stage 4b)** | EMBER failsafe deck · AGORA exchange dock · deckserve generalized to all decks · five decks total | **shipped** |
 | **14 · The Cockpit (Stage 5)** | LOOM-owned Rust quote proxy (desktop never touches third-party) · globe fly-to on briefings and locate · salience learns from owner behavior (transparent local weights) · AGORA engine health strip | **shipped** |
-| **later** | EMBER Forge-in-deck · AGORA command bridge · learned-weights inspection UI · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
+| **15 · The Cockpit (Stage 6)** | command: LOOM starts/stops AGORA itself (managed child process, validated spawn, exit-kill) · learned-weights inspection + CLEAR LEARNING · whisper log silence · warning-free build | **shipped** |
+| **later** | EMBER Forge-in-deck · AGORA command bridge · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 
