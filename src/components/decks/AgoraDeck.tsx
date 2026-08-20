@@ -15,6 +15,8 @@
  * START button: calls agora_start(path) → "igniting" overlay with log polling.
  *   Auto-probes every 2s, up to 45s (22 attempts). If reachable → show iframe.
  *   After 45s → "still dark" card with RETRY + STOP.
+ *   If agora_start REJECTS (bad path, no package.json, ...) nothing spawned —
+ *   skip the probe loop entirely and surface the reason on the offline card.
  * STOP chip: calls agora_stop() → re-probes.
  *
  * sandbox="allow-scripts allow-same-origin allow-forms"
@@ -32,7 +34,7 @@ interface AgoraDeckProps {
 }
 
 type ProbeState = "probing" | "reachable" | "unreachable";
-type LaunchState = "idle" | "igniting" | "still-dark";
+type LaunchState = "idle" | "igniting" | "still-dark" | "spawn-failed";
 
 function getAgoraUrl(): string {
   try {
@@ -51,11 +53,24 @@ function getAgoraPath(): string {
   }
 }
 
+/**
+ * Extract a human-readable reason from a rejected agora_start invoke.
+ * Rust rejections arrive as { kind, message }; Error covers shell-side throws.
+ */
+function startErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object" && "message" in err) {
+    return String((err as { message: unknown }).message);
+  }
+  return String(err);
+}
+
 export default function AgoraDeck({ interact }: AgoraDeckProps) {
   const reducedMotion = useReducedMotion() ?? false;
   const [opacity, setOpacity] = useState(reducedMotion ? 1 : 0);
   const [probeState, setProbeState] = useState<ProbeState>("probing");
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
+  const [startError, setStartError] = useState<string | null>(null);
   const [engineHealth, setEngineHealth] = useState<"probing" | "healthy" | "down">("probing");
   const [logs, setLogs] = useState<string[]>([]);
   const agoraUrl = getAgoraUrl();
@@ -155,14 +170,22 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
 
   const handleStart = useCallback(async () => {
     setLaunchState("igniting");
+    setStartError(null);
     setLogs([]);
 
     const path = getAgoraPath();
 
     try {
       await agoraStart(path);
-    } catch {
-      // Spawn error — still show igniting for a moment, it may still come up
+    } catch (err) {
+      // A rejected agora_start means nothing spawned — skip the probe loop
+      // entirely and surface the reason instead of 45s of false hope.
+      if (mountedRef.current) {
+        setStartError(startErrorMessage(err));
+        setLaunchState("spawn-failed");
+        setProbeState("unreachable");
+      }
+      return;
     }
 
     // Poll logs every 2s
@@ -217,6 +240,7 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
 
   const handleRetry = useCallback(() => {
     setLaunchState("idle");
+    setStartError(null);
     probe();
   }, [probe]);
 
@@ -401,6 +425,21 @@ export default function AgoraDeck({ interact }: AgoraDeckProps) {
                 }}
               >
                 STILL DARK — exchange did not come up in 45s.
+              </div>
+            )}
+            {launchState === "spawn-failed" && startError && (
+              <div
+                data-testid="agora-spawn-error"
+                style={{
+                  fontFamily: "var(--f-mono, monospace)",
+                  fontSize: 11,
+                  color: "var(--danger, #ef4444)",
+                  letterSpacing: "0.08em",
+                  lineHeight: 1.5,
+                  wordBreak: "break-word",
+                }}
+              >
+                COULD NOT IGNITE — {startError}
               </div>
             )}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

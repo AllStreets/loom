@@ -457,6 +457,106 @@ describe("AgoraDeck — bounded ignition probe", () => {
   });
 });
 
+describe("AgoraDeck — spawn rejection (agora_start rejects)", () => {
+  it("rejection skips the probe loop entirely — no igniting, no intervals", async () => {
+    const { agoraStart, agoraLogs } = await import("../../lib/core");
+    vi.mocked(agoraStart).mockRejectedValueOnce({
+      kind: "not_found",
+      message: "not found: AGORA path does not exist: /nope",
+    });
+
+    vi.useFakeTimers();
+    const fetchMock = makeRejectingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    act(() => {
+      render(<AgoraDeck interact={true} />);
+    });
+
+    // Flush the initial probe (which rejects)
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const startBtn = screen.getByTestId("agora-start-btn");
+    act(() => {
+      fireEvent.click(startBtn);
+    });
+
+    // Flush the rejected agoraStart promise
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Straight to failure — no igniting overlay
+    expect(screen.queryByTestId("agora-igniting")).toBeNull();
+    expect(screen.getByTestId("agora-spawn-error")).not.toBeNull();
+
+    // No probe/log intervals were set up — advancing time fires nothing
+    const fetchCallsBefore = fetchMock.mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.length).toBe(fetchCallsBefore);
+    expect(agoraLogs).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("failure copy surfaces the rejection reason", async () => {
+    const { agoraStart } = await import("../../lib/core");
+    vi.mocked(agoraStart).mockRejectedValueOnce({
+      kind: "not_found",
+      message: "not found: AGORA path has no package.json: /Users/x/empty",
+    });
+
+    vi.stubGlobal("fetch", makeRejectingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-start-btn")).not.toBeNull();
+    });
+
+    await userEvent.click(screen.getByTestId("agora-start-btn"));
+
+    await waitFor(() => {
+      const el = screen.getByTestId("agora-spawn-error");
+      expect(el.textContent).toContain("COULD NOT IGNITE");
+      expect(el.textContent).toContain("AGORA path has no package.json");
+    });
+  });
+
+  it("starting again after a rejection clears the failure copy", async () => {
+    const { agoraStart } = await import("../../lib/core");
+    vi.mocked(agoraStart).mockRejectedValueOnce({
+      kind: "not_found",
+      message: "not found: nope",
+    });
+
+    vi.stubGlobal("fetch", makeRejectingFetch());
+    render(<AgoraDeck interact={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-start-btn")).not.toBeNull();
+    });
+
+    await userEvent.click(screen.getByTestId("agora-start-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-spawn-error")).not.toBeNull();
+    });
+
+    // Second START resolves (default mock) — igniting proceeds, copy is gone
+    await userEvent.click(screen.getByTestId("agora-start-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("agora-igniting")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("agora-spawn-error")).toBeNull();
+  });
+});
+
 describe("AgoraDeck — STOP chip when reachable", () => {
   it("stop chip (agora-stop-btn) present when reachable", async () => {
     vi.stubGlobal("fetch", makeResolvingFetch());

@@ -2,13 +2,16 @@
 ///
 /// Commands: agora_start, agora_stop, agora_status, agora_logs
 /// State: AgoraState (Mutex<Option<Child>> + Arc<Mutex<VecDeque<String>>> ring)
-/// Process safety: fixed argv ["npm","run","dev"], home-prefix path validation,
-///   package.json scripts.dev check, single-child mutex, exit kill.
+/// Process safety: fixed argv ["npm","run","dev"], canonical home-prefix path
+///   validation (symlinks resolved), package.json scripts.dev check,
+///   single-child mutex, process-group spawn + group kill, exit kill.
 
 use crate::error::LoomError;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -42,7 +45,9 @@ pub struct AgoraStatus {
 // ── Path validation (inner, testable) ─────────────────────────────────────────
 
 /// Inner: validate path given an explicit home dir for testability.
-pub fn validate_agora_path_inner(path: &Path, home: &Path) -> Result<(), LoomError> {
+/// Returns the canonicalized path (symlinks resolved) on success — callers
+/// must spawn from the canonical path, not the raw one.
+pub fn validate_agora_path_inner(path: &Path, home: &Path) -> Result<PathBuf, LoomError> {
     // Must exist
     if !path.exists() {
         return Err(LoomError::NotFound(format!(
@@ -59,8 +64,18 @@ pub fn validate_agora_path_inner(path: &Path, home: &Path) -> Result<(), LoomErr
         )));
     }
 
-    // Must be under home prefix
-    if !path.starts_with(home) {
+    // Canonicalize BOTH sides before the containment check — a symlink under
+    // $HOME resolving outside home must not pass (same pattern as
+    // deckserve::sanitize_path).
+    let canonical = path.canonicalize().map_err(|e| {
+        LoomError::NotFound(format!("canonicalize AGORA path {}: {e}", path.display()))
+    })?;
+    let canonical_home = home.canonicalize().map_err(|e| {
+        LoomError::NotFound(format!("canonicalize home {}: {e}", home.display()))
+    })?;
+
+    // Must be under home prefix (canonical vs canonical)
+    if !canonical.starts_with(&canonical_home) {
         return Err(LoomError::NotFound(format!(
             "AGORA path must be under home directory ({}): {}",
             home.display(),
@@ -69,7 +84,7 @@ pub fn validate_agora_path_inner(path: &Path, home: &Path) -> Result<(), LoomErr
     }
 
     // Must have package.json
-    let pkg_path = path.join("package.json");
+    let pkg_path = canonical.join("package.json");
     if !pkg_path.exists() {
         return Err(LoomError::NotFound(format!(
             "AGORA path has no package.json: {}",
@@ -95,11 +110,11 @@ pub fn validate_agora_path_inner(path: &Path, home: &Path) -> Result<(), LoomErr
         )));
     }
 
-    Ok(())
+    Ok(canonical)
 }
 
-/// Public wrapper — uses the real home directory.
-pub fn validate_agora_path(path: &Path) -> Result<(), LoomError> {
+/// Public wrapper — uses the real home directory. Returns the canonical path.
+pub fn validate_agora_path(path: &Path) -> Result<PathBuf, LoomError> {
     let home = home_dir()?;
     validate_agora_path_inner(path, &home)
 }
@@ -167,10 +182,10 @@ pub fn agora_start(
         path
     };
     let expanded = expand_tilde(&raw_path);
-    let work_dir = PathBuf::from(&expanded);
 
-    // Validate
-    validate_agora_path(&work_dir)?;
+    // Validate — returns the canonical path (symlinks resolved); spawn from
+    // that so the working directory cannot dangle outside the checked boundary.
+    let work_dir = validate_agora_path(&PathBuf::from(&expanded))?;
 
     // Clear ring buffer
     if let Ok(mut buf) = state.ring.lock() {
@@ -183,6 +198,11 @@ pub fn agora_start(
     cmd.current_dir(&work_dir);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    // Unix: put the child in its own process group (pgid = child pid) so the
+    // kill paths can take down the whole `npm run dev` tree — concurrently /
+    // Next.js grandchildren included — not just the npm shim.
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     let mut child = cmd
         .spawn()
@@ -222,13 +242,26 @@ pub fn agora_start(
     Ok(format!("started pid={pid}"))
 }
 
-/// Stop AGORA. Kills child process if running.
+/// Kill the child's whole process group (unix) so `npm run dev` grandchildren
+/// (concurrently / Next.js on :3000/:8080) die with it, then direct-kill the
+/// npm pid as fallback. The child is spawned with `process_group(0)`, so its
+/// pid IS the pgid. Callers must still `wait()` to reap.
+fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
+    #[cfg(unix)]
+    unsafe {
+        // Negative pid → signal every process in the group.
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    // Fallback / non-unix path: plain kill of the direct child.
+    child.kill()
+}
+
+/// Stop AGORA. Kills the whole child process tree if running.
 #[tauri::command]
 pub fn agora_stop(state: tauri::State<'_, AgoraState>) -> Result<(), LoomError> {
     let mut child_lock = state.child.lock().map_err(|e| LoomError::Git(format!("lock: {e}")))?;
     if let Some(mut child) = child_lock.take() {
-        child
-            .kill()
+        kill_process_tree(&mut child)
             .map_err(|e| LoomError::Git(format!("kill agora: {e}")))?;
         let _ = child.wait(); // reap
     }
@@ -270,11 +303,12 @@ pub fn agora_logs(state: tauri::State<'_, AgoraState>) -> Vec<String> {
 
 // ── Exit hook helper (called from lib.rs) ────────────────────────────────────
 
-/// Kill AGORA child if running. Called from the Tauri RunEvent::Exit handler.
+/// Kill the AGORA child tree if running. Called from the Tauri
+/// RunEvent::ExitRequested handler (and RunEvent::Exit as a second net).
 pub fn kill_agora(state: &AgoraState) {
     if let Ok(mut child_lock) = state.child.lock() {
         if let Some(mut child) = child_lock.take() {
-            let _ = child.kill();
+            let _ = kill_process_tree(&mut child);
             let _ = child.wait();
         }
     }
@@ -364,6 +398,36 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_path_symlink_escape_rejected() {
+        let home_dir = tempdir().unwrap();
+        let outside_dir = tempdir().unwrap();
+        let home = home_dir.path().to_path_buf();
+
+        // A real, otherwise-valid project OUTSIDE home
+        let target = outside_dir.path().join("real-agora");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("package.json"),
+            r#"{"scripts":{"dev":"next dev"}}"#,
+        )
+        .unwrap();
+
+        // A symlink UNDER home resolving outside home — the un-canonicalized
+        // path starts_with(home), so this proves the canonical check.
+        let link = home.join("agora-link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(link.starts_with(&home), "precondition: raw link is under home");
+
+        let result = validate_agora_path_inner(&link, &home);
+        assert!(result.is_err(), "symlink escaping home must be rejected");
+        match result.unwrap_err() {
+            LoomError::NotFound(_) => {}
+            e => panic!("expected NotFound, got {:?}", e),
+        }
+    }
+
     #[test]
     fn test_validate_path_valid() {
         let dir = tempdir().unwrap();
@@ -377,6 +441,43 @@ mod tests {
         .unwrap();
         let result = validate_agora_path_inner(&agora_dir, &home);
         assert!(result.is_ok(), "valid path must return Ok, got {:?}", result);
+    }
+
+    // ── Process-tree kill tests ───────────────────────────────────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn test_kill_process_tree_kills_grandchild() {
+        // Spawn a shell whose backgrounded `sleep` lands in the same new
+        // process group (non-interactive sh has no job control).
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("sleep 30 & echo $!; wait");
+        cmd.process_group(0);
+        cmd.stdout(Stdio::piped());
+        let mut child = cmd.spawn().expect("spawn sh");
+
+        // Read the grandchild (sleep) pid from stdout
+        let stdout = child.stdout.take().expect("stdout piped");
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read grandchild pid");
+        let grandchild_pid: i32 = line.trim().parse().expect("parse grandchild pid");
+
+        kill_process_tree(&mut child).expect("kill process tree");
+        let _ = child.wait(); // reap direct child
+
+        // Grandchild must be gone (or an unreaped zombie) — a plain
+        // child.kill() would have left it alive in state S.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let out = Command::new("ps")
+            .args(["-o", "stat=", "-p", &grandchild_pid.to_string()])
+            .output()
+            .expect("run ps");
+        let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(
+            stat.is_empty() || stat.starts_with('Z'),
+            "grandchild sleep must be dead after group kill, got stat={stat:?}"
+        );
     }
 
     // ── Ring buffer tests ─────────────────────────────────────────────────────
