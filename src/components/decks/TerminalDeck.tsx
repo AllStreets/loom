@@ -1082,6 +1082,16 @@ export default function TerminalDeck() {
   const [detail, setDetail] = useState<string | null>(null);
   // The floor overlay's product — null means closed (and zero floor polls).
   const [floor, setFloor] = useState<string | null>(null);
+  // The two overlays are mutually exclusive: each installs its own window
+  // Esc handler, so both mounted at once would close together on one press.
+  const openDetail = (symbol: string) => {
+    setFloor(null);
+    setDetail(symbol);
+  };
+  const openFloor = (product: string) => {
+    setDetail(null);
+    setFloor(product);
+  };
   const [crypto, setCrypto] = useState<SourceState<MarketCrypto[]>>({ data: null, updatedAt: 0, error: false });
   const [fx, setFx] = useState<SourceState<MarketFx>>({ data: null, updatedAt: 0, error: false });
 
@@ -1264,7 +1274,7 @@ export default function TerminalDeck() {
               style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}
             >
               {indexCards.map((q) => (
-                <IndexCard key={q.symbol} q={q} onSelect={setDetail} />
+                <IndexCard key={q.symbol} q={q} onSelect={openDetail} />
               ))}
             </div>
 
@@ -1277,7 +1287,7 @@ export default function TerminalDeck() {
                 minHeight: 0,
               }}
             >
-              <MoversTable rows={movers} stale={snap.stale} onSelect={setDetail} />
+              <MoversTable rows={movers} stale={snap.stale} onSelect={openDetail} />
               {/* Center spine kept clear for the orb hero (z10). */}
               <div data-testid="orb-spine" aria-hidden />
               <FinanceWire items={wire} />
@@ -1293,7 +1303,7 @@ export default function TerminalDeck() {
         {/* Bottom: crypto (30s) and FX (daily, 10min) — independent sources,
             alive even when the equities tape is dark. */}
         <div style={{ display: "flex", gap: 16 }}>
-          <CryptoStrip state={crypto} onSelect={setFloor} />
+          <CryptoStrip state={crypto} onSelect={openFloor} />
           <FxStrip state={fx} />
         </div>
       </div>

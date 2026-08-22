@@ -127,9 +127,14 @@ export default function Shell() {
   const [voiceReady, setVoiceReady] = useState(false);
   const reducedMotion = useReducedMotion() ?? false;
 
-  // Harden against a stored deck id that no longer exists (a retired deck,
-  // before the boot migration runs) — an unknown id boots as the void, never a
-  // blank deck.
+  // Boot migration MUST precede the useState initializers below — they read
+  // settings synchronously on first render, before any effect fires, and the
+  // retired keys (and a stored retired deck id) must already be gone.
+  // Idempotent: only localStorage.removeItem calls, safe on every render.
+  migrateSettings();
+
+  // Harden against a stored deck id that no longer exists (defense-in-depth
+  // behind the migration) — an unknown id boots as the void, never a blank deck.
   const [deck, setDeck] = useState<DeckId>(() => {
     const stored = getSetting('cockpit.deck');
     return (['void', 'globe', 'terminal', 'ember'] as const).includes(stored as DeckId)

@@ -390,6 +390,21 @@ describe("TerminalDeck — crypto floor overlay", () => {
     );
   });
 
+  it("floor and symbol detail are mutually exclusive — each closes the other", async () => {
+    // Both overlays install their own window Esc handler; mounted together,
+    // one keypress would close both (review finding, Phase 18 ship gate).
+    stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
+    const { findByTestId, getByTestId, queryByTestId } = render(<TerminalDeck />);
+    fireEvent.click(getByTestId("index-card-SPY"));
+    expect(getByTestId("symbol-detail")).toBeTruthy();
+    fireEvent.click(await findByTestId("crypto-chip-BTC-USD"));
+    expect(getByTestId("floor-detail")).toBeTruthy();
+    expect(queryByTestId("symbol-detail")).toBeNull();
+    fireEvent.click(getByTestId("index-card-SPY"));
+    expect(getByTestId("symbol-detail")).toBeTruthy();
+    expect(queryByTestId("floor-detail")).toBeNull();
+  });
+
   it("renders the ladder and tape from the floor sources", async () => {
     stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
     const { findByTestId, findAllByTestId } = render(<TerminalDeck />);
