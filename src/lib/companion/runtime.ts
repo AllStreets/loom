@@ -4,6 +4,7 @@ import type { Msg } from "../core";
 import { COMPANION_SYSTEM, windowMessages } from "./persona";
 import type { DeckCommandResult } from "../decks/commands";
 import type { ScoredEvent } from "../watch/types";
+import { buildCatalog, helpText } from "../shuttle/catalog";
 
 export type CompanionDeps = {
   chat: (role: string, messages: Msg[], opts?: object) => Promise<string>;
@@ -25,7 +26,8 @@ export type CompanionTurn =
   | { kind: "edit"; organId: string; result: BuildResult }
   | { kind: "act"; organId: string }
   | { kind: "deck_command"; deckCommandResult: DeckCommandResult; confirmation: string }
-  | { kind: "briefing"; text: string };
+  | { kind: "briefing"; text: string }
+  | { kind: "help"; text: string };
 
 export async function handle(
   utterance: string,
@@ -60,6 +62,14 @@ export async function handle(
         }
       }
       return { kind: "briefing", text: "Top of the watch: " + sentences.join(" ") };
+    }
+
+    case "help": {
+      // Fast path — zero model calls. Speaks the command grammar generated
+      // FROM the shuttle catalog (same no-model pattern as briefings), so
+      // voice discoverability and the Cmd+K palette can never drift apart.
+      const catalog = buildCatalog({ organs: ids.map((id) => ({ id, title: id })) });
+      return { kind: "help", text: helpText(catalog) };
     }
 
     case "deck_command": {

@@ -19,6 +19,7 @@ import { startWatch, stopWatch } from '../lib/watch/runtime';
 import Tapestry from './Tapestry';
 import LoomGlyph from './chrome/LoomGlyph';
 import WatchPanel from './WatchPanel';
+import Shuttle from './Shuttle';
 import ErrorBoundary from './ErrorBoundary';
 
 // Active turn moods — fleet-offline cannot override these
@@ -560,6 +561,32 @@ export default function Shell() {
 
           {/* Right cluster — fleet HUD + one segmented deck control, same height, baseline row */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flexShrink: 1 }}>
+            {/* Shuttle affordance — the ⌘K hint chip (same glass language as its neighbors) */}
+            <button
+              data-testid="shuttle-hint-chip"
+              title="the shuttle — command palette"
+              onClick={() => window.dispatchEvent(new CustomEvent("loom-shuttle-open"))}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                height: 30,
+                padding: "0 11px",
+                flexShrink: 0,
+                background: "var(--glass)",
+                border: "1px solid var(--glass-border)",
+                borderRadius: 999,
+                backdropFilter: "blur(var(--blur))",
+                WebkitBackdropFilter: "blur(var(--blur))",
+                fontFamily: "var(--f-mono)",
+                fontSize: 10,
+                letterSpacing: ".1em",
+                color: "var(--t3)",
+                cursor: "pointer",
+              }}
+            >
+              ⌘K
+            </button>
+
             {/* Fleet HUD — persistent role strip (uses Shell's already-polled roles) */}
             <div
               style={{
@@ -895,6 +922,12 @@ export default function Shell() {
       {/* ── Watch panel: collapsible salience feed (z 900, right side) ── */}
       <ErrorBoundary zone="watch-panel">
         <WatchPanel open={watchOpen} onClose={() => { setWatchOpen(false); setWatchUnseen(0); }} />
+      </ErrorBoundary>
+
+      {/* ── The Shuttle: Cmd+K palette (z 3000 — above every panel; executes
+          through the same loom-utterance seam voice transcripts take) ── */}
+      <ErrorBoundary zone="shuttle">
+        <Shuttle />
       </ErrorBoundary>
     </div>
   );

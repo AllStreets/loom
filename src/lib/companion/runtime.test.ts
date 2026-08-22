@@ -222,3 +222,40 @@ describe("handle — briefing fly_to steering", () => {
     ]);
   });
 });
+
+// ── help fast path — voice discoverability from the shuttle catalog ───────────
+
+describe("handle — help routes without model call", () => {
+  it("'what can you do' returns help turn kind, no chat/askModel call", async () => {
+    const deps = makeDeps();
+    const turn = await handle("what can you do", [], deps);
+    expect(turn.kind).toBe("help");
+    expect(deps.chat).not.toHaveBeenCalled();
+    expect(deps.askModel).not.toHaveBeenCalled();
+  });
+
+  it("'help' speaks group names with catalog examples", async () => {
+    const deps = makeDeps();
+    const turn = await handle("help", [], deps);
+    if (turn.kind !== "help") throw new Error("Expected help");
+    expect(turn.text.toLowerCase()).toContain("decks");
+    expect(turn.text.toLowerCase()).toContain("watch");
+    expect(turn.text.toLowerCase()).toContain("system");
+    expect(turn.text).toContain('"show the globe"');
+    expect(turn.text).toContain('"brief me"');
+  });
+
+  it("help includes organ examples when organs exist", async () => {
+    const deps = makeDeps({ organIds: vi.fn().mockResolvedValue(["water-tracker"]) });
+    const turn = await handle("what can you do", [], deps);
+    if (turn.kind !== "help") throw new Error("Expected help");
+    expect(turn.text.toLowerCase()).toContain("organs");
+    expect(turn.text).toContain('"open water tracker"');
+  });
+
+  it("'help me build a tracker' does NOT route to help (build wins)", async () => {
+    const deps = makeDeps();
+    const turn = await handle("help me build a tracker", [], deps);
+    expect(turn.kind).toBe("build");
+  });
+});

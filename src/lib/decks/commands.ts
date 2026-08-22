@@ -101,7 +101,7 @@ function extractCat(utterance: string): string | null {
 
 // ── Confirmation text ────────────────────────────────────────────────────────
 
-const CAT_LABELS: Record<string, string> = {
+export const CAT_LABELS: Record<string, string> = {
   military: "military",
   geo: "geopolitical",
   finance: "finance",
@@ -109,6 +109,35 @@ const CAT_LABELS: Record<string, string> = {
   tech: "tech",
   all: "all",
 };
+
+// ── Phrase table (data for the shuttle catalog) ──────────────────────────────
+// One row per deck voice command, phrased so every phrase and alias matches the
+// classifier regexes above. The shuttle catalog derives its DECKS group from
+// this table — catalog.test.ts asserts each row still classifies, so the
+// phrases and the patterns cannot drift apart. Category-filter commands are
+// derived separately from CAT_LABELS ("show <label> news").
+
+export type DeckCommandMeta = {
+  id: string;
+  /** canonical utterance — dispatched verbatim through the voice path */
+  phrase: string;
+  aliases: string[];
+  /** short palette description (mirrors the spoken confirmation) */
+  hint: string;
+};
+
+export const DECK_COMMAND_META: readonly DeckCommandMeta[] = [
+  { id: "deck-globe-show", phrase: "show the globe", aliases: ["open the world", "show the map"], hint: "globe up" },
+  { id: "deck-globe-hide", phrase: "hide the globe", aliases: ["back to the void", "close the world"], hint: "back to the void" },
+  { id: "deck-terminal-show", phrase: "show the terminal", aliases: ["show the tape", "open the markets"], hint: "the tape is live" },
+  { id: "deck-terminal-hide", phrase: "hide the terminal", aliases: ["close the tape"], hint: "back to the void" },
+  { id: "deck-ember-show", phrase: "show ember", aliases: ["the failsafe", "show survival"], hint: "failsafe up" },
+  { id: "deck-agora-show", phrase: "show agora", aliases: ["open the exchange", "open the floor"], hint: "the exchange is live" },
+  { id: "globe-vessels", phrase: "show vessels", aliases: ["show ships", "toggle vessels"], hint: "live AIS ships overlay" },
+  { id: "globe-spin-start", phrase: "start spinning", aliases: ["start rotation"], hint: "spin the globe" },
+  { id: "globe-spin-stop", phrase: "stop spinning", aliases: ["stop rotation"], hint: "stop the globe" },
+  { id: "globe-reset", phrase: "reset the view", aliases: ["reset the globe", "reset the camera"], hint: "reset the camera" },
+];
 
 // ── Main classifier ──────────────────────────────────────────────────────────
 

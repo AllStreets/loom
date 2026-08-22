@@ -488,3 +488,27 @@ describe("classifyByRules — briefing intent", () => {
     expect(systemArg).toContain("brief me");
   });
 });
+
+// ---- Task 3 (identity): help intent ----------------------------------------
+
+describe("classifyByRules — help", () => {
+  it("returns help for 'help'", () => {
+    const result = classifyByRules("help", []);
+    expect(result?.intent).toBe("help");
+    expect(result?.source).toBe("rules");
+  });
+
+  it("returns help for 'what can you do' and 'what can you do?'", () => {
+    expect(classifyByRules("what can you do", [])?.intent).toBe("help");
+    expect(classifyByRules("what can you do?", [])?.intent).toBe("help");
+  });
+
+  it("'help me build a tracker' routes to build_organ, not help", () => {
+    const result = classifyByRules("help me build a tracker", []);
+    expect(result?.intent).toBe("build_organ");
+  });
+
+  it("questions still route to converse ('how are you?')", () => {
+    expect(classifyByRules("how are you?", [])?.intent).toBe("converse");
+  });
+});

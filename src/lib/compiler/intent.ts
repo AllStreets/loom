@@ -1,7 +1,7 @@
 import { normalize } from "./normalize";
 import { classifyDeckCommand } from "../decks/commands";
 
-export type Intent = "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "deck_command" | "briefing";
+export type Intent = "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "deck_command" | "briefing" | "help";
 
 export type IntentResult = {
   intent: Intent;
@@ -21,6 +21,7 @@ const VALID_INTENTS = new Set<string>([
   "converse",
   "deck_command",
   "briefing",
+  "help",
 ]);
 
 // Verbs that signal an intent to modify an existing organ.
@@ -38,8 +39,26 @@ const GREETING_RE = /^(hi|hey|hello|thanks)\b/;
 const ANAPHORA_RE = /\b(it|that|this one|the last one)\b/;
 
 // Phrases that signal a watch briefing request.
+// BRIEFING_PHRASES is the canonical phrase table (data for the shuttle catalog);
+// the regex is its tolerant matcher (optional apostrophes, brief/briefing).
+// catalog.test.ts asserts every phrase still classifies as briefing, so the
+// table and the regex cannot drift apart.
+export const BRIEFING_PHRASES: readonly string[] = [
+  "brief me",
+  "what matters",
+  "what's happening",
+  "morning briefing",
+  "since I've been gone",
+  "what's the watch",
+];
 const BRIEFING_RE =
   /\b(brief me|what matters|what'?s happening|morning brief(?:ing)?|since i'?ve been gone|what'?s the watch)\b/;
+
+// Phrases that ask LOOM to explain its own command grammar. Anchored to the
+// whole utterance so "help me build a tracker" still routes to build_organ.
+// HELP_PHRASES is the canonical table (data for the shuttle catalog).
+export const HELP_PHRASES: readonly string[] = ["what can you do", "help"];
+const HELP_RE = /^(help|what can you do|what can i say)\??$/;
 
 // Pattern to extract an organ id mentioned in a history message.
 // Looks for "Built <id>:", "Edited <id>:" patterns written by Companion.
@@ -98,6 +117,7 @@ function resolveOrganFromHistory(history: HistoryMsg[]): string | null {
  *   4. act_on_organ — organ mentioned, no edit verb                       (0.7)
  *   5. deck_command — matches a globe/deck phrase (after build/edit/act)  (0.95)
  *   6. briefing     — watch briefing request ("brief me", "what matters") (0.95)
+ *   6.5 help        — whole-utterance "help" / "what can you do"          (0.95)
  *   7. converse     — greeting or bare question                           (0.8)
  *   8. null         — rules cannot decide
  */
@@ -184,6 +204,12 @@ export function classifyByRules(
     return { intent: "briefing", confidence: 0.95, source: "rules" };
   }
 
+  // 6.5. help — "what can you do" / bare "help" speaks the command grammar
+  //      (fires before converse so the trailing "?" doesn't swallow it).
+  if (HELP_RE.test(lower)) {
+    return { intent: "help", confidence: 0.95, source: "rules" };
+  }
+
   // 7. converse — greeting word or question (no organ, no build phrase).
   const isGreeting = GREETING_RE.test(lower);
   const isQuestion = lower.endsWith("?") && !hasBuildPhrase;
@@ -195,7 +221,7 @@ export function classifyByRules(
   return null;
 }
 
-const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: build_organ, edit_organ, act_on_organ, converse, deck_command, briefing.
+const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: build_organ, edit_organ, act_on_organ, converse, deck_command, briefing, help.
 
 Examples:
 User: "build me a sleep tracker" -> {"intent":"build_organ","organId":null}
@@ -203,7 +229,7 @@ User: "make me something like notes but for tasks" -> {"intent":"build_organ","o
 User: "add a delete button to the water tracker" -> {"intent":"edit_organ","organId":"water-tracker"}
 User: "make it dark mode" (after assistant: "Built water-tracker: ...") -> {"intent":"edit_organ","organId":"water-tracker"}
 User: "open the budget tool" -> {"intent":"act_on_organ","organId":"budget-tool"}
-User: "what can you do?" -> {"intent":"converse","organId":null}
+User: "what can you do?" -> {"intent":"help","organId":null}
 User: "show the globe" -> {"intent":"deck_command","organId":null}
 User: "show me the markets" -> {"intent":"deck_command","organId":null}
 User: "show military news" -> {"intent":"deck_command","organId":null}

@@ -922,7 +922,7 @@ export default function Companion() {
 
       // 5. Orb settle to idle
       dispatchMood("idle");
-    } else if (turn.kind === "briefing") {
+    } else if (turn.kind === "briefing" || turn.kind === "help") {
       const replyText = turn.text;
       appendItem({ kind: "bubble", role: "assistant", text: replyText, id: nextId() });
       history.current.push({ role: "assistant", content: replyText });
@@ -942,7 +942,7 @@ export default function Companion() {
       speakableText = `Opening ${turn.organId} below.`;
     } else if (turn.kind === "deck_command") {
       speakableText = turn.confirmation;
-    } else if (turn.kind === "briefing") {
+    } else if (turn.kind === "briefing" || turn.kind === "help") {
       speakableText = turn.text;
     }
 

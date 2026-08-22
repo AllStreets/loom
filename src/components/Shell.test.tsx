@@ -348,3 +348,29 @@ describe("Shell — tapestry replaces the constellation", () => {
     expect(localStorage.getItem("cockpit.constellation")).toBeNull();
   });
 });
+
+describe("Shell — the shuttle (Cmd+K palette)", () => {
+  it("renders the ⌘K hint chip in the top bar", async () => {
+    render(<Shell />);
+    const chip = await screen.findByTestId("shuttle-hint-chip");
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveTextContent("⌘K");
+  });
+
+  it("clicking the chip opens the palette", async () => {
+    render(<Shell />);
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("shuttle-hint-chip"));
+    });
+    expect(screen.getByTestId("shuttle-palette")).toBeInTheDocument();
+  });
+
+  it("Cmd+K opens the palette from the shell", async () => {
+    render(<Shell />);
+    await screen.findByTestId("loom-shell");
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "k", metaKey: true });
+    });
+    expect(screen.getByTestId("shuttle-palette")).toBeInTheDocument();
+  });
+});
