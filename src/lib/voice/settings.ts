@@ -80,7 +80,7 @@ export type SettingsKey =
   | "model.cloudBuilder"
   | "cockpit.deck"
   | "cockpit.interact"
-  | "cockpit.constellation"
+  | "cockpit.tapestry"
   | "cockpit.watchOpen"
   | "deck.agora.url"
   | "deck.agora.path";
@@ -96,7 +96,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "model.cloudBuilder",
   "cockpit.deck",
   "cockpit.interact",
-  "cockpit.constellation",
+  "cockpit.tapestry",
   "cockpit.watchOpen",
   "deck.agora.url",
   "deck.agora.path",
@@ -120,7 +120,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "model.cloudBuilder": ["off", "anthropic"],
   "cockpit.deck": ["void", "globe", "terminal", "ember", "agora"],
   "cockpit.interact": ["on", "off"],
-  "cockpit.constellation": ["on", "off"],
+  "cockpit.tapestry": ["on", "off"],
   "cockpit.watchOpen": ["on", "off"],
 };
 
@@ -135,7 +135,8 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "model.cloudBuilder": "off",
   "cockpit.deck": "void",
   "cockpit.interact": "on",
-  "cockpit.constellation": "off",
+  // Default ON — the Tapestry is the brand, not decoration.
+  "cockpit.tapestry": "on",
   "cockpit.watchOpen": "off",
   "deck.agora.url": "http://localhost:3000",
   "deck.agora.path": "",
@@ -143,6 +144,29 @@ const DEFAULTS: Record<SettingsKey, string> = {
 
 // Legacy key the orb's detectTier reads
 const LEGACY_ORB_KEY = "loom.orb";
+
+// Settings keys that no longer exist. Their stored values are deleted at boot
+// by migrateSettings() — same discipline as the organ tombstone list: a removed
+// feature must not leave orphaned state behind.
+const RETIRED_KEYS: readonly string[] = [
+  // Phase 16: the constellation died; the Tapestry (cockpit.tapestry) lives.
+  "cockpit.constellation",
+];
+
+/**
+ * Boot migration: delete stored values for retired settings keys.
+ * Idempotent — removing an absent key is a no-op, so this can run every boot.
+ * Called from Shell's mount effect.
+ */
+export function migrateSettings(): void {
+  for (const k of RETIRED_KEYS) {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+      // storage unavailable — nothing to migrate
+    }
+  }
+}
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
@@ -199,7 +223,7 @@ export function setSetting(key: string, value: string): void {
 
   localStorage.setItem(k, value);
 
-  // Dispatch a live-update event so Shell/Constellation react without restart
+  // Dispatch a live-update event so Shell/Tapestry react without restart
   window.dispatchEvent(new CustomEvent("loom-settings-changed", { detail: { key: k, value } }));
 
   // Legacy side-effect for orb.tier

@@ -17,6 +17,7 @@ import * as settingsMod from "../../lib/voice/settings";
 vi.mock("../../lib/voice/settings", () => ({
   getSetting: vi.fn((k: string) => (k === "cockpit.deck" ? "void" : "")),
   setSetting: vi.fn(),
+  migrateSettings: vi.fn(),
 }));
 
 vi.mock("framer-motion", () => ({

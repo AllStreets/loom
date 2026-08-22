@@ -12,11 +12,11 @@ import { organList, organWrite } from "../lib/core";
 import { installSeeds } from "../organs/seeds/install";
 import { useVoice, makeSpacePttHandlers } from "../lib/voice/useVoice";
 import { audioLevel } from "../lib/orb/audioLevel";
-import { getSetting, setSetting } from '../lib/voice/settings';
+import { getSetting, setSetting, migrateSettings } from '../lib/voice/settings';
 import DeckLayer from './decks/DeckLayer';
 import type { DeckId } from './decks/DeckLayer';
 import { startWatch, stopWatch } from '../lib/watch/runtime';
-import Constellation from './Constellation';
+import Tapestry from './Tapestry';
 import LoomGlyph from './chrome/LoomGlyph';
 import WatchPanel from './WatchPanel';
 import ErrorBoundary from './ErrorBoundary';
@@ -156,8 +156,11 @@ export default function Shell() {
   const ringRef = useRef<HTMLDivElement | null>(null);
   const ringRafRef = useRef<number | null>(null);
 
-  // ----- Watch runtime — start with shell, stop on unmount -----
+  // ----- Boot migration + watch runtime — start with shell, stop on unmount -----
   useEffect(() => {
+    // Idempotent: deletes stored values for retired settings keys
+    // (e.g. cockpit.constellation — the tapestry replaced the constellation).
+    migrateSettings();
     startWatch();
     return () => stopWatch();
   }, []);
@@ -208,7 +211,7 @@ export default function Shell() {
     return () => window.removeEventListener('loom-deck', onDeck);
   }, []);
 
-  // ----- loom-settings-changed: live-update interact + constellation -----
+  // ----- loom-settings-changed: live-update interact -----
   useEffect(() => {
     function onSettingsChanged(ev: Event) {
       const detail = (ev as CustomEvent<{ key: string; value: string }>).detail;
@@ -882,9 +885,11 @@ export default function Shell() {
         <Desktop />
       </ErrorBoundary>
 
-      {/* ── Constellation: living agent ring around the orb (z 8, OUTSIDE orb-band screen-blend) ── */}
-      <ErrorBoundary zone="constellation">
-        <Constellation />
+      {/* ── Tapestry: LOOM's history woven — horizontal band behind the orb
+          (z 8: above deck layers z 2, below chrome/orb-band z 10; OUTSIDE the
+          orb-band screen-blend so threads stay legible) ── */}
+      <ErrorBoundary zone="tapestry">
+        <Tapestry />
       </ErrorBoundary>
 
       {/* ── Watch panel: collapsible salience feed (z 900, right side) ── */}

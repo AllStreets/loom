@@ -62,6 +62,14 @@ function saveRecords(records: BuildRecord[]): void {
   }
 }
 
+/**
+ * Read-only view of the experience log (oldest first).
+ * The Tapestry weaves build history from this; storage errors read as empty.
+ */
+export function listExperience(): BuildRecord[] {
+  return loadRecords();
+}
+
 export function recordExperience(r: BuildRecord): void {
   try {
     const records = loadRecords();

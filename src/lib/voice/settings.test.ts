@@ -3,6 +3,7 @@ import {
   getSetting,
   setSetting,
   resetAllSettings,
+  migrateSettings,
   SETTINGS_KEYS,
   VOICE_IDS,
   VOICE_LABELS,
@@ -30,7 +31,7 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("model.cloudBuilder");
     expect(SETTINGS_KEYS).toContain("cockpit.deck");
     expect(SETTINGS_KEYS).toContain("cockpit.interact");
-    expect(SETTINGS_KEYS).toContain("cockpit.constellation");
+    expect(SETTINGS_KEYS).toContain("cockpit.tapestry");
     expect(SETTINGS_KEYS).toContain("cockpit.watchOpen");
     expect(SETTINGS_KEYS).toContain("deck.agora.url");
     expect(SETTINGS_KEYS).toContain("deck.agora.path");
@@ -61,6 +62,53 @@ describe("settings defaults", () => {
 
   it("loom.reviewBeforeSave defaults to 0", () => {
     expect(getSetting("loom.reviewBeforeSave")).toBe("0");
+  });
+
+  it("cockpit.tapestry defaults to on — the Tapestry is the brand", () => {
+    expect(getSetting("cockpit.tapestry")).toBe("on");
+  });
+});
+
+describe("cockpit.tapestry setting", () => {
+  it("accepts 'on' and 'off'", () => {
+    setSetting("cockpit.tapestry", "off");
+    expect(getSetting("cockpit.tapestry")).toBe("off");
+    setSetting("cockpit.tapestry", "on");
+    expect(getSetting("cockpit.tapestry")).toBe("on");
+  });
+
+  it("rejects unknown values", () => {
+    expect(() => setSetting("cockpit.tapestry", "maybe")).toThrow(/Invalid value/);
+  });
+
+  it("cockpit.constellation is no longer a settings key", () => {
+    expect(SETTINGS_KEYS).not.toContain("cockpit.constellation");
+    expect(() => getSetting("cockpit.constellation")).toThrow(/Unknown settings key/);
+    expect(() => setSetting("cockpit.constellation", "on")).toThrow(/Unknown settings key/);
+  });
+});
+
+describe("migrateSettings — retired-key boot migration", () => {
+  it("deletes a stored cockpit.constellation value", () => {
+    localStorage.setItem("cockpit.constellation", "on");
+    migrateSettings();
+    expect(localStorage.getItem("cockpit.constellation")).toBeNull();
+  });
+
+  it("is idempotent — running twice (or with nothing stored) is a no-op", () => {
+    expect(() => migrateSettings()).not.toThrow();
+    localStorage.setItem("cockpit.constellation", "off");
+    migrateSettings();
+    migrateSettings();
+    expect(localStorage.getItem("cockpit.constellation")).toBeNull();
+  });
+
+  it("does not touch live settings keys", () => {
+    setSetting("cockpit.tapestry", "off");
+    setSetting("cockpit.watchOpen", "on");
+    migrateSettings();
+    expect(getSetting("cockpit.tapestry")).toBe("off");
+    expect(getSetting("cockpit.watchOpen")).toBe("on");
   });
 });
 

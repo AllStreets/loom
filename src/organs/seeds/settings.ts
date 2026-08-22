@@ -621,28 +621,28 @@ const ORGAN_JS = `export default {
     }
     appearancePage.appendChild(orbRow);
 
-    // Constellation section
-    appearancePage.appendChild(ui.section("Constellation"));
+    // Tapestry section
+    appearancePage.appendChild(ui.section("Tapestry"));
 
-    var constNote = document.createElement("div");
-    constNote.style.fontSize = "12px";
-    constNote.style.color = ui.tokens.t3;
-    constNote.style.marginBottom = "8px";
-    constNote.textContent = "Show the agent constellation ring around the orb.";
-    appearancePage.appendChild(constNote);
+    var tapNote = document.createElement("div");
+    tapNote.style.fontSize = "12px";
+    tapNote.style.color = ui.tokens.t3;
+    tapNote.style.marginBottom = "8px";
+    tapNote.textContent = "Show the tapestry — LOOM's history woven behind the orb.";
+    appearancePage.appendChild(tapNote);
 
-    var constOptions = [
-      { label: "On", value: "on", action: "constellation-on" },
-      { label: "Off", value: "off", action: "constellation-off" },
+    var tapOptions = [
+      { label: "On", value: "on", action: "tapestry-on" },
+      { label: "Off", value: "off", action: "tapestry-off" },
     ];
-    var constBtns = [];
-    var constRow = document.createElement("div");
-    constRow.style.display = "flex";
-    constRow.style.gap = "6px";
+    var tapBtns = [];
+    var tapRow = document.createElement("div");
+    tapRow.style.display = "flex";
+    tapRow.style.gap = "6px";
 
-    function refreshConstBtns(current) {
-      for (var i = 0; i < constBtns.length; i++) {
-        var b = constBtns[i];
+    function refreshTapBtns(current) {
+      for (var i = 0; i < tapBtns.length; i++) {
+        var b = tapBtns[i];
         var isActive = b._value === current;
         b.style.background = isActive ? ui.tokens.accent : "transparent";
         b.style.color = isActive ? "#04222b" : ui.tokens.t1;
@@ -651,7 +651,7 @@ const ORGAN_JS = `export default {
       }
     }
 
-    for (var ci = 0; ci < constOptions.length; ci++) {
+    for (var ti = 0; ti < tapOptions.length; ti++) {
       (function(opt) {
         var btn = document.createElement("button");
         btn.className = "lui-btn";
@@ -669,14 +669,14 @@ const ORGAN_JS = `export default {
         btn._value = opt.value;
         btn.textContent = opt.label;
         btn.addEventListener("click", function() {
-          settings.set("cockpit.constellation", opt.value);
-          refreshConstBtns(opt.value);
+          settings.set("cockpit.tapestry", opt.value);
+          refreshTapBtns(opt.value);
         });
-        constBtns.push(btn);
-        constRow.appendChild(btn);
-      })(constOptions[ci]);
+        tapBtns.push(btn);
+        tapRow.appendChild(btn);
+      })(tapOptions[ti]);
     }
-    appearancePage.appendChild(constRow);
+    appearancePage.appendChild(tapRow);
 
     // Globe interaction section
     appearancePage.appendChild(ui.section("Globe interaction"));
@@ -959,7 +959,7 @@ const ORGAN_JS = `export default {
 
     refreshSpeakBtns(settings.get("voice.speakReplies") || "whenSpoken");
     refreshOrbBtns(settings.get("orb.tier") || "auto");
-    refreshConstBtns(settings.get("cockpit.constellation") || "off");
+    refreshTapBtns(settings.get("cockpit.tapestry") || "on");
     refreshInteractBtns(settings.get("cockpit.interact") || "on");
     refreshReviewBtns(settings.get("loom.reviewBeforeSave") || "0");
     refreshStatus();

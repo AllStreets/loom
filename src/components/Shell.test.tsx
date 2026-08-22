@@ -334,3 +334,17 @@ describe("Shell segmented deck control", () => {
     expect(screen.getByTestId("watch-panel")).toBeInTheDocument();
   });
 });
+
+describe("Shell — tapestry replaces the constellation", () => {
+  it("mounts the Tapestry band (default on)", async () => {
+    render(<Shell />);
+    expect(await screen.findByTestId("tapestry")).toBeInTheDocument();
+  });
+
+  it("boot migration deletes any stored cockpit.constellation value", async () => {
+    localStorage.setItem("cockpit.constellation", "on");
+    render(<Shell />);
+    await screen.findByTestId("loom-shell");
+    expect(localStorage.getItem("cockpit.constellation")).toBeNull();
+  });
+});

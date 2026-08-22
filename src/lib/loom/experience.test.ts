@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { recordExperience, retrieveExemplars, retrieveLessons, exportCorpus } from "./experience";
+import { recordExperience, retrieveExemplars, retrieveLessons, exportCorpus, listExperience } from "./experience";
 import type { BuildRecord } from "./experience";
 
 // Each test gets its own isolated localStorage store so tests cannot bleed state
@@ -47,6 +47,26 @@ function makeRecord(overrides: Partial<BuildRecord> = {}): BuildRecord {
     ...overrides,
   };
 }
+
+describe("listExperience — read-only view for the Tapestry", () => {
+  it("returns [] when nothing is recorded", () => {
+    expect(listExperience()).toEqual([]);
+  });
+
+  it("returns recorded builds oldest first", () => {
+    recordExperience(makeRecord({ ts: 100, organId: "first" }));
+    recordExperience(makeRecord({ ts: 200, organId: "second" }));
+    const records = listExperience();
+    expect(records).toHaveLength(2);
+    expect(records[0].organId).toBe("first");
+    expect(records[1].organId).toBe("second");
+  });
+
+  it("reads corrupt storage as empty (no throw)", () => {
+    currentStore.store["loom.exp.v1"] = "{not json";
+    expect(listExperience()).toEqual([]);
+  });
+});
 
 describe("experience store", () => {
   it("round-trips a record", () => {
