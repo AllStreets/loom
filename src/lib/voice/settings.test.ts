@@ -33,9 +33,10 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("cockpit.interact");
     expect(SETTINGS_KEYS).toContain("cockpit.tapestry");
     expect(SETTINGS_KEYS).toContain("cockpit.watchOpen");
+    expect(SETTINGS_KEYS).toContain("cockpit.chatMin");
     expect(SETTINGS_KEYS).toContain("deck.agora.url");
     expect(SETTINGS_KEYS).toContain("deck.agora.path");
-    expect(SETTINGS_KEYS).toHaveLength(14);
+    expect(SETTINGS_KEYS).toHaveLength(15);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -66,6 +67,23 @@ describe("settings defaults", () => {
 
   it("cockpit.tapestry defaults to on — the Tapestry is the brand", () => {
     expect(getSetting("cockpit.tapestry")).toBe("on");
+  });
+
+  it("cockpit.chatMin defaults to off — the typing box is present until folded", () => {
+    expect(getSetting("cockpit.chatMin")).toBe("off");
+  });
+});
+
+describe("cockpit.chatMin setting", () => {
+  it("accepts 'on' and 'off'", () => {
+    setSetting("cockpit.chatMin", "on");
+    expect(getSetting("cockpit.chatMin")).toBe("on");
+    setSetting("cockpit.chatMin", "off");
+    expect(getSetting("cockpit.chatMin")).toBe("off");
+  });
+
+  it("rejects unknown values", () => {
+    expect(() => setSetting("cockpit.chatMin", "half")).toThrow(/Invalid value/);
   });
 });
 

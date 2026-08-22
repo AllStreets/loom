@@ -6,7 +6,7 @@ import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
 import { handle, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
-import { getSetting } from "../lib/voice/settings";
+import { getSetting, setSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
 import { sendDeckCommands } from "./decks/GlobeDeck";
 import { getSalient } from "../lib/watch/runtime";
@@ -1057,25 +1057,52 @@ export default function Companion() {
         }}
       >
         <div style={eyebrowStyle}>LOOM</div>
-        <label
-          style={{
-            fontSize: 12,
-            color: "var(--t2)",
-            cursor: "pointer",
-            userSelect: "none",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={reviewOn}
-            onChange={toggleReview}
-            style={{ accentColor: "var(--accent)" }}
-          />
-          Review code before saving
-        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label
+            style={{
+              fontSize: 12,
+              color: "var(--t2)",
+              cursor: "pointer",
+              userSelect: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={reviewOn}
+              onChange={toggleReview}
+              style={{ accentColor: "var(--accent)" }}
+            />
+            Review code before saving
+          </label>
+          {/* Minimize — hover-reveal (Shell's .loom-chat-panel CSS), same
+              language as the organ window controls. Persisting the setting is
+              the whole action: Shell owns the fold via loom-settings-changed. */}
+          <button
+            data-testid="chat-min-btn"
+            className="loom-chat-min-btn"
+            title="Minimize"
+            onClick={() => setSetting("cockpit.chatMin", "on")}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--t3)",
+              fontSize: 14,
+              lineHeight: 1,
+              padding: "2px 4px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 3,
+              flexShrink: 0,
+            }}
+          >
+            -
+          </button>
+        </div>
       </div>
 
       {/* Conversation — scrolls within its own container */}

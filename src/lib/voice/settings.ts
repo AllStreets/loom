@@ -82,6 +82,7 @@ export type SettingsKey =
   | "cockpit.interact"
   | "cockpit.tapestry"
   | "cockpit.watchOpen"
+  | "cockpit.chatMin"
   | "deck.agora.url"
   | "deck.agora.path";
 
@@ -98,6 +99,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "cockpit.interact",
   "cockpit.tapestry",
   "cockpit.watchOpen",
+  "cockpit.chatMin",
   "deck.agora.url",
   "deck.agora.path",
 ];
@@ -122,6 +124,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "cockpit.interact": ["on", "off"],
   "cockpit.tapestry": ["on", "off"],
   "cockpit.watchOpen": ["on", "off"],
+  "cockpit.chatMin": ["on", "off"],
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -138,6 +141,8 @@ const DEFAULTS: Record<SettingsKey, string> = {
   // Default ON — the Tapestry is the brand, not decoration.
   "cockpit.tapestry": "on",
   "cockpit.watchOpen": "off",
+  // Default OFF — the typing box is present until its owner folds it away.
+  "cockpit.chatMin": "off",
   "deck.agora.url": "http://localhost:3000",
   "deck.agora.path": "",
 };

@@ -130,6 +130,7 @@ export default function Shell() {
   const [deck, setDeck] = useState<DeckId>(() => getSetting('cockpit.deck') as DeckId);
   const [interactMode, setInteractMode] = useState(() => getSetting('cockpit.interact') === 'on');
   const [watchOpen, setWatchOpen] = useState(() => getSetting('cockpit.watchOpen') === 'on');
+  const [chatMin, setChatMin] = useState(() => getSetting('cockpit.chatMin') === 'on');
   const [watchUnseen, setWatchUnseen] = useState(0);
 
   // ----- Ignition sequence state -----
@@ -219,6 +220,9 @@ export default function Shell() {
       if (!detail) return;
       if (detail.key === 'cockpit.interact') {
         setInteractMode(detail.value === 'on');
+      }
+      if (detail.key === 'cockpit.chatMin') {
+        setChatMin(detail.value === 'on');
       }
     }
     window.addEventListener('loom-settings-changed', onSettingsChanged);
@@ -339,6 +343,23 @@ export default function Shell() {
     window.addEventListener("blur", onBlur);
     return () => window.removeEventListener("blur", onBlur);
   }, [voice]);
+
+  // ----- Minimized typing box: auto-restore when an utterance arrives -----
+  // Voice PTT and Shuttle free-text both send through `loom-utterance`, and
+  // every utterance runs a Companion turn whose reply renders inside the
+  // (hidden, still-mounted) companion panel — replies render nowhere else, so
+  // the surface must return to show them. Typed sends can't happen while
+  // minimized (the textarea is folded away), so this is exactly "the user sent
+  // via Shuttle free-text or voice and a reply bubble needs the surface".
+  useEffect(() => {
+    if (!chatMin) return;
+    function onUtterance() {
+      setChatMin(false);
+      setSetting('cockpit.chatMin', 'off');
+    }
+    window.addEventListener('loom-utterance', onUtterance);
+    return () => window.removeEventListener('loom-utterance', onUtterance);
+  }, [chatMin]);
 
   // ----- Space PTT keyboard handler -----
   useEffect(() => {
@@ -462,10 +483,15 @@ export default function Shell() {
         .loom-seg-btn { transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
         .loom-seg-btn:hover:not(.is-selected) { color: var(--t2); background: rgba(255,255,255,.05); }
         .loom-seg-btn:active { transform: translateY(.5px); }
+        /* Chat minimize — hover-reveal, same language as organ window controls */
+        .loom-chat-min-btn { opacity: 0; transition: opacity var(--dur-fast, 150ms) ease; }
+        .loom-chat-panel:hover .loom-chat-min-btn,
+        .loom-chat-min-btn:focus-visible { opacity: 1; }
         @media (prefers-reduced-motion: reduce) {
           .loom-timeline-chevron { transition: none !important; }
           .loom-seg-btn { transition: none !important; }
           .loom-seg-btn:active { transform: none !important; }
+          .loom-chat-min-btn { transition: none !important; }
         }
       `}</style>
 
@@ -810,11 +836,17 @@ export default function Shell() {
             marginTop: deck !== "void" ? "auto" : undefined,
           }}
         >
-          {/* Companion panel */}
+          {/* Companion panel — while minimized it is HIDDEN, never unmounted:
+              Companion owns the conversation state and the loom-utterance
+              listener, so voice/Shuttle turns keep running behind the fold. */}
           <PanelTag
             {...(motionProps as object)}
+            data-testid="companion-panel"
             data-deck-active={deck !== 'void' ? 'true' : undefined}
+            className="loom-chat-panel"
             style={{
+              position: "relative",
+              display: chatMin ? "none" : undefined,
               background: "var(--glass)",
               backdropFilter: "blur(var(--blur))",
               WebkitBackdropFilter: "blur(var(--blur))",
@@ -929,6 +961,48 @@ export default function Shell() {
       <ErrorBoundary zone="shuttle">
         <Shuttle />
       </ErrorBoundary>
+
+      {/* ── Minimized typing box: bottom-center glass pill — the mark and the
+          Shuttle hint. Click restores; PTT (orb/Space) and ⌘K keep working
+          while the box is folded. ── */}
+      {chatMin && (
+        <button
+          data-testid="chat-min-pill"
+          title="restore the typing box"
+          onClick={() => {
+            setChatMin(false);
+            setSetting('cockpit.chatMin', 'off');
+          }}
+          style={{
+            position: "fixed",
+            // The organ dock owns bottom 16 center (z 1000, renders even when
+            // empty) — the pill stacks directly above it, below modals (2000)
+            // and the Shuttle (3000).
+            bottom: 60,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 1100,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
+            height: 30,
+            padding: "0 12px",
+            background: "var(--glass)",
+            border: "1px solid var(--glass-border)",
+            borderRadius: 999,
+            backdropFilter: "blur(var(--blur))",
+            WebkitBackdropFilter: "blur(var(--blur))",
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            letterSpacing: ".1em",
+            color: "var(--t3)",
+            cursor: "pointer",
+          }}
+        >
+          <LoomGlyph size={14} />
+          <span>⌘K</span>
+        </button>
+      )}
     </div>
   );
 }
