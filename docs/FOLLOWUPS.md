@@ -129,6 +129,20 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - **Forge-through-LOOM** — see the verified EMBER item above; if wanted, a Tauri command bridge or scoped read/write postMessage protocol are the options.
 - **`agora_logs` full surface** — the ring buffer (200 lines) is readable via the `agora_logs` command; the card shows the last lines while starting. A settings-gated full log viewer remains open.
 
+### Phase-17 backlog (Depth)
+
+- **Websocket feed upgrade** — the floor polls Coinbase REST (2s book / 3s tape). The public websocket feed (`wss://ws-feed.exchange.coinbase.com`) would make the ladder truly live and cut request volume; needs a lifecycle-safe socket seam (reconnect, deck-switch teardown) before adoption.
+- **More floor products** — the product whitelist is BTC/ETH/SOL-USD; widening it is a settings + whitelist change once the ladder proves out.
+- **Keyed-source opt-ins** — a Settings-gated slot for owner-supplied keys (e.g. Finnhub/Twelve Data free tiers) following the cloud-builder key pattern (write-only, Tauri-side storage), for owners who want deeper equities data than Yahoo's unofficial endpoint.
+- **Yahoo fragility** — the chart endpoint is unofficial; the UA fix + query2 retry hold today (live-verified), but if Yahoo hardens further, the engine's typed seam is where a replacement source lands. Monitor.
+
+### Resolved in Phase 17 (Depth)
+
+- Terminal-empty root cause — no User-Agent on the Rust proxy → Yahoo 429 on every desktop quote. Fixed engine-wide (browser UA + query2 retry), proven by an `#[ignore]`d live test. (`src-tauri/src/market.rs`)
+- The market engine — `market_chart/crypto/book/trades/fx` typed commands, hardcoded hosts, pre-request validation; `quotes.rs` folded in with `quote_fetch` contract preserved; browser-dev adapters with identical shapes. (`src-tauri/src/market.rs`, `src/lib/market/browser.ts`, `src/lib/core.ts`)
+- Terminal depth — `terminal.symbols` editable watchlist (validated, max 24, live re-poll), symbol detail overlay (SVG intraday area chart + OHLC/volume readouts), CRYPTO strip (30s), FX strip (10min, honest "daily" label), EQUITIES·CRYPTO·FX health chips, per-panel loading/stale/error states; `usePoll` lifecycle hook. (`src/components/decks/TerminalDeck.tsx`)
+- AGORA floor — order-book ladder (12/side, cumulative depth bars, mid + spread bps, 2s), trades tape (taker-side tinted — Coinbase `side` is maker side, inverted; 3s), product chips (`deck.agora.product`), launch card re-laid as top strip with all states preserved; floor unmounts + all polls stop on reachable transition. (`src/components/decks/AgoraDeck.tsx`, `src/lib/util/usePoll.ts`)
+
 ### Phase-16 backlog (Identity)
 
 - **Exchange + learning verbs for the one grammar** — "start the exchange" / "stop the exchange" and "clear learning" exist only as buttons (AGORA card START needs a configured path; CLEAR LEARNING has a confirm strip). Design the confirm-flow-over-utterance pattern, then add them to the catalog so the Shuttle/voice parity stays total.

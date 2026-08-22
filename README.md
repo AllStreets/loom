@@ -212,6 +212,22 @@ The shuttle is the part of a loom that carries the weft through the warp. Here i
 
 ---
 
+## Phase 17 — Depth
+
+**Phase 17 — shipped.**
+
+The Terminal and AGORA decks were empty. Now they are deep — on free, keyless sources, through LOOM's own hands.
+
+**The root cause, killed.** The desktop quote proxy sent no User-Agent; Yahoo answered every request with 429, and the whole Terminal rendered silently blank. Diagnosed live, fixed at the engine: every market request now carries a browser UA (with a second-host retry on 429), and the fix is proven by a live integration test. The old failure mode — a panel that is empty and won't say why — is now against the law: every panel states its condition.
+
+**The market engine.** `market.rs` — five typed commands over hardcoded, allowlisted hosts: Yahoo intraday charts, Coinbase Exchange ticker/24h/order-book/trades, Frankfurter FX. No keys, no third-party proxy on desktop, symbols validated before any request leaves the machine. Browser dev mode uses the same shapes over CORS-open sources.
+
+**The Terminal deepens.** The movers table is now *your* tape — add and remove tickers inline, persisted, the poller follows live. Click any symbol and a detail panel opens: full intraday area chart, open/high/low/prev-close/volume, tinted delta. New CRYPTO strip (BTC/ETH/SOL spot + 24h) and FX strip (EUR/GBP/JPY — labeled *daily*, because the source is daily and LOOM does not fake liveness). Header health chips — EQUITIES · CRYPTO · FX — show green/stale/dark per source with honest ages.
+
+**AGORA gets a floor.** When your local AGORA app isn't running, the deck is no longer one dark card. LOOM renders its own floor: a live order-book ladder (12 levels a side, cumulative depth bars, mid + spread in bps), a flowing trades tape tinted by taker side, product chips (BTC/ETH/SOL). The launch controls compress into a strip above the floor — START still ignites your local exchange, and when it answers, the iframe takes over exactly as before. About 0.9 requests/second worst case against a public limit of ten: a polite guest.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -318,6 +334,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **14 · The Cockpit (Stage 5)** | LOOM-owned Rust quote proxy (desktop never touches third-party) · globe fly-to on briefings and locate · salience learns from owner behavior (transparent local weights) · AGORA engine health strip | **shipped** |
 | **15 · The Cockpit (Stage 6)** | command: LOOM starts/stops AGORA itself (managed child process, validated spawn, exit-kill) · learned-weights inspection + CLEAR LEARNING · whisper log silence · warning-free build | **shipped** |
 | **16 · Identity** | the brand system (woven mark on every surface, BRAND.md) · the Tapestry (constellation removed; LOOM's history woven live behind the orb) · the Shuttle (⌘K palette + voice sharing one drift-proof command catalog, "what can you do") | **shipped** |
+| **17 · Depth** | the market engine (typed keyless sources: Yahoo UA-fixed · Coinbase Exchange · Frankfurter; 429 root cause dead) · Terminal depth (editable watchlist, symbol detail charts, crypto + FX strips, per-source health) · AGORA's native floor (order-book ladder, trades tape, launch strip) | **shipped** |
 | **later** | EMBER Forge-in-deck · AGORA command bridge · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
