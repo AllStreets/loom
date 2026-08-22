@@ -106,7 +106,9 @@ export function getWatchlist(): string[] {
       out.push(t);
     }
   }
-  return out;
+  // cap on READ as well as write — a hand-edited localStorage list of valid
+  // tickers must not fan out past the rate-friendly maximum
+  return out.slice(0, WATCHLIST_MAX);
 }
 
 /**
@@ -433,7 +435,9 @@ export function stopQuotes(): void {
   }
 
   pausePolling();
-  inFlight = false;
+  // inFlight is deliberately NOT reset here: the aborted coroutine's finally
+  // clears it. Forcing it false lets a rapid remount start a second poll
+  // concurrent with the dying one, breaking the overlap guard.
   pendingRefresh = false;
 }
 

@@ -17,6 +17,9 @@ export function usePoll(tick: (signal: AbortSignal) => void | Promise<void>, ms:
     let id: ReturnType<typeof setInterval> | null = null;
     let ctrl: AbortController | null = null;
     const run = () => {
+      // abort the previous run before overwriting — otherwise an in-flight
+      // tick is orphaned with a signal stop() can no longer reach
+      ctrl?.abort();
       ctrl = new AbortController();
       void tick(ctrl.signal);
     };

@@ -428,6 +428,17 @@ describe("watchlist config", () => {
     expect(getWatchlist()).toEqual([]);
   });
 
+  it("getWatchlist caps a hand-edited over-length list at WATCHLIST_MAX on read", () => {
+    // 30 valid tickers written raw — bypassing setSetting's write-time cap —
+    // must not fan out past the rate-friendly maximum at the fetch layer.
+    const many = Array.from({ length: 30 }, (_, i) => `T${i}`).join(",");
+    localStorage.setItem("terminal.symbols", many);
+    const list = getWatchlist();
+    expect(list.length).toBe(24);
+    expect(list[0]).toBe("T0");
+    expect(list[23]).toBe("T23");
+  });
+
   it("addWatchSymbol uppercases, validates, dedupes, persists", () => {
     expect(addWatchSymbol("ibm")).toBe(true);
     expect(getWatchlist()).toEqual([...EQUITY_SYMBOLS, "IBM"]);
