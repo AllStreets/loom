@@ -85,8 +85,8 @@ Calm, sovereign, honest. LOOM never markets to its owner.
 > Something broke in the shell — details in the console.
 > — `src/components/ErrorBoundary.tsx`
 
-> THE EXCHANGE IS DARK · AGORA is not running.
-> — `src/components/decks/AgoraDeck.tsx`
+> THE CRYPTO FEED IS DARK — the source did not answer.
+> — `src/components/decks/TerminalDeck.tsx`
 
 That shape — fact, hinge, remedy — is the template for every error LOOM will
 ever show.

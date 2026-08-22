@@ -99,6 +99,19 @@ describe("buildCatalog — decks group derives from the real deck rules", () => 
     expect(entry).toBeDefined();
     expect(entry!.aliases.length).toBeGreaterThan(0);
   });
+
+  it("carries no exchange-deck entry — the floor aliases live under the terminal (Phase 18)", () => {
+    const all = catalog();
+    // The retired deck left no catalog trace — no entry names the exchange.
+    expect(all.some((e) => e.phrase.includes("exchange") || e.aliases.some((a) => a.includes("exchange")))).toBe(false);
+    // The floor phrases landed under the terminal entry and still classify there.
+    const terminal = all.find((e) => e.id === "deck-terminal-show");
+    expect(terminal).toBeDefined();
+    expect(terminal!.aliases).toContain("open the floor");
+    expect(terminal!.aliases).toContain("show the floor");
+    expect(classifyDeckCommand("open the floor", "void")?.deckSwitch).toBe("terminal");
+    expect(classifyDeckCommand("show the floor", "void")?.deckSwitch).toBe("terminal");
+  });
 });
 
 // ── no-drift: watch / help / organs / system classify through intent rules ───

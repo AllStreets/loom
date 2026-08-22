@@ -377,62 +377,55 @@ describe("classifyDeckCommand — terminal deck", () => {
   });
 });
 
-describe("classifyDeckCommand — agora deck", () => {
-  it("'show agora' → deckSwitch:agora, no bridgeCmds", () => {
-    const r = classifyDeckCommand("show agora", "void");
-    expect(r).not.toBeNull();
-    expect(r!.deckSwitch).toBe("agora");
-    expect(r!.bridgeCmds).toHaveLength(0);
-    expect(r!.confirmation).toMatch(/exchange/i);
-  });
-
-  it("'open agora' → deckSwitch:agora", () => {
-    const r = classifyDeckCommand("open agora", "void");
-    expect(r).not.toBeNull();
-    expect(r!.deckSwitch).toBe("agora");
-  });
-
-  it("'show the exchange' → deckSwitch:agora", () => {
-    const r = classifyDeckCommand("show the exchange", "void");
-    expect(r).not.toBeNull();
-    expect(r!.deckSwitch).toBe("agora");
-  });
-
-  it("'open the exchange' → deckSwitch:agora", () => {
-    const r = classifyDeckCommand("open the exchange", "void");
-    expect(r).not.toBeNull();
-    expect(r!.deckSwitch).toBe("agora");
-  });
-
-  it("'open the floor' → deckSwitch:agora", () => {
+describe("classifyDeckCommand — the floor lives in the terminal (Phase 18)", () => {
+  it("'open the floor' → deckSwitch:terminal, no bridgeCmds", () => {
     const r = classifyDeckCommand("open the floor", "void");
     expect(r).not.toBeNull();
-    expect(r!.deckSwitch).toBe("agora");
+    expect(r!.deckSwitch).toBe("terminal");
+    expect(r!.bridgeCmds).toHaveLength(0);
+    expect(r!.confirmation).toMatch(/tape/i);
+  });
+
+  it("'show the floor' → deckSwitch:terminal", () => {
+    const r = classifyDeckCommand("show the floor", "void");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("terminal");
+  });
+
+  it("'close the floor' → deckSwitch:void", () => {
+    const r = classifyDeckCommand("close the floor", "terminal");
+    expect(r).not.toBeNull();
+    expect(r!.deckSwitch).toBe("void");
+  });
+
+  it("retired exchange-deck phrases no longer classify as deck commands", () => {
+    expect(classifyDeckCommand("show the exchange", "void")).toBeNull();
+    expect(classifyDeckCommand("open the exchange", "void")).toBeNull();
   });
 
   // Regressions: existing rules untouched
-  it("REGRESSION 'show the globe' still → globe (not agora)", () => {
+  it("REGRESSION 'show the globe' still → globe (not terminal)", () => {
     expect(classifyDeckCommand("show the globe", "void")!.deckSwitch).toBe("globe");
   });
 
-  it("REGRESSION 'show markets' still → terminal (not agora)", () => {
+  it("REGRESSION 'show markets' still → terminal", () => {
     expect(classifyDeckCommand("show markets", "void")!.deckSwitch).toBe("terminal");
   });
 
-  it("REGRESSION 'show ember' still → ember (not agora)", () => {
+  it("REGRESSION 'show ember' still → ember (not terminal)", () => {
     expect(classifyDeckCommand("show ember", "void")!.deckSwitch).toBe("ember");
   });
 
-  it("REGRESSION 'show military' still → set_cat military (not agora)", () => {
+  it("REGRESSION 'show military' still → set_cat military (not terminal)", () => {
     const r = classifyDeckCommand("show military", "globe");
     expect(r!.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "military" });
-    expect(r!.deckSwitch).not.toBe("agora");
+    expect(r!.deckSwitch).not.toBe("terminal");
   });
 
-  it("PRECEDENCE 'show financial markets' → set_cat finance (not agora), CAT_RE wins", () => {
+  it("PRECEDENCE 'show financial markets' → set_cat finance (not terminal), CAT_RE wins", () => {
     const r = classifyDeckCommand("show financial markets", "globe");
     expect(r).not.toBeNull();
     expect(r!.bridgeCmds).toEqual([{ type: "set_cat", cat: "finance" }]);
-    expect(r!.deckSwitch).not.toBe("agora");
+    expect(r!.deckSwitch).not.toBe("terminal");
   });
 });

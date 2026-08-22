@@ -854,69 +854,6 @@ const ORGAN_JS = `export default {
     systemPage.appendChild(resetBtn);
     systemPage.appendChild(resetConfirmStrip);
 
-    // ========================================================================
-    // SECTION: Decks (AGORA URL) — within the System page
-    // ========================================================================
-    systemPage.appendChild(ui.section("Decks"));
-
-    var agoraUrlNote = document.createElement("div");
-    agoraUrlNote.style.fontSize = "12px";
-    agoraUrlNote.style.color = ui.tokens.t3;
-    agoraUrlNote.style.marginBottom = "8px";
-    agoraUrlNote.textContent = "AGORA URL — the local conviction-market web server (http(s)://localhost or 127.0.0.1 only).";
-    systemPage.appendChild(agoraUrlNote);
-
-    var agoraUrlLabel = document.createElement("div");
-    agoraUrlLabel.style.fontSize = "12.5px";
-    agoraUrlLabel.style.color = ui.tokens.t3;
-    agoraUrlLabel.style.marginBottom = "4px";
-    agoraUrlLabel.textContent = "AGORA URL";
-    systemPage.appendChild(agoraUrlLabel);
-
-    var agoraUrlInp = document.createElement("input");
-    agoraUrlInp.type = "text";
-    agoraUrlInp.placeholder = "http://localhost:3000";
-    agoraUrlInp.dataset.action = "agora-url-input";
-    agoraUrlInp.style.background = "rgba(255,255,255,.05)";
-    agoraUrlInp.style.border = "1px solid rgba(255,255,255,.12)";
-    agoraUrlInp.style.borderRadius = "6px";
-    agoraUrlInp.style.color = ui.tokens.t1;
-    agoraUrlInp.style.fontFamily = "inherit";
-    agoraUrlInp.style.fontSize = "13px";
-    agoraUrlInp.style.padding = "6px 10px";
-    agoraUrlInp.style.width = "100%";
-    agoraUrlInp.style.boxSizing = "border-box";
-    agoraUrlInp.value = settings.get("deck.agora.url") || "http://localhost:3000";
-    systemPage.appendChild(agoraUrlInp);
-
-    var agoraUrlError = document.createElement("span");
-    agoraUrlError.style.fontSize = "12px";
-    agoraUrlError.style.color = ui.tokens.danger;
-    agoraUrlError.style.display = "none";
-    agoraUrlError.style.marginTop = "4px";
-    systemPage.appendChild(agoraUrlError);
-
-    var agoraUrlSaveBtn = ui.button("Save", { variant: "primary", action: "agora-url-save" });
-    agoraUrlSaveBtn.style.marginTop = "6px";
-    systemPage.appendChild(agoraUrlSaveBtn);
-
-    agoraUrlSaveBtn.addEventListener("click", function() {
-      var val = agoraUrlInp.value.trim();
-      agoraUrlError.style.display = "none";
-      agoraUrlError.textContent = "";
-      try {
-        settings.set("deck.agora.url", val);
-        agoraUrlError.textContent = "Saved.";
-        agoraUrlError.style.color = ui.tokens.go || "#22c55e";
-        agoraUrlError.style.display = "inline";
-        setTimeout(function() { agoraUrlError.style.display = "none"; }, 1500);
-      } catch (e) {
-        agoraUrlError.textContent = String(e && e.message || e);
-        agoraUrlError.style.color = ui.tokens.danger;
-        agoraUrlError.style.display = "inline";
-      }
-    });
-
     // -- Assemble -----------------------------------------------------------------
     for (var pi = 0; pi < NAV_ITEMS.length; pi++) {
       var pitem = NAV_ITEMS[pi];
@@ -1172,30 +1109,6 @@ const TEST_JS = `export const tests = [
     },
   },
   {
-    name: "agora-url-input exists on system page",
-    fn: async function({ el, loom, assert }) {
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var sysNav = el.querySelector('[data-action="page-system"]');
-      assert(sysNav !== null, "page-system nav button exists");
-      sysNav.click();
-      await new Promise(function(r) { setTimeout(r, 30); });
-      var inp = el.querySelector('[data-action="agora-url-input"]');
-      assert(inp !== null, "agora-url-input exists on system page");
-    },
-  },
-  {
-    name: "agora-url-save button exists on system page",
-    fn: async function({ el, loom, assert }) {
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var sysNav = el.querySelector('[data-action="page-system"]');
-      assert(sysNav !== null, "page-system nav exists");
-      sysNav.click();
-      await new Promise(function(r) { setTimeout(r, 30); });
-      var saveBtn = el.querySelector('[data-action="agora-url-save"]');
-      assert(saveBtn !== null, "agora-url-save button exists on system page");
-    },
-  },
-  {
     name: "about strip renders glyph, name, story, and version",
     fn: async function({ el, loom, assert }) {
       await new Promise(function(r) { setTimeout(r, 50); });
@@ -1205,23 +1118,6 @@ const TEST_JS = `export const tests = [
       assert(about.textContent.indexOf("LOOM") !== -1, "about strip names LOOM");
       assert(about.textContent.indexOf("a computer that weaves itself") !== -1, "about strip carries the story line");
       assert(/v\\d+\\.\\d+\\.\\d+/.test(about.textContent), "about strip shows a semver version");
-    },
-  },
-  {
-    name: "agora-url-save saves valid URL",
-    fn: async function({ el, loom, assert }) {
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var sysNav = el.querySelector('[data-action="page-system"]');
-      sysNav.click();
-      await new Promise(function(r) { setTimeout(r, 30); });
-      var inp = el.querySelector('[data-action="agora-url-input"]');
-      assert(inp !== null, "agora-url-input exists");
-      inp.value = "http://localhost:8080";
-      var saveBtn = el.querySelector('[data-action="agora-url-save"]');
-      assert(saveBtn !== null, "agora-url-save button exists");
-      saveBtn.click();
-      await new Promise(function(r) { setTimeout(r, 30); });
-      assert(loom.settings.get("deck.agora.url") === "http://localhost:8080", "settings.get returns the saved URL");
     },
   },
 ];`;

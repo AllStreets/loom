@@ -168,6 +168,8 @@ Say "show agora", "show the exchange", or "open the floor" and the cockpit mount
 
 When AGORA is reachable the iframe mounts live; pointer events follow the interact toggle exactly as other decks. When AGORA is not running the deck shows an honest offline card: instructions to start the local app, a RETRY button that re-probes on demand, and no polling loop while dark. There is no remote-URL option — the Settings field accepts only `http(s)://localhost` or `http(s)://127.0.0.1` addresses; sovereignty and iframe safety require the app to run on your machine.
 
+*(AGORA removed in Phase 18; the floor lives in the Terminal.)*
+
 ---
 
 ## Stage 6 — Command
@@ -181,6 +183,8 @@ The cockpit commands its fleet. AGORA is no longer a dock you have to feed — L
 Say "show agora" and, if the exchange is dark, the offline card now carries a START control. Press it and LOOM spawns AGORA's dev server as a managed child process — fixed argv (`npm run dev`, no shell, no user-supplied arguments), working directory from Settings > Decks > AGORA path, validated Rust-side before anything spawns: the path must exist, sit under your home directory, and contain a `package.json` with a real `dev` script. One child max. The card shows "IGNITING THE EXCHANGE" with the last lines of live process output while LOOM auto-probes the web URL (every 2s, bounded at 45s); when AGORA answers, the iframe mounts and a STOP chip joins the health strip. The child is killed on STOP and on LOOM exit — no orphaned processes.
 
 **Honest boundary:** LOOM manages the AGORA web process only. Postgres is a system service and stays yours to run — the card says so ("Postgres must be running").
+
+*(AGORA removed in Phase 18; the floor lives in the Terminal.)*
 
 **The owner can read the watch's mind.**
 
@@ -225,6 +229,8 @@ The Terminal and AGORA decks were empty. Now they are deep — on free, keyless 
 **The Terminal deepens.** The movers table is now *your* tape — add and remove tickers inline, persisted, the poller follows live. Click any symbol and a detail panel opens: full intraday area chart, open/high/low/prev-close/volume, tinted delta. New CRYPTO strip (BTC/ETH/SOL spot + 24h) and FX strip (EUR/GBP/JPY — labeled *daily*, because the source is daily and LOOM does not fake liveness). Header health chips — EQUITIES · CRYPTO · FX — show green/stale/dark per source with honest ages.
 
 **AGORA gets a floor.** When your local AGORA app isn't running, the deck is no longer one dark card. LOOM renders its own floor: a live order-book ladder (12 levels a side, cumulative depth bars, mid + spread in bps), a flowing trades tape tinted by taker side, product chips (BTC/ETH/SOL). The launch controls compress into a strip above the floor — START still ignites your local exchange, and when it answers, the iframe takes over exactly as before. About 0.9 requests/second worst case against a public limit of ten: a polite guest.
+
+*(AGORA removed in Phase 18; the floor lives in the Terminal.)*
 
 ---
 
@@ -335,7 +341,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **15 · The Cockpit (Stage 6)** | command: LOOM starts/stops AGORA itself (managed child process, validated spawn, exit-kill) · learned-weights inspection + CLEAR LEARNING · whisper log silence · warning-free build | **shipped** |
 | **16 · Identity** | the brand system (woven mark on every surface, BRAND.md) · the Tapestry (constellation removed; LOOM's history woven live behind the orb) · the Shuttle (⌘K palette + voice sharing one drift-proof command catalog, "what can you do") | **shipped** |
 | **17 · Depth** | the market engine (typed keyless sources: Yahoo UA-fixed · Coinbase Exchange · Frankfurter; 429 root cause dead) · Terminal depth (editable watchlist, symbol detail charts, crypto + FX strips, per-source health) · AGORA's native floor (order-book ladder, trades tape, launch strip) | **shipped** |
-| **later** | EMBER Forge-in-deck · AGORA command bridge · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
+| **later** | EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 

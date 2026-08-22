@@ -31,10 +31,6 @@ sherpa-rs = { version = "0.6", default-features = false, features = ["tts", "dow
 tar = "0.4"
 bzip2 = { version = "0.4", features = [] }
 
-[target.'cfg(unix)'.dependencies]
-# Process-group kill for the AGORA child tree (agora::kill_process_tree)
-libc = "0.2"
-
 [dev-dependencies]
 tempfile = "3"
 

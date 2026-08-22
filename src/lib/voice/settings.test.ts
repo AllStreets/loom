@@ -8,10 +8,8 @@ import {
   VOICE_IDS,
   VOICE_LABELS,
   isValidModelTag,
-  isValidAgoraUrl,
   isValidSymbolList,
   WATCHLIST_MAX,
-  AGORA_PRODUCTS,
 } from "./settings";
 
 // jsdom provides localStorage
@@ -37,11 +35,8 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("cockpit.tapestry");
     expect(SETTINGS_KEYS).toContain("cockpit.watchOpen");
     expect(SETTINGS_KEYS).toContain("cockpit.chatMin");
-    expect(SETTINGS_KEYS).toContain("deck.agora.url");
-    expect(SETTINGS_KEYS).toContain("deck.agora.path");
     expect(SETTINGS_KEYS).toContain("terminal.symbols");
-    expect(SETTINGS_KEYS).toContain("deck.agora.product");
-    expect(SETTINGS_KEYS).toHaveLength(17);
+    expect(SETTINGS_KEYS).toHaveLength(14);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -139,26 +134,6 @@ describe("terminal.symbols setting", () => {
   });
 });
 
-describe("deck.agora.product setting", () => {
-  it("defaults to BTC-USD", () => {
-    expect(getSetting("deck.agora.product")).toBe("BTC-USD");
-  });
-
-  it("accepts exactly the whitelisted products", () => {
-    for (const p of AGORA_PRODUCTS) {
-      setSetting("deck.agora.product", p);
-      expect(getSetting("deck.agora.product")).toBe(p);
-    }
-    expect(AGORA_PRODUCTS).toEqual(["BTC-USD", "ETH-USD", "SOL-USD"]);
-  });
-
-  it("rejects anything off the whitelist", () => {
-    expect(() => setSetting("deck.agora.product", "DOGE-USD")).toThrow(/Invalid value/);
-    expect(() => setSetting("deck.agora.product", "btc-usd")).toThrow(/Invalid value/);
-    expect(() => setSetting("deck.agora.product", "")).toThrow(/Invalid value/);
-  });
-});
-
 describe("isValidSymbolList", () => {
   it("validates each comma-joined ticker against the ticker regex", () => {
     expect(isValidSymbolList("AAPL")).toBe(true);
@@ -178,12 +153,47 @@ describe("migrateSettings — retired-key boot migration", () => {
     expect(localStorage.getItem("cockpit.constellation")).toBeNull();
   });
 
+  it("deletes stored deck.agora.* values (Phase 18 — AGORA left the ship)", () => {
+    localStorage.setItem("deck.agora.url", "http://localhost:3000");
+    localStorage.setItem("deck.agora.path", "/Users/x/AGORA");
+    localStorage.setItem("deck.agora.product", "ETH-USD");
+    migrateSettings();
+    expect(localStorage.getItem("deck.agora.url")).toBeNull();
+    expect(localStorage.getItem("deck.agora.path")).toBeNull();
+    expect(localStorage.getItem("deck.agora.product")).toBeNull();
+  });
+
+  it("deck.agora.* are no longer settings keys", () => {
+    for (const k of ["deck.agora.url", "deck.agora.path", "deck.agora.product"]) {
+      expect(SETTINGS_KEYS).not.toContain(k);
+      expect(() => getSetting(k)).toThrow(/Unknown settings key/);
+      expect(() => setSetting(k, "x")).toThrow(/Unknown settings key/);
+    }
+  });
+
+  it("resets a stored cockpit.deck of 'agora' back to the default (void)", () => {
+    localStorage.setItem("cockpit.deck", "agora");
+    migrateSettings();
+    expect(localStorage.getItem("cockpit.deck")).toBeNull();
+    expect(getSetting("cockpit.deck")).toBe("void");
+  });
+
+  it("leaves a live cockpit.deck value alone", () => {
+    setSetting("cockpit.deck", "terminal");
+    migrateSettings();
+    expect(getSetting("cockpit.deck")).toBe("terminal");
+  });
+
   it("is idempotent — running twice (or with nothing stored) is a no-op", () => {
     expect(() => migrateSettings()).not.toThrow();
     localStorage.setItem("cockpit.constellation", "off");
+    localStorage.setItem("deck.agora.product", "BTC-USD");
+    localStorage.setItem("cockpit.deck", "agora");
     migrateSettings();
     migrateSettings();
     expect(localStorage.getItem("cockpit.constellation")).toBeNull();
+    expect(localStorage.getItem("deck.agora.product")).toBeNull();
+    expect(localStorage.getItem("cockpit.deck")).toBeNull();
   });
 
   it("does not touch live settings keys", () => {
@@ -369,78 +379,6 @@ describe("cockpit.watchOpen setting", () => {
 
   it("cockpit.watchOpen rejects unknown values", () => {
     expect(() => setSetting("cockpit.watchOpen", "maybe")).toThrow();
-  });
-});
-
-describe("isValidAgoraUrl", () => {
-  it("empty string → true (use default)", () => {
-    expect(isValidAgoraUrl("")).toBe(true);
-  });
-
-  it("http://localhost:3000 → true", () => {
-    expect(isValidAgoraUrl("http://localhost:3000")).toBe(true);
-  });
-
-  it("http://localhost:8080 → true", () => {
-    expect(isValidAgoraUrl("http://localhost:8080")).toBe(true);
-  });
-
-  it("https://localhost:3000 → true", () => {
-    expect(isValidAgoraUrl("https://localhost:3000")).toBe(true);
-  });
-
-  it("http://127.0.0.1:3000 → true", () => {
-    expect(isValidAgoraUrl("http://127.0.0.1:3000")).toBe(true);
-  });
-
-  it("https://127.0.0.1 → true", () => {
-    expect(isValidAgoraUrl("https://127.0.0.1")).toBe(true);
-  });
-
-  it("https://evil.com → false", () => {
-    expect(isValidAgoraUrl("https://evil.com")).toBe(false);
-  });
-
-  it("http://localhost.evil.com → false", () => {
-    expect(isValidAgoraUrl("http://localhost.evil.com")).toBe(false);
-  });
-
-  it("file:///etc/passwd → false", () => {
-    expect(isValidAgoraUrl("file:///etc/passwd")).toBe(false);
-  });
-
-  it("not-a-url → false", () => {
-    expect(isValidAgoraUrl("not-a-url")).toBe(false);
-  });
-
-  it("http://192.168.1.1:3000 → false", () => {
-    expect(isValidAgoraUrl("http://192.168.1.1:3000")).toBe(false);
-  });
-});
-
-describe("deck.agora.url setting", () => {
-  it("defaults to http://localhost:3000", () => {
-    expect(getSetting("deck.agora.url")).toBe("http://localhost:3000");
-  });
-
-  it("setSetting accepts valid local URL", () => {
-    expect(() => setSetting("deck.agora.url", "http://localhost:8080")).not.toThrow();
-    expect(getSetting("deck.agora.url")).toBe("http://localhost:8080");
-  });
-
-  it("setSetting accepts empty string (reset to default)", () => {
-    setSetting("deck.agora.url", "http://localhost:8080");
-    expect(() => setSetting("deck.agora.url", "")).not.toThrow();
-    // After empty set, localStorage key is set to "" so getSetting returns "" not default
-    expect(localStorage.getItem("deck.agora.url")).toBe("");
-  });
-
-  it("setSetting rejects remote URL", () => {
-    expect(() => setSetting("deck.agora.url", "https://evil.com")).toThrow(/Invalid URL/);
-  });
-
-  it("setSetting rejects non-URL garbage", () => {
-    expect(() => setSetting("deck.agora.url", "not-a-url")).toThrow(/Invalid URL/);
   });
 });
 

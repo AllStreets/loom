@@ -263,7 +263,7 @@ describe("weaveModel — perf cap and determinism", () => {
         })),
         organs: Array.from({ length: 50 }, (_, i) => ({ id: `organ-${i}` })),
         deletedOrganIds: Array.from({ length: 30 }, (_, i) => `dead-${i}`),
-        decksUsed: ["globe", "terminal", "ember", "agora"],
+        decksUsed: ["globe", "terminal", "ember"],
         experiences: Array.from({ length: 200 }, (_, i) => ({
           ts: NOW - i * DAY,
           organId: `organ-${i % 50}`,

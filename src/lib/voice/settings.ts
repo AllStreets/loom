@@ -35,38 +35,6 @@ export function isValidModelTag(tag: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/.test(tag);
 }
 
-// ── AGORA path validation ─────────────────────────────────────────────────────
-
-/**
- * Validate a candidate AGORA path.
- * Empty string is treated as "use default" — Rust uses ~/Downloads/AGORA.
- * Non-empty: any non-empty string passes client-side; Rust validates existence/structure.
- */
-export function isValidAgoraPath(_path: string): boolean {
-  // Empty means "use default" — always valid client-side
-  // Non-empty: Rust validates existence, dir-under-home, package.json, scripts.dev
-  return true; // always true — Rust validates
-}
-
-// ── AGORA URL validation ───────────────────────────────────────────────────────
-
-/**
- * Validate a candidate AGORA URL.
- * MUST be http or https with hostname exactly "localhost" or "127.0.0.1" (any port).
- * Empty string is treated as "use default" — returns true.
- * Any other value (remote URLs, file://, wrong hostname) returns false.
- */
-export function isValidAgoraUrl(url: string): boolean {
-  if (url === "") return true; // empty = use default
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    return parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-  } catch {
-    return false;
-  }
-}
-
 // ── Terminal watchlist validation ─────────────────────────────────────────────
 
 /** One equity/index/future ticker: uppercase, 1–12 chars of A-Z 0-9 . ^ = - */
@@ -88,13 +56,6 @@ export function isValidSymbolList(value: string): boolean {
   return parts.every((t) => TICKER_RE.test(t));
 }
 
-// ── AGORA floor product ───────────────────────────────────────────────────────
-
-/** The only Coinbase products the floor will ever ask for (mirror of market.rs). */
-export const AGORA_PRODUCTS = ["BTC-USD", "ETH-USD", "SOL-USD"] as const;
-
-export type AgoraProduct = (typeof AGORA_PRODUCTS)[number];
-
 // ── Whitelist ──────────────────────────────────────────────────────────────────
 
 export type SettingsKey =
@@ -111,9 +72,6 @@ export type SettingsKey =
   | "cockpit.tapestry"
   | "cockpit.watchOpen"
   | "cockpit.chatMin"
-  | "deck.agora.url"
-  | "deck.agora.path"
-  | "deck.agora.product"
   | "terminal.symbols";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
@@ -130,20 +88,11 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "cockpit.tapestry",
   "cockpit.watchOpen",
   "cockpit.chatMin",
-  "deck.agora.url",
-  "deck.agora.path",
-  "deck.agora.product",
   "terminal.symbols",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
 const MODEL_KEYS = new Set<SettingsKey>(["model.builder", "model.companion", "model.rewriter"]);
-
-// Keys that use free-text URL validation instead of enumeration
-const URL_KEYS = new Set<SettingsKey>(["deck.agora.url"]);
-
-// Keys that use free-text path validation (Rust validates existence/structure)
-const PATH_KEYS = new Set<SettingsKey>(["deck.agora.path"]);
 
 // Keys that hold a comma-joined ticker watchlist (isValidSymbolList)
 const SYMBOL_LIST_KEYS = new Set<SettingsKey>(["terminal.symbols"]);
@@ -155,12 +104,11 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "orb.tier": ["auto", "flat"],
   "loom.reviewBeforeSave": ["0", "1"],
   "model.cloudBuilder": ["off", "anthropic"],
-  "cockpit.deck": ["void", "globe", "terminal", "ember", "agora"],
+  "cockpit.deck": ["void", "globe", "terminal", "ember"],
   "cockpit.interact": ["on", "off"],
   "cockpit.tapestry": ["on", "off"],
   "cockpit.watchOpen": ["on", "off"],
   "cockpit.chatMin": ["on", "off"],
-  "deck.agora.product": AGORA_PRODUCTS,
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -179,10 +127,6 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "cockpit.watchOpen": "off",
   // Default OFF — the typing box is present until its owner folds it away.
   "cockpit.chatMin": "off",
-  "deck.agora.url": "http://localhost:3000",
-  "deck.agora.path": "",
-  // The floor's product — the deck's native exchange surface when AGORA is dark.
-  "deck.agora.product": "BTC-USD",
   // The Terminal's default tape — the pre-watchlist hardcoded equities list.
   "terminal.symbols": "AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA",
 };
@@ -196,6 +140,10 @@ const LEGACY_ORB_KEY = "loom.orb";
 const RETIRED_KEYS: readonly string[] = [
   // Phase 16: the constellation died; the Tapestry (cockpit.tapestry) lives.
   "cockpit.constellation",
+  // Phase 18: AGORA left the ship; the floor lives in the Terminal.
+  "deck.agora.url",
+  "deck.agora.path",
+  "deck.agora.product",
 ];
 
 /**
@@ -210,6 +158,16 @@ export function migrateSettings(): void {
     } catch {
       // storage unavailable — nothing to migrate
     }
+  }
+  // A retired VALUE can hide under a live key: an owner whose last deck was
+  // AGORA still has cockpit.deck="agora" stored. Deleting it falls back to
+  // the default ("void") — removing an absent key stays a no-op (idempotent).
+  try {
+    if (localStorage.getItem("cockpit.deck") === "agora") {
+      localStorage.removeItem("cockpit.deck");
+    }
+  } catch {
+    // storage unavailable — nothing to migrate
   }
 }
 
@@ -244,18 +202,6 @@ export function setSetting(key: string, value: string): void {
       throw new Error(
         `Invalid model tag "${value}" for key "${key}". Must match ^[A-Za-z0-9][A-Za-z0-9._\\-\\/]*(:[A-Za-z0-9._\\-]+)?$ (max 128 chars) or be empty.`
       );
-    }
-  } else if (URL_KEYS.has(k)) {
-    // Free-text URL: empty string resets to default; non-empty must be a valid local URL
-    if (!isValidAgoraUrl(value)) {
-      throw new Error(
-        `Invalid URL "${value}" for key "${key}". Must be http(s)://localhost[:<port>] or http(s)://127.0.0.1[:<port>], or empty to reset to default.`
-      );
-    }
-  } else if (PATH_KEYS.has(k)) {
-    // Free-text path: client-side always valid; Rust validates existence/structure
-    if (!isValidAgoraPath(value)) {
-      throw new Error(`Invalid path "${value}" for key "${key}".`);
     }
   } else if (SYMBOL_LIST_KEYS.has(k)) {
     // Comma-joined ticker watchlist; empty = empty watchlist

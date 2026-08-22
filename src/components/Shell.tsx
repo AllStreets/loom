@@ -127,7 +127,15 @@ export default function Shell() {
   const [voiceReady, setVoiceReady] = useState(false);
   const reducedMotion = useReducedMotion() ?? false;
 
-  const [deck, setDeck] = useState<DeckId>(() => getSetting('cockpit.deck') as DeckId);
+  // Harden against a stored deck id that no longer exists (a retired deck,
+  // before the boot migration runs) — an unknown id boots as the void, never a
+  // blank deck.
+  const [deck, setDeck] = useState<DeckId>(() => {
+    const stored = getSetting('cockpit.deck');
+    return (['void', 'globe', 'terminal', 'ember'] as const).includes(stored as DeckId)
+      ? (stored as DeckId)
+      : 'void';
+  });
   const [interactMode, setInteractMode] = useState(() => getSetting('cockpit.interact') === 'on');
   const [watchOpen, setWatchOpen] = useState(() => getSetting('cockpit.watchOpen') === 'on');
   const [chatMin, setChatMin] = useState(() => getSetting('cockpit.chatMin') === 'on');
@@ -672,12 +680,6 @@ export default function Shell() {
                 label="EMBER"
                 selected={deck === "ember"}
                 onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "ember" } }))}
-              />
-              <SegBtn
-                testid="deck-agora-btn"
-                label="AGORA"
-                selected={deck === "agora"}
-                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "agora" } }))}
               />
               {deck === "globe" && (
                 <SegBtn

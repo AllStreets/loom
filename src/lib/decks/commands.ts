@@ -23,7 +23,7 @@ export type BridgeCmd =
 
 export type DeckCommandResult = {
   /** deck switch that must fire BEFORE bridge cmds (only set when needed) */
-  deckSwitch?: "globe" | "void" | "terminal" | "ember" | "agora";
+  deckSwitch?: "globe" | "void" | "terminal" | "ember";
   /** bridge commands to post into the AUSPEX iframe (may be empty) */
   bridgeCmds: BridgeCmd[];
   /** short confirmation line for the companion to speak ("Globe up.", etc.) */
@@ -36,16 +36,17 @@ export type DeckCommandResult = {
 const DECK_SHOW_RE =
   /\b(show|open)\b.{0,20}?\b(globe|world|map)\b/i;
 
-// Terminal show: "show the terminal", "show the tape", "show (the) markets", etc.
+// Terminal show: "show the terminal", "show the tape", "show (the) markets",
+// "open the floor" (the floor lives in the Terminal since Phase 18), etc.
 // NOTE: category-adjective phrases like "show financial markets" must NOT reach this
 // regex. The classifier checks CAT_RE first (priority fix); by the time this runs the
 // utterance is known not to match a category filter.
 const TERMINAL_SHOW_RE =
-  /\b(show|open)\b.{0,20}?\b(terminal|markets|market|the tape|tape)\b/i;
+  /\b(show|open)\b.{0,20}?\b(terminal|markets|market|the tape|tape|the floor|floor)\b/i;
 
-// Terminal hide: "hide the terminal", "close markets", "close the tape".
+// Terminal hide: "hide the terminal", "close markets", "close the tape", "close the floor".
 const TERMINAL_HIDE_RE =
-  /\b(hide|close)\b.{0,20}?\b(terminal|markets|market|tape)\b/i;
+  /\b(hide|close)\b.{0,20}?\b(terminal|markets|market|tape|floor)\b/i;
 
 // Deck hide: "hide the globe", "back to void", "close the world", etc.
 const DECK_HIDE_RE =
@@ -55,10 +56,6 @@ const DECK_HIDE_RE =
 // The bare "failsafe" / "the failsafe" trigger without a show/open verb (wake-word style).
 const EMBER_SHOW_RE =
   /(?:\b(show|open)\b.{0,20}?\b(ember|survival|failsafe)\b)|\bthe failsafe\b/i;
-
-// AGORA show: "show agora", "open agora", "show the exchange", "open the floor"
-const AGORA_SHOW_RE =
-  /(?:\b(show|open)\b.{0,20}?\b(agora|the exchange|exchange)\b)|\bopen the floor\b/i;
 
 // Category filter: "show military news", "show geopolitical", "switch to finance", etc.
 // The "all" token requires a news-context word to avoid false positives like
@@ -129,10 +126,9 @@ export type DeckCommandMeta = {
 export const DECK_COMMAND_META: readonly DeckCommandMeta[] = [
   { id: "deck-globe-show", phrase: "show the globe", aliases: ["open the world", "show the map"], hint: "globe up" },
   { id: "deck-globe-hide", phrase: "hide the globe", aliases: ["back to the void", "close the world"], hint: "back to the void" },
-  { id: "deck-terminal-show", phrase: "show the terminal", aliases: ["show the tape", "open the markets"], hint: "the tape is live" },
+  { id: "deck-terminal-show", phrase: "show the terminal", aliases: ["show the tape", "open the markets", "open the floor", "show the floor"], hint: "the tape is live" },
   { id: "deck-terminal-hide", phrase: "hide the terminal", aliases: ["close the tape"], hint: "back to the void" },
   { id: "deck-ember-show", phrase: "show ember", aliases: ["the failsafe", "show survival"], hint: "failsafe up" },
-  { id: "deck-agora-show", phrase: "show agora", aliases: ["open the exchange", "open the floor"], hint: "the exchange is live" },
   { id: "globe-vessels", phrase: "show vessels", aliases: ["show ships", "toggle vessels"], hint: "live AIS ships overlay" },
   { id: "globe-spin-start", phrase: "start spinning", aliases: ["start rotation"], hint: "spin the globe" },
   { id: "globe-spin-stop", phrase: "stop spinning", aliases: ["stop rotation"], hint: "stop the globe" },
@@ -145,7 +141,7 @@ export const DECK_COMMAND_META: readonly DeckCommandMeta[] = [
  * Classify a (normalized, lowercased) utterance into a DeckCommandResult.
  *
  * @param utterance  — the utterance to classify (already normalized)
- * @param currentDeck — current cockpit.deck value ("void" | "globe" | "terminal" | "ember" | "agora")
+ * @param currentDeck — current cockpit.deck value ("void" | "globe" | "terminal" | "ember")
  * @returns DeckCommandResult if utterance matches a deck command; null otherwise.
  *
  * Globe-only commands ("show vessels", category filters, spin, reset) when
@@ -163,7 +159,7 @@ export const DECK_COMMAND_META: readonly DeckCommandMeta[] = [
  */
 export function classifyDeckCommand(
   utterance: string,
-  currentDeck: "void" | "globe" | "terminal" | "ember" | "agora"
+  currentDeck: "void" | "globe" | "terminal" | "ember"
 ): DeckCommandResult | null {
   // 1. Category filter — highest priority so "show financial markets" routes to
   //    set_cat, NOT to the terminal deck. Globe-only: auto-switch from any non-globe deck.
@@ -218,15 +214,6 @@ export function classifyDeckCommand(
       deckSwitch: "ember",
       bridgeCmds: [],
       confirmation: "Failsafe up.",
-    };
-  }
-
-  // 3.6. AGORA show: "show agora", "open agora", "show the exchange", "open the floor"
-  if (AGORA_SHOW_RE.test(utterance)) {
-    return {
-      deckSwitch: "agora",
-      bridgeCmds: [],
-      confirmation: "The exchange is live.",
     };
   }
 

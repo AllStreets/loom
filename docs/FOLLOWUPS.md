@@ -83,7 +83,6 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - **Constellation + salience deck** — port AgentZeus constellation view as a LOOM deck: agents rendered as lights, salience scoring visible, ledger panel. Key source paths: `~/Downloads/AgentZeus/src/components/Constellation.tsx`, `~/Downloads/AgentZeus/src/lib/salience.ts`, `~/Downloads/AgentZeus/src/components/Ledger.tsx`. Adapt to the postMessage deck protocol; salience engine needs a Rust seam for the local embedding model path.
 - **Terminal deck** — Bloomberg-style structured data terminal: market feeds, macro data, order-flow panels. Design the feed-source abstraction before wiring; must degrade fully offline.
 - **EMBER deck** — offline survival console instrument panel as a deck. Source: `~/Downloads/EMBER`. Bridge via the same postMessage adapter pattern used for AUSPEX; EMBER's Forge self-edit loop should stay isolated from LOOM's builder seam.
-- **AGORA deck** — markets intelligence deck: order flow, positioning, macro. Depends on feed sourcing design from the terminal deck pass.
 
 ### Stage-1 known limitations to resolve
 - **Space-PTT inside iframe** — when the AUSPEX globe deck is active and the user has clicked into Interact mode, the iframe captures keyboard focus and the Space push-to-talk no longer reaches LOOM's window listener. Stage-1 documented limitation. Fix path: synthesize a keydown relay from the adapter (postMessage the key event up to the shell), or add a visible PTT button that works regardless of focus.
@@ -115,24 +114,19 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 ### Stage-6 backlog (post-Stage-5)
 
 - **EMBER Forge-in-deck** — VERIFIED 2026-08-19: Forge's boot guard (`'showDirectoryPicker' in window`, `public/decks/ember/js/forge.js`) fails inside LOOM's WKWebView (Tauri v2 macOS has no File System Access API), in dev and under the packaged `deck://` origin alike; EMBER renders its own unsupported callout and everything else works. Forge requires the standalone EMBER app in a Chromium browser; the deck is read/advise mode. Path options if Forge-through-LOOM is ever wanted (stage-7 backlog): Tauri command bridge proxying file reads/writes for EMBER's loop, or a companion read-file/write-file postMessage protocol scoped to the organs directory.
-- **AGORA command bridge** — AGORA currently docks as a passive iframe. Add a postMessage command channel so LOOM can send orders (route, focus market, trigger agent action) and receive live state back.
 - **LoRA fine-tune bridge** — a lightweight path for the owner to fine-tune a local model on engagement history without leaving the cockpit. Depends on the Ollama LoRA import path. (Learned-weights inspection prerequisite resolved in Stage 6.)
 - **Salience place-field** — track lat/lng engagement signals and build a geographic affinity map; use it to weight fly-to suggestions and boost geographically relevant Watch items.
-- **AGORA iframe live-state screenshot unverified** — the offline card is tested and screenshot-gated; the live iframe state (AGORA running) was not captured during 4b because Postgres/engine were not started. Verify and screenshot in a follow-up session.
 - **AbortSignal.timeout wkwebview fallback** — `AbortSignal.timeout()` may not be available on older macOS wkwebview targets. The `timeoutSignal()` helper already polyfills this; monitor for gaps. (`src/lib/util/timeoutSignal.ts`)
 - **Mid-Earth chat overlay polish for narrow heights** — companion chat panel compresses on short viewports; needs a min-height / scroll-container pass for 768px and below. (`src/components/Companion.tsx`, `src/components/Shell.tsx`)
 
 ### Stage-7 backlog (post-Stage-6)
 
-- **AGORA db:setup helper** — LOOM starts the web process but Postgres setup (createdb, migrations) is still manual. A guided `db:setup` command surface (validated like the dev spawn) would close the last "not working" gap for fresh machines.
-- **AGORA engine host from setting** — engine health probes hardcode `localhost:8080` while the web URL is configurable; derive the engine host from `deck.agora.url` when engine port config lands. (Carried from stage-5 notes.)
 - **Forge-through-LOOM** — see the verified EMBER item above; if wanted, a Tauri command bridge or scoped read/write postMessage protocol are the options.
-- **`agora_logs` full surface** — the ring buffer (200 lines) is readable via the `agora_logs` command; the card shows the last lines while starting. A settings-gated full log viewer remains open.
 
 ### Phase-17 backlog (Depth)
 
-- **Websocket feed upgrade** — the floor polls Coinbase REST (2s book / 3s tape). The public websocket feed (`wss://ws-feed.exchange.coinbase.com`) would make the ladder truly live and cut request volume; needs a lifecycle-safe socket seam (reconnect, deck-switch teardown) before adoption.
-- **More floor products** — the product whitelist is BTC/ETH/SOL-USD; widening it is a settings + whitelist change once the ladder proves out.
+- **Websocket feed upgrade** — the Terminal's floor overlay polls Coinbase REST (2s book / 3s tape). The public websocket feed (`wss://ws-feed.exchange.coinbase.com`) would make the ladder truly live and cut request volume; needs a lifecycle-safe socket seam (reconnect, overlay-close teardown) before adoption.
+- **More floor products** — the Terminal's crypto strip (and so the floor overlay) covers BTC/ETH/SOL-USD; widening it is a strip + market-whitelist change once the ladder proves out.
 - **Keyed-source opt-ins** — a Settings-gated slot for owner-supplied keys (e.g. Finnhub/Twelve Data free tiers) following the cloud-builder key pattern (write-only, Tauri-side storage), for owners who want deeper equities data than Yahoo's unofficial endpoint.
 - **Yahoo fragility** — the chart endpoint is unofficial; the UA fix + query2 retry hold today (live-verified), but if Yahoo hardens further, the engine's typed seam is where a replacement source lands. Monitor.
 
@@ -141,11 +135,11 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Terminal-empty root cause — no User-Agent on the Rust proxy → Yahoo 429 on every desktop quote. Fixed engine-wide (browser UA + query2 retry), proven by an `#[ignore]`d live test. (`src-tauri/src/market.rs`)
 - The market engine — `market_chart/crypto/book/trades/fx` typed commands, hardcoded hosts, pre-request validation; `quotes.rs` folded in with `quote_fetch` contract preserved; browser-dev adapters with identical shapes. (`src-tauri/src/market.rs`, `src/lib/market/browser.ts`, `src/lib/core.ts`)
 - Terminal depth — `terminal.symbols` editable watchlist (validated, max 24, live re-poll), symbol detail overlay (SVG intraday area chart + OHLC/volume readouts), CRYPTO strip (30s), FX strip (10min, honest "daily" label), EQUITIES·CRYPTO·FX health chips, per-panel loading/stale/error states; `usePoll` lifecycle hook. (`src/components/decks/TerminalDeck.tsx`)
-- AGORA floor — order-book ladder (12/side, cumulative depth bars, mid + spread bps, 2s), trades tape (taker-side tinted — Coinbase `side` is maker side, inverted; 3s), product chips (`deck.agora.product`), launch card re-laid as top strip with all states preserved; floor unmounts + all polls stop on reachable transition. (`src/components/decks/AgoraDeck.tsx`, `src/lib/util/usePoll.ts`)
+- AGORA floor — order-book ladder (12/side, cumulative depth bars, mid + spread bps, 2s), trades tape (taker-side tinted — Coinbase `side` is maker side, inverted; 3s), product chips (`deck.agora.product`), launch card re-laid as top strip with all states preserved; floor unmounts + all polls stop on reachable transition. (`src/components/decks/AgoraDeck.tsx`, `src/lib/util/usePoll.ts`) *(Phase 18: AGORA removed; the floor lives in the Terminal — `src/components/terminal/Floor.tsx`.)*
 
 ### Phase-16 backlog (Identity)
 
-- **Exchange + learning verbs for the one grammar** — "start the exchange" / "stop the exchange" and "clear learning" exist only as buttons (AGORA card START needs a configured path; CLEAR LEARNING has a confirm strip). Design the confirm-flow-over-utterance pattern, then add them to the catalog so the Shuttle/voice parity stays total.
+- **Learning verbs for the one grammar** — "clear learning" exists only as a button (CLEAR LEARNING has a confirm strip). Design the confirm-flow-over-utterance pattern, then add it to the catalog so the Shuttle/voice parity stays total. (The exchange verbs left with AGORA in Phase 18.)
 - **Deck-usage history for the Tapestry** — the weave's decks-used input is honest but thin (current deck only; no usage store exists). A small ring of `{deck, ts}` records would let the cloth reflect where the owner actually sails.
 - **Settings-organ seed upgrades** — seeds install only when missing, so existing installs keep pre-Identity Settings (no ABOUT strip, no TAPESTRY toggle) until reset. Design a seed-version upgrade path that respects owner edits.
 
@@ -193,4 +187,3 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 
 ## Stage-5 final-review notes (2026-08-18)
 - Engagement double-influence: score factor 5 (applyEngagement) and factor 6 (learnedBoost) both derive from the same signals on source/category — bounded (0.15 cap + clamps + final [0,1]) and acceptable; unify when the learned model matures.
-- AGORA engine health probes hardcoded localhost:8080 while the web URL is configurable — derive engine host from deck.agora.url when engine port config lands.

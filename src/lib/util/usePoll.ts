@@ -1,5 +1,5 @@
 /**
- * usePoll.ts — the deck poll-lifecycle hook (shared by Terminal + AGORA floor).
+ * usePoll.ts — the deck poll-lifecycle hook (shared by the Terminal + its floor overlay).
  *
  * Run `tick` immediately and every `ms` while mounted AND visible — the exact
  * startQuotes/stopQuotes discipline as a hook. The interval is cleared on
