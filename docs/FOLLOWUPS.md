@@ -162,6 +162,9 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - Five-deck plumbing — DeckId union, DeckLayer, Shell SegBtns, commands.ts CAT_RE precedence, few-shot examples all updated and regression-tested.
 - Settings gains a Decks section — AGORA URL field (localhost/127.0.0.1 only; remote URLs rejected).
 
+## From phase 16 (identity) Task 1 (2026-08-20)
+- **Tauri app icon raster regeneration from loom-glyph (needs PNG pipeline)** — `src-tauri/icons/*` (`.png`/`.ico`/`.icns`) still carry the scaffold Tauri rasters; regenerate them from `public/brand/loom-glyph.svg` (favicon variant art) once a raster pipeline exists (e.g. rendered PNG → `tauri icon`). (`src-tauri/icons/`, `public/brand/loom-glyph.svg`)
+
 ## Stage-5 final-review notes (2026-08-18)
 - Engagement double-influence: score factor 5 (applyEngagement) and factor 6 (learnedBoost) both derive from the same signals on source/category — bounded (0.15 cap + clamps + final [0,1]) and acceptable; unify when the learned model matures.
 - AGORA engine health probes hardcoded localhost:8080 while the web URL is configurable — derive engine host from deck.agora.url when engine port config lands.

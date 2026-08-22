@@ -239,6 +239,32 @@ describe("Shell ignition sequence", () => {
   });
 });
 
+describe("Shell brand glyph", () => {
+  it("renders the LOOM glyph in the top bar beside the wordmark", async () => {
+    render(<Shell />);
+    const topBar = screen.getByTestId("shell-top-bar");
+    const glyph = screen.getByTestId("loom-glyph");
+    expect(topBar.contains(glyph)).toBe(true);
+    expect(topBar.textContent).toContain("LOOM");
+  });
+
+  it("weft draws itself at boot (draw class present) when motion is allowed", async () => {
+    render(<Shell />);
+    expect(screen.getByTestId("loom-glyph-weft")).toHaveClass("loom-weft-draw");
+  });
+
+  it("reduced motion: glyph is static — no weft-draw, no glow transition", async () => {
+    _reducedMotion = true;
+
+    render(<Shell />);
+    const weft = screen.getByTestId("loom-glyph-weft");
+    expect(weft).not.toHaveClass("loom-weft-draw");
+    const glyph = screen.getByTestId("loom-glyph");
+    expect(glyph.style.filter).toBe("");
+    expect(glyph.style.transition).toBe("");
+  });
+});
+
 describe("Shell Task 4 beauty pass", () => {
   it("LOOM wordmark is rendered in the top bar", async () => {
     render(<Shell />);

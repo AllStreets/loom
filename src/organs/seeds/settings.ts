@@ -1,4 +1,5 @@
 import type { OrganFile } from "../../lib/core";
+import { version as LOOM_VERSION } from "../../../package.json";
 
 const MANIFEST = JSON.stringify({
   id: "settings",
@@ -88,6 +89,58 @@ const ORGAN_JS = `export default {
         sidebar.appendChild(nb);
       })(NAV_ITEMS[ni]);
     }
+
+    // -- ABOUT strip — glyph, name, story, version (bottom of the sidebar) --------
+    // Version is interpolated from package.json at seed-build time.
+    var about = document.createElement("div");
+    about.dataset.testid = "settings-about";
+    about.style.marginTop = "auto";
+    about.style.paddingTop = "10px";
+    about.style.paddingRight = "12px";
+    about.style.borderTop = "1px solid rgba(255,255,255,.08)";
+
+    var aboutRow = document.createElement("div");
+    aboutRow.style.display = "flex";
+    aboutRow.style.alignItems = "center";
+    aboutRow.style.gap = "7px";
+
+    // The LOOM glyph — same geometry as public/brand/loom-glyph.svg, colors
+    // mapped to tokens (warp = t3, weft = accent).
+    var aboutGlyph = document.createElement("span");
+    aboutGlyph.style.display = "inline-flex";
+    aboutGlyph.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden="true">' +
+      '<path d="M10 7v18M16 7v18M22 7v18" stroke="' + ui.tokens.t3 + '" stroke-width="2" stroke-linecap="round"/>' +
+      '<path d="M4 20 C6 13 8 12 10 15.5 C12 19 14 20 16 16.5 C18 13 20 12 22 15.5 C24 18.5 26 13 28 8" stroke="' + ui.tokens.accent + '" stroke-width="2.4" stroke-linecap="round"/>' +
+      '<path d="M16 13.5v6" stroke="' + ui.tokens.t3 + '" stroke-width="2" stroke-linecap="round"/>' +
+      '</svg>';
+
+    var aboutName = document.createElement("b");
+    aboutName.style.fontSize = "12px";
+    aboutName.style.letterSpacing = ".3em";
+    aboutName.style.color = ui.tokens.t1;
+    aboutName.textContent = "LOOM";
+
+    aboutRow.appendChild(aboutGlyph);
+    aboutRow.appendChild(aboutName);
+
+    var aboutStory = document.createElement("div");
+    aboutStory.style.fontSize = "10.5px";
+    aboutStory.style.color = ui.tokens.t3;
+    aboutStory.style.marginTop = "5px";
+    aboutStory.style.lineHeight = "1.4";
+    aboutStory.textContent = "a computer that weaves itself";
+
+    var aboutVersion = document.createElement("div");
+    aboutVersion.style.fontSize = "10px";
+    aboutVersion.style.color = ui.tokens.t3;
+    aboutVersion.style.marginTop = "2px";
+    aboutVersion.textContent = "v${LOOM_VERSION}";
+
+    about.appendChild(aboutRow);
+    about.appendChild(aboutStory);
+    about.appendChild(aboutVersion);
+    sidebar.appendChild(about);
 
     // -- Content area -------------------------------------------------------------
     var content = document.createElement("div");
@@ -1140,6 +1193,18 @@ const TEST_JS = `export const tests = [
       await new Promise(function(r) { setTimeout(r, 30); });
       var saveBtn = el.querySelector('[data-action="agora-url-save"]');
       assert(saveBtn !== null, "agora-url-save button exists on system page");
+    },
+  },
+  {
+    name: "about strip renders glyph, name, story, and version",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var about = el.querySelector('[data-testid="settings-about"]');
+      assert(about !== null, "settings-about strip exists");
+      assert(about.querySelector("svg") !== null, "about strip contains the glyph svg");
+      assert(about.textContent.indexOf("LOOM") !== -1, "about strip names LOOM");
+      assert(about.textContent.indexOf("a computer that weaves itself") !== -1, "about strip carries the story line");
+      assert(/v\\d+\\.\\d+\\.\\d+/.test(about.textContent), "about strip shows a semver version");
     },
   },
   {

@@ -6,6 +6,7 @@ import { files as notesFiles } from "./notes";
 import { files as timelineFiles } from "./timeline";
 import { files as settingsFiles } from "./settings";
 import { installSeeds } from "./install";
+import { version as pkgVersion } from "../../../package.json";
 
 beforeEach(() => { if (typeof localStorage !== "undefined") localStorage.clear(); });
 afterEach(() => { if (typeof localStorage !== "undefined") localStorage.clear(); });
@@ -173,6 +174,14 @@ describe("seed content validity", () => {
     const installed = await installSeeds({ list, write });
     expect(installed).toContain("settings");
     expect(write).toHaveBeenCalledWith("settings", settingsFiles, "loom: seed settings");
+  });
+
+  it("settings organ carries the ABOUT strip with the package version", () => {
+    const organJs = getFile(settingsFiles, "organ.js");
+    expect(organJs).toContain("settings-about");
+    expect(organJs).toContain("a computer that weaves itself");
+    // Version is interpolated from package.json at seed-build time
+    expect(organJs).toContain(`v${pkgVersion}`);
   });
 });
 

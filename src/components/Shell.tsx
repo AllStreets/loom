@@ -17,6 +17,7 @@ import DeckLayer from './decks/DeckLayer';
 import type { DeckId } from './decks/DeckLayer';
 import { startWatch, stopWatch } from '../lib/watch/runtime';
 import Constellation from './Constellation';
+import LoomGlyph from './chrome/LoomGlyph';
 import WatchPanel from './WatchPanel';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -529,17 +530,29 @@ export default function Shell() {
             ...staggerStyle,
           }}
         >
-          {/* Wordmark — baseline-aligned wordmark + subtitle */}
+          {/* Brand — glyph + baseline-aligned wordmark + subtitle */}
           <div
             style={{
               display: "flex",
-              alignItems: "baseline",
+              alignItems: "center",
               gap: 10,
               flexShrink: 0,
             }}
           >
-            <b style={{ letterSpacing: ".4em", fontSize: 19, lineHeight: 1, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
-            <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: ".04em" }}>sovereign console</small>
+            {/* The mark shares the wordmark's mood glow (drop-shadow ≈ text-shadow)
+                and draws its weft once at boot — ignition made visible. */}
+            <LoomGlyph
+              size={18}
+              draw={!reducedMotion}
+              style={{
+                filter: reducedMotion ? undefined : `drop-shadow(0 0 6px ${moodColor}80)`,
+                transition: reducedMotion ? undefined : "filter 1.2s ease",
+              }}
+            />
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+              <b style={{ letterSpacing: ".4em", fontSize: 19, lineHeight: 1, color: "var(--t1)", textShadow: reducedMotion ? undefined : `0 0 12px ${moodColor}80`, transition: reducedMotion ? undefined : "text-shadow 1.2s ease" }}>LOOM</b>
+              <small style={{ color: "var(--t3)", fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: ".04em" }}>sovereign console</small>
+            </div>
           </div>
 
           {/* Right cluster — fleet HUD + one segmented deck control, same height, baseline row */}

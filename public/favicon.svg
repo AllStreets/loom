@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- navy rounded square ground — reads at 16px where transparency would vanish -->
+  <rect width="32" height="32" rx="7" fill="#060b18"/>
+  <!-- warp: three vertical threads -->
+  <path d="M10 7v18M16 7v18M22 7v18" stroke="#3b4a66" stroke-width="2" stroke-linecap="round"/>
+  <!-- weft: one luminous thread, weaving over-under-over, rising into view -->
+  <path d="M4 20 C6 13 8 12 10 15.5 C12 19 14 20 16 16.5 C18 13 20 12 22 15.5 C24 18.5 26 13 28 8"
+        stroke="#22d3ee" stroke-width="2.6" stroke-linecap="round"/>
+  <!-- the under-crossing: middle warp passes over the weft -->
+  <path d="M16 13.5v6" stroke="#3b4a66" stroke-width="2" stroke-linecap="round"/>
+</svg>
