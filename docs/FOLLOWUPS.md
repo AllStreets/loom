@@ -130,6 +130,11 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - **Keyed-source opt-ins** — a Settings-gated slot for owner-supplied keys (e.g. Finnhub/Twelve Data free tiers) following the cloud-builder key pattern (write-only, Tauri-side storage), for owners who want deeper equities data than Yahoo's unofficial endpoint.
 - **Yahoo fragility** — the chart endpoint is unofficial; the UA fix + query2 retry hold today (live-verified), but if Yahoo hardens further, the engine's typed seam is where a replacement source lands. Monitor.
 
+### Resolved in Phase 18 (Excision)
+
+- AGORA removed entirely (owner verdict 2026-08-22): `agora.rs` + exit-kill hooks + `libc` dep, AgoraDeck, `deck.agora.*` settings (retired via the `RETIRED_KEYS` boot migration, incl. stored `cockpit.deck === "agora"` → void), voice phrases, Settings-organ fields, docs. Grep-gated: only the migration itself may name agora.
+- The floor folded into the Terminal — `src/components/terminal/Floor.tsx` (ladder/tape/spot, pure helpers + tests preserved), opened by clicking a CRYPTO-strip symbol; overlay-scoped polls (open → 2s/3s/30s; closed → zero), Esc/click-out/✕ close. "open the floor" / "show the floor" route to the terminal deck.
+
 ### Resolved in Phase 17 (Depth)
 
 - Terminal-empty root cause — no User-Agent on the Rust proxy → Yahoo 429 on every desktop quote. Fixed engine-wide (browser UA + query2 retry), proven by an `#[ignore]`d live test. (`src-tauri/src/market.rs`)

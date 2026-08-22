@@ -234,6 +234,18 @@ The Terminal and AGORA decks were empty. Now they are deep — on free, keyless 
 
 ---
 
+## Phase 18 — Excision
+
+**Phase 18 — shipped.**
+
+AGORA left the ship. The owner's verdict was final, and LOOM removes cleanly or not at all: the process-spawn subsystem, the deck, the iframe dock, the settings, the voice phrases — all gone, to the last grep. Stored settings from older installs are retired by an idempotent boot migration; a cockpit left pointing at the departed deck wakes in the void. The `libc` dependency left with it.
+
+**The floor stayed.** It never needed AGORA — it was LOOM's own, on Coinbase's open data. It now lives where it belongs: click BTC, ETH, or SOL in the Terminal's crypto strip and the floor opens as an overlay — order-book ladder, cumulative depth bars, mid and spread in basis points, the trades tape tinted by taker side. Its polls run only while it's open. Close it and the feed goes quiet.
+
+Four decks: **void · globe · terminal · ember**. Nothing on board that doesn't earn its keep.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -341,6 +353,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **15 · The Cockpit (Stage 6)** | command: LOOM starts/stops AGORA itself (managed child process, validated spawn, exit-kill) · learned-weights inspection + CLEAR LEARNING · whisper log silence · warning-free build | **shipped** |
 | **16 · Identity** | the brand system (woven mark on every surface, BRAND.md) · the Tapestry (constellation removed; LOOM's history woven live behind the orb) · the Shuttle (⌘K palette + voice sharing one drift-proof command catalog, "what can you do") | **shipped** |
 | **17 · Depth** | the market engine (typed keyless sources: Yahoo UA-fixed · Coinbase Exchange · Frankfurter; 429 root cause dead) · Terminal depth (editable watchlist, symbol detail charts, crypto + FX strips, per-source health) · AGORA's native floor (order-book ladder, trades tape, launch strip) | **shipped** |
+| **18 · Excision** | AGORA removed entirely (spawn subsystem, deck, settings, voice — migration-clean) · the floor folds into the Terminal as the crypto detail overlay · four decks | **shipped** |
 | **later** | EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
