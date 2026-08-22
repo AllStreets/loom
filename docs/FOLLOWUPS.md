@@ -129,6 +129,18 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - **Forge-through-LOOM** — see the verified EMBER item above; if wanted, a Tauri command bridge or scoped read/write postMessage protocol are the options.
 - **`agora_logs` full surface** — the ring buffer (200 lines) is readable via the `agora_logs` command; the card shows the last lines while starting. A settings-gated full log viewer remains open.
 
+### Phase-16 backlog (Identity)
+
+- **Exchange + learning verbs for the one grammar** — "start the exchange" / "stop the exchange" and "clear learning" exist only as buttons (AGORA card START needs a configured path; CLEAR LEARNING has a confirm strip). Design the confirm-flow-over-utterance pattern, then add them to the catalog so the Shuttle/voice parity stays total.
+- **Deck-usage history for the Tapestry** — the weave's decks-used input is honest but thin (current deck only; no usage store exists). A small ring of `{deck, ts}` records would let the cloth reflect where the owner actually sails.
+- **Settings-organ seed upgrades** — seeds install only when missing, so existing installs keep pre-Identity Settings (no ABOUT strip, no TAPESTRY toggle) until reset. Design a seed-version upgrade path that respects owner edits.
+
+### Resolved in Phase 16 (Identity)
+
+- Brand system — woven monogram (`public/brand/loom-glyph.svg`, `favicon.svg`; vite/tauri scaffold SVGs deleted), LoomGlyph chrome component with boot weft-draw, Settings ABOUT strip, `docs/BRAND.md` (palette as law, voice as law). (`src/components/chrome/LoomGlyph.tsx`, `index.html`)
+- The Tapestry — Constellation removed (component, setting, mount) with idempotent `migrateSettings()` boot migration; pure `weaveModel` (warp = commits, weft = organs/scars/decks/builds with repair knots, learned tint; deterministic, capped 64); interactive SVG band (hover labels, click → organ/timeline), event-driven refresh, `cockpit.tapestry` default on. (`src/lib/tapestry/weave.ts`, `src/components/Tapestry.tsx`)
+- The Shuttle — `catalog.ts` derived from the real command tables (anti-drift test-enforced through the actual classifiers), `fuzzyFilter`, ⌘K glass palette executing through the same `loom-utterance` seam as voice, free-text fallthrough, ⌘K hint chip; "what can you do" spoken from the catalog, zero model calls. (`src/lib/shuttle/catalog.ts`, `src/components/Shuttle.tsx`)
+
 ### Resolved in Stage 6 (Command, Phase 15)
 
 - AGORA launch control — `agora_start/stop/status/logs` Tauri commands; fixed-argv spawn (`npm run dev`, no shell), home-prefix + package.json `scripts.dev` validation, single-child mutex, piped stdout/stderr → 200-line ring buffer, kill on stop and on LOOM exit; offline card START → IGNITING (live log lines, bounded 2s×45s probing) → iframe; STOP chip in the health strip. (`src-tauri/src/agora.rs`, `src/components/decks/AgoraDeck.tsx`)

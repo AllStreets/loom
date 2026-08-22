@@ -192,6 +192,26 @@ The watch panel gains a LEARNED section: the top positive and negative weights t
 
 ---
 
+## Phase 16 — Identity
+
+**Phase 16 — shipped.**
+
+LOOM stopped wearing borrowed clothes. One mark, one grammar, one signature surface no other computer can have.
+
+**The mark.**
+
+A woven monogram — three warp threads, one luminous weft weaving over-under through them and rising toward the top right. The two meanings of the name in one figure: to *weave*, and to *loom* into view. It is the favicon (the Vite leftover is gone), it sits beside the wordmark sharing the orb's mood glow, it draws itself — the weft threading the warp — once at every boot, and it anchors the ABOUT strip in Settings. The identity is codified in [`docs/BRAND.md`](docs/BRAND.md): the palette is law, the voice is calm, sovereign, honest — lowercase statements, no exclamation marks, honesty over reassurance.
+
+**The Tapestry.**
+
+The constellation is dead — removed, setting migrated away. In its place, behind the orb: **LOOM's autobiography, woven.** Warp threads are the machine's own git commits, newest brightest. Weft threads are its organs — alive ones in accent light, deleted ones left as faint scars — the decks you sail, and every build it has survived: a clean pass runs smooth, a repaired build carries a visible knot. What the watch has learned about you tints the cloth. Hover names any thread; click an organ thread and the organ opens; click a commit thread and the timeline opens. Every LOOM weaves a different cloth, because every LOOM lives a different life. No other machine can render this surface, because no other machine builds itself.
+
+**The Shuttle.**
+
+The shuttle is the part of a loom that carries the weft through the warp. Here it carries your intent. **⌘K** opens a glass palette over any deck: every command LOOM understands — decks, watch, build, organs, system — fuzzy-filtered as you type, grouped, keyboard-driven. One catalog, derived from the same tables the voice rules use and test-enforced against drift, feeds both: anything sayable is typeable, anything typeable is sayable. Free text that matches nothing falls through to the companion, exactly like speech. And the voice gained discoverability — say "what can you do" and LOOM answers from the same catalog, no model call.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -297,6 +317,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **13 · The Cockpit (Stage 4b)** | EMBER failsafe deck · AGORA exchange dock · deckserve generalized to all decks · five decks total | **shipped** |
 | **14 · The Cockpit (Stage 5)** | LOOM-owned Rust quote proxy (desktop never touches third-party) · globe fly-to on briefings and locate · salience learns from owner behavior (transparent local weights) · AGORA engine health strip | **shipped** |
 | **15 · The Cockpit (Stage 6)** | command: LOOM starts/stops AGORA itself (managed child process, validated spawn, exit-kill) · learned-weights inspection + CLEAR LEARNING · whisper log silence · warning-free build | **shipped** |
+| **16 · Identity** | the brand system (woven mark on every surface, BRAND.md) · the Tapestry (constellation removed; LOOM's history woven live behind the orb) · the Shuttle (⌘K palette + voice sharing one drift-proof command catalog, "what can you do") | **shipped** |
 | **later** | EMBER Forge-in-deck · AGORA command bridge · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
