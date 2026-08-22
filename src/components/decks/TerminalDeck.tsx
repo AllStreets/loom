@@ -17,7 +17,12 @@
  *   └──────────────────────────────────────────────────────────────────────────┘
  * Health chips (EQUITIES · CRYPTO · FX) sit top-right under the tape. Clicking
  * an index card or mover row opens the symbol detail overlay (fresh chart via
- * the market engine). Every panel states its empty/error state — never blank.
+ * the market engine); clicking a CRYPTO-strip symbol opens THE FLOOR overlay
+ * (order-book ladder + trades tape + spot, see terminal/Floor.tsx) — the
+ * clicked symbol IS the product. Both overlays share the same glass pattern
+ * and close semantics (Esc / click-out / ✕); the floor's polls run only while
+ * its overlay is open (mount-bound usePoll discipline). Every panel states its
+ * empty/error state — never blank.
  *
  * Poll cadences: equities 60s (quotes.ts) · crypto 30s · FX 10min (Frankfurter
  * is DAILY data — the long cadence and the label are honest about that).
@@ -46,6 +51,7 @@ import { getChart, getCrypto, getFx } from "../../lib/market/source";
 import type { MarketChart, MarketCrypto, MarketFx } from "../../lib/core";
 import { getSalient } from "../../lib/watch/runtime";
 import type { ScoredEvent } from "../../lib/watch/types";
+import Floor from "../terminal/Floor";
 
 const POS = "#4ade80";
 const NEG = "var(--danger)";
@@ -516,9 +522,15 @@ function MacroStrip({ quotes }: { quotes: Quote[] }) {
   );
 }
 
-// ── Crypto strip (Coinbase spot + 24h, 30s poll) ─────────────────────────────
+// ── Crypto strip (Coinbase spot + 24h, 30s poll; click → floor overlay) ──────
 
-function CryptoStrip({ state }: { state: SourceState<MarketCrypto[]> }) {
+function CryptoStrip({
+  state,
+  onSelect,
+}: {
+  state: SourceState<MarketCrypto[]>;
+  onSelect: (product: string) => void;
+}) {
   return (
     <div
       data-testid="crypto-strip"
@@ -551,7 +563,24 @@ function CryptoStrip({ state }: { state: SourceState<MarketCrypto[]> }) {
             <div
               key={c.product}
               data-testid={`crypto-chip-${c.product}`}
-              style={{ flex: "1 1 0", minWidth: 88, display: "flex", flexDirection: "column", gap: 4, padding: "4px 8px" }}
+              className="loom-click-card"
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelect(c.product)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") onSelect(c.product);
+              }}
+              style={{
+                flex: "1 1 0",
+                minWidth: 88,
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                padding: "4px 8px",
+                borderRadius: 8,
+                border: "1px solid transparent",
+                cursor: "pointer",
+              }}
             >
               <span style={{ ...H_PANEL, fontSize: 9, letterSpacing: ".1em", color: "var(--t3)" }}>
                 {c.product.replace("-USD", "")}
@@ -840,6 +869,88 @@ function DetailPanel({ symbol, onClose }: { symbol: string; onClose: () => void 
   );
 }
 
+// ── Crypto floor overlay (glass, Esc / click-out closes — see terminal/Floor) ─
+
+function FloorPanel({ product, onClose }: { product: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      data-testid="floor-backdrop"
+      onClick={onClose}
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 5,
+        background: "rgba(6,11,24,.55)",
+        backdropFilter: "blur(4px)",
+        WebkitBackdropFilter: "blur(4px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        // Extra top padding drops the panel's center below the orb hero
+        // (z10 above every deck) so the title row stays out of its glow.
+        padding: "112px 24px 24px",
+      }}
+    >
+      <div
+        data-testid="floor-detail"
+        role="dialog"
+        aria-label={`${product} floor`}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(880px, 100%)",
+          height: "min(560px, 100%)",
+          background: "var(--glass-raised)",
+          border: "1px solid var(--glass-border)",
+          borderRadius: 10,
+          boxShadow: "var(--shadow-2)",
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+          <span style={{ ...NUM, fontSize: 16, color: "var(--t1)", letterSpacing: ".04em" }}>{product}</span>
+          <span style={{ ...H_PANEL, fontSize: 9, letterSpacing: ".1em", color: "var(--t3)" }}>THE FLOOR</span>
+          <span style={{ flex: 1 }} />
+          <button
+            data-testid="floor-close"
+            aria-label="Close floor"
+            onClick={onClose}
+            className="loom-add-btn"
+            style={{
+              width: 22,
+              height: 22,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "rgba(255,255,255,.04)",
+              border: "1px solid var(--glass-border)",
+              borderRadius: 6,
+              color: "var(--t2)",
+              fontSize: 11,
+              lineHeight: 1,
+              cursor: "pointer",
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        {/* Mount-bound: the floor's polls start here and stop when it closes. */}
+        <Floor product={product} />
+      </div>
+    </div>
+  );
+}
+
 // ── Finance wire (getSalient finance/geo) ────────────────────────────────────
 
 function ageOf(iso: string): string {
@@ -969,6 +1080,8 @@ export default function TerminalDeck() {
   const [entered, setEntered] = useState(reduced);
   const [watchlist, setWatchlist] = useState<string[]>(() => getWatchlist());
   const [detail, setDetail] = useState<string | null>(null);
+  // The floor overlay's product — null means closed (and zero floor polls).
+  const [floor, setFloor] = useState<string | null>(null);
   const [crypto, setCrypto] = useState<SourceState<MarketCrypto[]>>({ data: null, updatedAt: 0, error: false });
   const [fx, setFx] = useState<SourceState<MarketFx>>({ data: null, updatedAt: 0, error: false });
 
@@ -1180,13 +1293,16 @@ export default function TerminalDeck() {
         {/* Bottom: crypto (30s) and FX (daily, 10min) — independent sources,
             alive even when the equities tape is dark. */}
         <div style={{ display: "flex", gap: 16 }}>
-          <CryptoStrip state={crypto} />
+          <CryptoStrip state={crypto} onSelect={setFloor} />
           <FxStrip state={fx} />
         </div>
       </div>
 
       {/* Symbol detail overlay. */}
       {detail && <DetailPanel symbol={detail} onClose={() => setDetail(null)} />}
+
+      {/* Crypto floor overlay — mounted only while open, so its polls are too. */}
+      {floor && <FloorPanel product={floor} onClose={() => setFloor(null)} />}
     </div>
   );
 }

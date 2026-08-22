@@ -11,16 +11,18 @@ import TerminalDeck from "./TerminalDeck";
 import * as quotes from "../../lib/terminal/quotes";
 import type { Quote, QuotesSnapshot } from "../../lib/terminal/quotes";
 import * as watch from "../../lib/watch/runtime";
-import type { MarketChart, MarketCrypto, MarketFx } from "../../lib/core";
+import type { MarketBook, MarketChart, MarketCrypto, MarketFx, MarketTrade } from "../../lib/core";
 
 let reduced = false;
 vi.mock("framer-motion", () => ({ useReducedMotion: () => reduced }));
 
-// The market source facade is the deck's only path to chart/crypto/fx data.
+// The market source facade is the deck's only path to chart/crypto/fx/floor data.
 const source = vi.hoisted(() => ({
   getChart: vi.fn<(symbol: string, signal?: AbortSignal) => Promise<MarketChart>>(),
   getCrypto: vi.fn<(product: string, signal?: AbortSignal) => Promise<MarketCrypto>>(),
   getFx: vi.fn<(base: string, symbols: string[], signal?: AbortSignal) => Promise<MarketFx>>(),
+  getBook: vi.fn<(product: string, depth: number, signal?: AbortSignal) => Promise<MarketBook>>(),
+  getTrades: vi.fn<(product: string, signal?: AbortSignal) => Promise<MarketTrade[]>>(),
 }));
 vi.mock("../../lib/market/source", () => source);
 
@@ -77,6 +79,23 @@ function cryptoFix(product: string): MarketCrypto {
 
 const FX_FIX: MarketFx = { base: "USD", date: "2026-08-21", rates: { EUR: 0.9207, GBP: 0.7791, JPY: 146.32 } };
 
+// Floor fixtures: bids best-first (desc), asks best-first (asc) → mid 100.
+const BOOK_FIX: MarketBook = {
+  product: "BTC-USD",
+  bids: [
+    { price: 99, size: 1 },
+    { price: 98, size: 2 },
+  ],
+  asks: [
+    { price: 101, size: 1.5 },
+    { price: 102, size: 0.5 },
+  ],
+};
+const TRADES_FIX: MarketTrade[] = [
+  { tradeId: 2, time: "2026-08-22T12:00:01Z", price: 100.4, size: 0.1, side: "buy" },
+  { tradeId: 1, time: "2026-08-22T12:00:00Z", price: 100.3, size: 0.3, side: "sell" },
+];
+
 function stubQuotes(snap: QuotesSnapshot) {
   vi.spyOn(quotes, "getQuotes").mockReturnValue(snap);
   vi.spyOn(quotes, "startQuotes").mockImplementation(() => {});
@@ -90,6 +109,8 @@ beforeEach(() => {
   source.getChart.mockResolvedValue(CHART);
   source.getCrypto.mockImplementation(async (p) => cryptoFix(p));
   source.getFx.mockResolvedValue(FX_FIX);
+  source.getBook.mockImplementation(async (p) => ({ ...BOOK_FIX, product: p }));
+  source.getTrades.mockResolvedValue(TRADES_FIX);
 });
 afterEach(() => {
   cleanup();
@@ -97,6 +118,8 @@ afterEach(() => {
   source.getChart.mockReset();
   source.getCrypto.mockReset();
   source.getFx.mockReset();
+  source.getBook.mockReset();
+  source.getTrades.mockReset();
   localStorage.clear();
 });
 
@@ -339,6 +362,105 @@ describe("TerminalDeck — symbol detail", () => {
     await findByTestId("detail-chart");
     fireEvent.click(getByTestId("detail-close"));
     expect(queryByTestId("symbol-detail")).toBeNull();
+  });
+});
+
+// ── Crypto floor overlay ──────────────────────────────────────────────────────
+
+describe("TerminalDeck — crypto floor overlay", () => {
+  it("opens from a crypto chip — the clicked symbol IS the product", async () => {
+    stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
+    const { findByTestId, getByTestId } = render(<TerminalDeck />);
+    fireEvent.click(await findByTestId("crypto-chip-BTC-USD"));
+    expect(getByTestId("floor-detail")).toBeTruthy();
+    expect(getByTestId("floor-detail").getAttribute("aria-label")).toBe("BTC-USD floor");
+    await waitFor(() =>
+      expect(source.getBook).toHaveBeenCalledWith("BTC-USD", expect.any(Number), expect.anything())
+    );
+    expect(source.getTrades).toHaveBeenCalledWith("BTC-USD", expect.anything());
+  });
+
+  it("a different chip opens a different product's floor", async () => {
+    stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
+    const { findByTestId, getByTestId } = render(<TerminalDeck />);
+    fireEvent.click(await findByTestId("crypto-chip-ETH-USD"));
+    expect(getByTestId("floor-detail").getAttribute("aria-label")).toBe("ETH-USD floor");
+    await waitFor(() =>
+      expect(source.getBook).toHaveBeenCalledWith("ETH-USD", expect.any(Number), expect.anything())
+    );
+  });
+
+  it("renders the ladder and tape from the floor sources", async () => {
+    stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
+    const { findByTestId, findAllByTestId } = render(<TerminalDeck />);
+    fireEvent.click(await findByTestId("crypto-chip-BTC-USD"));
+    expect((await findAllByTestId("floor-bid-row")).length).toBe(2);
+    expect((await findAllByTestId("floor-trade-row")).length).toBe(2);
+    expect((await findByTestId("floor-mid")).textContent).toBe("100.00");
+  });
+
+  it("closes on Escape", async () => {
+    stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
+    const { findByTestId, queryByTestId } = render(<TerminalDeck />);
+    fireEvent.click(await findByTestId("crypto-chip-BTC-USD"));
+    await findByTestId("floor-detail");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(queryByTestId("floor-detail")).toBeNull();
+  });
+
+  it("closes on click outside (backdrop), not on click inside", async () => {
+    stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
+    const { findByTestId, getByTestId, queryByTestId } = render(<TerminalDeck />);
+    fireEvent.click(await findByTestId("crypto-chip-BTC-USD"));
+    fireEvent.click(getByTestId("floor-detail")); // inside — stays open
+    expect(queryByTestId("floor-detail")).toBeTruthy();
+    fireEvent.click(getByTestId("floor-backdrop")); // outside — closes
+    expect(queryByTestId("floor-detail")).toBeNull();
+  });
+
+  it("closes via the ✕ control", async () => {
+    stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
+    const { findByTestId, getByTestId, queryByTestId } = render(<TerminalDeck />);
+    fireEvent.click(await findByTestId("crypto-chip-SOL-USD"));
+    fireEvent.click(getByTestId("floor-close"));
+    expect(queryByTestId("floor-detail")).toBeNull();
+  });
+
+  it("floor polls run ONLY while the overlay is open (fake timers)", async () => {
+    vi.useFakeTimers();
+    stubQuotes({ quotes: FULL, stale: false, updatedAt: 1 });
+    const { getByTestId } = render(<TerminalDeck />);
+
+    // No floor polls before the overlay opens — ever.
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(source.getBook).not.toHaveBeenCalled();
+    expect(source.getTrades).not.toHaveBeenCalled();
+
+    // Open: immediate first tick, then the 2s/3s cadences.
+    act(() => {
+      fireEvent.click(getByTestId("crypto-chip-BTC-USD"));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(source.getBook).toHaveBeenCalledTimes(1);
+    expect(source.getTrades).toHaveBeenCalledTimes(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(6_000));
+    // t=6s: book at 2/4/6 (+3), trades at 3/6 (+2).
+    expect(source.getBook).toHaveBeenCalledTimes(4);
+    expect(source.getTrades).toHaveBeenCalledTimes(3);
+
+    // Close: zero further floor calls, no matter how long we wait.
+    act(() => {
+      fireEvent.click(getByTestId("floor-close"));
+    });
+    const book = source.getBook.mock.calls.length;
+    const trades = source.getTrades.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(source.getBook).toHaveBeenCalledTimes(book);
+    expect(source.getTrades).toHaveBeenCalledTimes(trades);
+    vi.useRealTimers();
   });
 });
 
