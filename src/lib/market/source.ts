@@ -14,14 +14,24 @@
  */
 
 import {
+  marketBook,
   marketChart,
   marketCrypto,
   marketFx,
+  marketTrades,
+  type MarketBook,
   type MarketChart,
   type MarketCrypto,
   type MarketFx,
+  type MarketTrade,
 } from "../core";
-import { fetchChartBrowser, fetchCryptoBrowser, fetchFxBrowser } from "./browser";
+import {
+  fetchBookBrowser,
+  fetchChartBrowser,
+  fetchCryptoBrowser,
+  fetchFxBrowser,
+  fetchTradesBrowser,
+} from "./browser";
 
 /** Mirrors safeInvoke's detection (v2 injects __TAURI_INTERNALS__). */
 function inTauri(): boolean {
@@ -46,6 +56,18 @@ export async function getChart(symbol: string, signal?: AbortSignal): Promise<Ma
 export async function getCrypto(product: string, signal?: AbortSignal): Promise<MarketCrypto> {
   if (inTauri()) return marketCrypto(product);
   return orThrow(await fetchCryptoBrowser(product, signal), "the crypto source");
+}
+
+/** Coinbase level-2 order book, truncated to `depth` rows per side. */
+export async function getBook(product: string, depth: number, signal?: AbortSignal): Promise<MarketBook> {
+  if (inTauri()) return marketBook(product, depth);
+  return orThrow(await fetchBookBrowser(product, depth, signal), "the book source");
+}
+
+/** Coinbase recent trades (capped; `side` is the MAKER side — raw). */
+export async function getTrades(product: string, signal?: AbortSignal): Promise<MarketTrade[]> {
+  if (inTauri()) return marketTrades(product);
+  return orThrow(await fetchTradesBrowser(product, signal), "the trades source");
 }
 
 /** Frankfurter daily FX rates (daily data — label it honestly). */

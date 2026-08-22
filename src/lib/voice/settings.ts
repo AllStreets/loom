@@ -88,6 +88,13 @@ export function isValidSymbolList(value: string): boolean {
   return parts.every((t) => TICKER_RE.test(t));
 }
 
+// ── AGORA floor product ───────────────────────────────────────────────────────
+
+/** The only Coinbase products the floor will ever ask for (mirror of market.rs). */
+export const AGORA_PRODUCTS = ["BTC-USD", "ETH-USD", "SOL-USD"] as const;
+
+export type AgoraProduct = (typeof AGORA_PRODUCTS)[number];
+
 // ── Whitelist ──────────────────────────────────────────────────────────────────
 
 export type SettingsKey =
@@ -106,6 +113,7 @@ export type SettingsKey =
   | "cockpit.chatMin"
   | "deck.agora.url"
   | "deck.agora.path"
+  | "deck.agora.product"
   | "terminal.symbols";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
@@ -124,6 +132,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "cockpit.chatMin",
   "deck.agora.url",
   "deck.agora.path",
+  "deck.agora.product",
   "terminal.symbols",
 ];
 
@@ -151,6 +160,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "cockpit.tapestry": ["on", "off"],
   "cockpit.watchOpen": ["on", "off"],
   "cockpit.chatMin": ["on", "off"],
+  "deck.agora.product": AGORA_PRODUCTS,
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -171,6 +181,8 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "cockpit.chatMin": "off",
   "deck.agora.url": "http://localhost:3000",
   "deck.agora.path": "",
+  // The floor's product — the deck's native exchange surface when AGORA is dark.
+  "deck.agora.product": "BTC-USD",
   // The Terminal's default tape — the pre-watchlist hardcoded equities list.
   "terminal.symbols": "AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA",
 };

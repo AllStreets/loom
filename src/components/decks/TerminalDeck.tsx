@@ -5,8 +5,8 @@
  * mounted by DeckLayer when cockpit.deck === "terminal". It drives the quotes
  * poller by its own lifecycle: startQuotes() on mount, stopQuotes() on unmount
  * — so there is NO background market polling while another deck is active.
- * The crypto and FX polls follow the same discipline (usePoll below): start on
- * mount, stop on unmount, pause while the document is hidden.
+ * The crypto and FX polls follow the same discipline (usePoll — shared hook in
+ * lib/util/usePoll): start on mount, stop on unmount, pause while hidden.
  *
  * Composition (CSS grid, everything on the 4px grid):
  *   ┌──────────────────────────── TICKER TAPE (marquee) ───────────────────────┐
@@ -41,6 +41,7 @@ import {
   SYMBOL_LABELS,
 } from "../../lib/terminal/quotes";
 import { TICKER_RE } from "../../lib/voice/settings";
+import { usePoll } from "../../lib/util/usePoll";
 import { getChart, getCrypto, getFx } from "../../lib/market/source";
 import type { MarketChart, MarketCrypto, MarketFx } from "../../lib/core";
 import { getSalient } from "../../lib/watch/runtime";
@@ -97,48 +98,6 @@ function fmtAgeMs(ms: number): string {
 }
 function color(v: number): string {
   return v >= 0 ? POS : NEG;
-}
-
-// ── Poll lifecycle hook (mount-bound, hidden-paused, abort-carried) ──────────
-
-/**
- * Run `tick` immediately and every `ms` while mounted AND visible — the exact
- * startQuotes/stopQuotes discipline as a hook. The interval is cleared on
- * unmount and while document.hidden; each run gets an AbortSignal that fires
- * on pause/unmount so no request outlives the deck.
- */
-function usePoll(tick: (signal: AbortSignal) => void | Promise<void>, ms: number) {
-  useEffect(() => {
-    let id: ReturnType<typeof setInterval> | null = null;
-    let ctrl: AbortController | null = null;
-    const run = () => {
-      ctrl = new AbortController();
-      void tick(ctrl.signal);
-    };
-    const start = () => {
-      if (id !== null) return;
-      run();
-      id = setInterval(run, ms);
-    };
-    const stop = () => {
-      if (id !== null) {
-        clearInterval(id);
-        id = null;
-      }
-      ctrl?.abort();
-      ctrl = null;
-    };
-    const onVis = () => {
-      if (document.hidden) stop();
-      else start();
-    };
-    document.addEventListener("visibilitychange", onVis, { passive: true });
-    if (!document.hidden) start();
-    return () => {
-      document.removeEventListener("visibilitychange", onVis);
-      stop();
-    };
-  }, [tick, ms]);
 }
 
 // ── Source health (EQUITIES · CRYPTO · FX chips) ─────────────────────────────

@@ -11,6 +11,7 @@ import {
   isValidAgoraUrl,
   isValidSymbolList,
   WATCHLIST_MAX,
+  AGORA_PRODUCTS,
 } from "./settings";
 
 // jsdom provides localStorage
@@ -39,7 +40,8 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("deck.agora.url");
     expect(SETTINGS_KEYS).toContain("deck.agora.path");
     expect(SETTINGS_KEYS).toContain("terminal.symbols");
-    expect(SETTINGS_KEYS).toHaveLength(16);
+    expect(SETTINGS_KEYS).toContain("deck.agora.product");
+    expect(SETTINGS_KEYS).toHaveLength(17);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -134,6 +136,26 @@ describe("terminal.symbols setting", () => {
   it("rejects a list longer than WATCHLIST_MAX (rate friendliness)", () => {
     const list = Array.from({ length: WATCHLIST_MAX + 1 }, (_, i) => `S${i}`).join(",");
     expect(() => setSetting("terminal.symbols", list)).toThrow(/Invalid symbol list/);
+  });
+});
+
+describe("deck.agora.product setting", () => {
+  it("defaults to BTC-USD", () => {
+    expect(getSetting("deck.agora.product")).toBe("BTC-USD");
+  });
+
+  it("accepts exactly the whitelisted products", () => {
+    for (const p of AGORA_PRODUCTS) {
+      setSetting("deck.agora.product", p);
+      expect(getSetting("deck.agora.product")).toBe(p);
+    }
+    expect(AGORA_PRODUCTS).toEqual(["BTC-USD", "ETH-USD", "SOL-USD"]);
+  });
+
+  it("rejects anything off the whitelist", () => {
+    expect(() => setSetting("deck.agora.product", "DOGE-USD")).toThrow(/Invalid value/);
+    expect(() => setSetting("deck.agora.product", "btc-usd")).toThrow(/Invalid value/);
+    expect(() => setSetting("deck.agora.product", "")).toThrow(/Invalid value/);
   });
 });
 
