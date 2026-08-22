@@ -106,7 +106,8 @@ const LABEL_MAX = 64;
 
 // ── Deterministic seed — fnv-1a hash of an id/sha → [0,1) ─────────────────────
 
-function hash01(s: string): number {
+/** Exported for geometry.ts — the whole tapestry seeds from the same hash. */
+export function hash01(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);

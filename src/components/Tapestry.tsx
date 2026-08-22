@@ -6,10 +6,19 @@
  * build experiences with visible knots for repaired weaves, tinted by what the
  * watch has learned. Every LOOM weaves a different cloth.
  *
- * POSITIONING: fixed horizontal band behind the orb band, z 8 — the slot the
- * constellation held: above the deck layers (z 2) and ambient field (z 1),
- * below chrome/orb-band (z 10). Lives OUTSIDE the orb-band's screen blend so
- * threads and labels render in normal blend mode.
+ * CLOTH, NOT GRID: the render is the glyph's over-under technique
+ * (public/brand/loom-glyph.svg) at band scale. Warps bow gently instead of
+ * ruling the viewport; wefts undulate through every warp crossing with
+ * checkerboard parity; short warp segments are overdrawn wherever the warp is
+ * over; and the whole weave sits behind a two-axis gradient mask so threads
+ * emerge from darkness — no hard band edges. Geometry is pure and tested in
+ * lib/tapestry/geometry.ts; this component only renders its output.
+ *
+ * POSITIONING: fixed horizontal band, z 8 — the slot the constellation held:
+ * above the deck layers (z 2) and ambient field (z 1), below chrome/orb-band
+ * (z 10). Vertically centered on the orb's equator (see BAND_TOP). Lives
+ * OUTSIDE the orb-band's screen blend so threads and labels render in normal
+ * blend mode.
  *
  * DATA: gathered once at mount, re-gathered on `loom-fleet-activity`,
  * `organs-changed` and `loom-deck` events. NO polling interval.
@@ -32,19 +41,37 @@ import {
   type WeaveModel,
   type ThreadAction,
 } from "../lib/tapestry/weave";
+import {
+  BAND_H,
+  CROSSING_OVERDRAW,
+  KNOT_R,
+  warpGeometry,
+  thinWarpForDensity,
+  weftRows,
+  overCrossings,
+  knotPoint,
+} from "../lib/tapestry/geometry";
 
 // ── Band geometry ─────────────────────────────────────────────────────────────
 
-/** Fixed viewBox — x is stretched to the viewport (preserveAspectRatio none). */
-const VB_W = 1000;
-const VB_H = 210;
-/** Vertical inset so threads never kiss the band edges. */
-const PAD_Y = 10;
+/**
+ * Vertical anchor: centered on the orb's equator. The top bar is ~62px
+ * (16px padding ×2 + 30px controls); the orb hero adds 12px margin, so the
+ * 180px orb's equator sits at ~62 + 12 + 90 = 164. Band center 164 − half the
+ * 180px band = top 74.
+ */
+const BAND_TOP = 74;
 /** z 8 — above decks (z 2), below chrome and the orb band (z 10). */
 const BAND_Z = 8;
 
 /** Faint placeholder warp for the empty state — a loom strung but unwoven. */
 const EMPTY_WARP_COUNT = 12;
+
+/** Warp opacity ceiling — the warp is structure, never the story. */
+const WARP_MAX_OPACITY = 0.3;
+
+/** Scar threads stay under this — a scar is remembered, not displayed. */
+const SCAR_MAX_OPACITY = 0.15;
 
 const KEYFRAMES_ID = "loom-tapestry-kf";
 
@@ -137,24 +164,6 @@ function runAction(action: ThreadAction) {
   }
 }
 
-// ── Weft path builder — smooth line with zigzag knots for repaired builds ─────
-
-function weftPathD(y: number, knots: number[]): string {
-  const ordered = [...knots].sort((a, b) => a - b);
-  let d = `M 0 ${y.toFixed(1)}`;
-  for (const kx of ordered) {
-    const x = kx * VB_W;
-    // A small zigzag — the knot where the weave was repaired.
-    d += ` L ${(x - 8).toFixed(1)} ${y.toFixed(1)}`
-      + ` L ${(x - 4).toFixed(1)} ${(y - 5).toFixed(1)}`
-      + ` L ${x.toFixed(1)} ${(y + 5).toFixed(1)}`
-      + ` L ${(x + 4).toFixed(1)} ${(y - 5).toFixed(1)}`
-      + ` L ${(x + 8).toFixed(1)} ${y.toFixed(1)}`;
-  }
-  d += ` L ${VB_W} ${y.toFixed(1)}`;
-  return d;
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 type HoverState = { label: string; x: number; y: number } | null;
@@ -163,6 +172,7 @@ export default function Tapestry() {
   const [visible, setVisible] = useState(() => getSetting("cockpit.tapestry") === "on");
   const [model, setModel] = useState<WeaveModel | null>(null);
   const [hover, setHover] = useState<HoverState>(null);
+  const [width, setWidth] = useState(() => window.innerWidth);
   const [reducedMotion] = useState(
     () => typeof window.matchMedia === "function"
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -186,6 +196,16 @@ export default function Tapestry() {
     }
     window.addEventListener("loom-settings-changed", onSettingsChanged);
     return () => window.removeEventListener("loom-settings-changed", onSettingsChanged);
+  }, []);
+
+  // Track the viewport — the cloth is laid out in real pixels, not a
+  // stretched viewBox (stretching would distort the bows and crossings).
+  useEffect(() => {
+    function onResize() {
+      setWidth(window.innerWidth);
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   // Gather at mount; re-gather on life events. No polling interval.
@@ -212,124 +232,245 @@ export default function Tapestry() {
   if (!visible || model === null) return null;
 
   const empty = model.warp.length === 0 && model.weft.length === 0;
-  const yPx = (y: number) => PAD_Y + y * (VB_H - 2 * PAD_Y);
+
+  // ---- geometry: pure functions lay the cloth; the component just renders ----
+  // Density sanity: at typical widths 24 warps sit ~55px apart (fine), but on
+  // narrow windows thinWarpForDensity strides the RENDERED warp down so
+  // crossings never fall under ~28px. The data model caps are untouched —
+  // threads thinned out of the geometry simply have no rendered curve or hit
+  // target at this width.
+  const warpPx = model.warp
+    .map((t) => ({ ...t, px: t.x * width }))
+    .sort((a, b) => a.px - b.px); // ascending for left→right weft sampling
+  const warpThreads = thinWarpForDensity(warpPx.map((t) => ({ ...t, x: t.px })));
+  const warpGeoms = warpGeometry(
+    warpThreads.map((t) => ({ seed: t.id, x: t.x })),
+    BAND_H
+  );
+  const warpXs = warpThreads.map((t) => t.x);
+
+  // Rows are laid top-down with seeded 14–22px spacing; the band holds as many
+  // as fit (geometry drops the lowest-priority tail — honest comment lives in
+  // weftRows). Zip rendered threads against their rows.
+  const rows = weftRows(model.weft.map((t) => ({ seed: t.id })), warpXs, width, BAND_H);
+  const renderedWeft = model.weft.slice(0, rows.length);
+
+  const crossings = overCrossings(warpXs, rows);
+
+  const emptyWarpGeoms = empty
+    ? warpGeometry(
+        Array.from({ length: EMPTY_WARP_COUNT }, (_, i) => ({
+          seed: `empty-${i}`,
+          x: ((i + 1) / (EMPTY_WARP_COUNT + 1)) * width,
+        })),
+        BAND_H
+      )
+    : [];
+
+  const warpOpacity = (o: number) => Math.min(o, WARP_MAX_OPACITY);
 
   return (
     <>
       <svg
         data-testid="tapestry"
         aria-hidden
-        viewBox={`0 0 ${VB_W} ${VB_H}`}
-        preserveAspectRatio="none"
+        viewBox={`0 0 ${width} ${BAND_H}`}
         style={{
           position: "fixed",
-          top: 62, // just under the top bar — the band runs behind the orb
+          top: BAND_TOP,
           left: 0,
           width: "100%",
-          height: VB_H,
+          height: BAND_H,
           zIndex: BAND_Z,
           pointerEvents: "none", // threads re-enable their own hit paths
           overflow: "visible",
         }}
       >
-        {/* ── warp: commits — vertical, structural, newest brightest ── */}
-        {model.warp.map((t) => {
-          const x = (t.x * VB_W).toFixed(1);
-          return (
-            <g key={t.id}>
-              <line
-                x1={x}
-                y1={PAD_Y}
-                x2={x}
-                y2={VB_H - PAD_Y}
-                stroke={`var(${t.colorToken})`}
-                strokeWidth={1}
-                opacity={t.opacity}
-              />
-              {/* invisible hit path — wide enough to hover/click a hairline */}
-              <line
-                data-testid={`tapestry-thread-${t.id}`}
-                x1={x}
-                y1={PAD_Y}
-                x2={x}
-                y2={VB_H - PAD_Y}
-                stroke="transparent"
-                strokeWidth={10}
-                style={{ pointerEvents: "auto", cursor: t.action ? "pointer" : "default" }}
-                onMouseEnter={(e) => setHover({ label: t.label, x: e.clientX, y: e.clientY })}
-                onMouseLeave={() => setHover(null)}
-                onClick={() => runAction(t.action)}
-              />
-            </g>
-          );
-        })}
+        <defs>
+          {/* Soft edges: a vertical fade multiplied with a horizontal one (the
+              inner rect carries the horizontal mask), so threads emerge from
+              darkness on all four sides. White here is mask LUMINANCE, not a
+              brand color — tokens cannot reach mask internals and no palette
+              color is being displayed. */}
+          <linearGradient id="loom-tap-fade-y" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#fff" stopOpacity="0" />
+            <stop offset="0.2" stopColor="#fff" stopOpacity="1" />
+            <stop offset="0.8" stopColor="#fff" stopOpacity="1" />
+            <stop offset="1" stopColor="#fff" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="loom-tap-fade-x" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor="#fff" stopOpacity="0" />
+            <stop offset="0.08" stopColor="#fff" stopOpacity="1" />
+            <stop offset="0.92" stopColor="#fff" stopOpacity="1" />
+            <stop offset="1" stopColor="#fff" stopOpacity="0" />
+          </linearGradient>
+          <mask id="loom-tap-mask-x">
+            <rect x={-60} y={0} width={width + 120} height={BAND_H} fill="url(#loom-tap-fade-x)" />
+          </mask>
+          <mask id="loom-tap-mask" data-testid="tapestry-mask">
+            <rect
+              x={-60}
+              y={0}
+              width={width + 120}
+              height={BAND_H}
+              fill="url(#loom-tap-fade-y)"
+              mask="url(#loom-tap-mask-x)"
+            />
+          </mask>
+        </defs>
 
-        {/* ── weft: organs, scars, decks, builds — horizontal, colored ── */}
-        {model.weft.map((t) => {
-          const y = yPx(t.y);
-          const d = weftPathD(y, t.knots);
-          // Learned tint: what the watch has learned lifts this region's glow.
-          const opacity = Math.min(1, t.opacity * (1 + 0.5 * t.intensity));
-          return (
-            <g key={t.id}>
-              <path
-                className={reducedMotion ? undefined : "loom-weft-shimmer"}
-                d={d}
-                fill="none"
-                stroke={`var(${t.colorToken})`}
-                strokeWidth={t.kind === "organ" ? 1.6 : 1.1}
-                strokeLinejoin="round"
-                opacity={opacity}
-              />
-              <path
-                data-testid={`tapestry-thread-${t.id}`}
-                d={d}
-                fill="none"
-                stroke="transparent"
-                strokeWidth={10}
-                style={{ pointerEvents: "auto", cursor: t.action ? "pointer" : "default" }}
-                onMouseEnter={(e) => setHover({ label: t.label, x: e.clientX, y: e.clientY })}
-                onMouseLeave={() => setHover(null)}
-                onClick={() => runAction(t.action)}
-              />
-            </g>
-          );
-        })}
+        <g data-testid="tapestry-weave" mask="url(#loom-tap-mask)">
+          {/* ── warp: commits — bowed verticals, newest brightest ── */}
+          {warpGeoms.map((g, gi) => {
+            const t = warpThreads[gi];
+            return (
+              <g key={t.id}>
+                <path
+                  d={g.d}
+                  fill="none"
+                  stroke={`var(${t.colorToken})`}
+                  strokeWidth={1}
+                  opacity={warpOpacity(t.opacity)}
+                />
+                {/* invisible hit path — wide enough to hover/click a hairline */}
+                <path
+                  data-testid={`tapestry-thread-${t.id}`}
+                  d={g.d}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth={12}
+                  style={{
+                    pointerEvents: "stroke",
+                    cursor: t.action ? "pointer" : "default",
+                  }}
+                  onMouseEnter={(e) => setHover({ label: t.label, x: e.clientX, y: e.clientY })}
+                  onMouseLeave={() => setHover(null)}
+                  onClick={() => runAction(t.action)}
+                />
+              </g>
+            );
+          })}
 
-        {/* ── empty state: a loom strung but unwoven ── */}
-        {empty && (
-          <g data-testid="tapestry-empty-warp">
-            {Array.from({ length: EMPTY_WARP_COUNT }, (_, i) => {
-              const x = (((i + 1) / (EMPTY_WARP_COUNT + 1)) * VB_W).toFixed(1);
+          {/* ── weft: organs, scars, decks, builds — undulating through the
+              warp. The faint accent glow is token-derived (color-mix over
+              var(--accent)) so mood/theme reach the cloth. ── */}
+          <g
+            data-testid="tapestry-weft"
+            style={{
+              filter: "drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 35%, transparent))",
+            }}
+          >
+            {renderedWeft.map((t, j) => {
+              const row = rows[j];
+              const isScar = t.kind === "scar";
+              // Learned tint: what the watch has learned lifts this region's glow.
+              const opacity = isScar
+                ? Math.min(t.opacity, SCAR_MAX_OPACITY)
+                : Math.min(1, t.opacity * (1 + 0.5 * t.intensity));
+              return (
+                <g key={t.id}>
+                  <path
+                    className={reducedMotion ? undefined : "loom-weft-shimmer"}
+                    d={row.d}
+                    fill="none"
+                    stroke={`var(${t.colorToken})`}
+                    strokeWidth={t.kind === "organ" ? 1.6 : 1.1}
+                    strokeDasharray={isScar ? "3 5" : undefined}
+                    strokeLinecap="round"
+                    opacity={opacity}
+                  />
+                  {/* knots — repaired/failed builds tied at their seeded crossing */}
+                  {t.knots.map((k, ki) => {
+                    const p = knotPoint(k, row, warpXs, width);
+                    return (
+                      <circle
+                        key={ki}
+                        data-testid={`tapestry-knot-${t.id}-${ki}`}
+                        cx={p.x}
+                        cy={p.y}
+                        r={KNOT_R}
+                        fill="none"
+                        stroke={`var(${t.colorToken})`}
+                        strokeWidth={1.2}
+                        opacity={opacity}
+                      />
+                    );
+                  })}
+                  {/* invisible hit path — the curved thread is the target */}
+                  <path
+                    data-testid={`tapestry-thread-${t.id}`}
+                    d={row.d}
+                    fill="none"
+                    stroke="transparent"
+                    strokeWidth={12}
+                    style={{
+                      pointerEvents: "stroke",
+                      cursor: t.action ? "pointer" : "default",
+                    }}
+                    onMouseEnter={(e) => setHover({ label: t.label, x: e.clientX, y: e.clientY })}
+                    onMouseLeave={() => setHover(null)}
+                    onClick={() => runAction(t.action)}
+                  />
+                </g>
+              );
+            })}
+          </g>
+
+          {/* ── interlacing: wherever the warp is over ((i+j)%2===1) a short
+              warp segment is overdrawn on top of the weft — the checkerboard
+              that makes the band read as cloth ── */}
+          <g data-testid="tapestry-interlace">
+            {crossings.map((c) => {
+              const t = warpThreads[c.warpIndex];
               return (
                 <line
-                  key={i}
-                  x1={x}
-                  y1={PAD_Y}
-                  x2={x}
-                  y2={VB_H - PAD_Y}
+                  key={`${c.warpIndex}-${c.rowIndex}`}
+                  x1={c.x}
+                  y1={c.y - CROSSING_OVERDRAW}
+                  x2={c.x}
+                  y2={c.y + CROSSING_OVERDRAW}
+                  stroke={`var(${t.colorToken})`}
+                  strokeWidth={1}
+                  opacity={warpOpacity(t.opacity)}
+                />
+              );
+            })}
+          </g>
+
+          {/* ── empty state: a loom strung but unwoven — same bowed warps ── */}
+          {empty && (
+            <g data-testid="tapestry-empty-warp">
+              {emptyWarpGeoms.map((g) => (
+                <path
+                  key={g.seed}
+                  d={g.d}
+                  fill="none"
                   stroke="var(--t3)"
                   strokeWidth={1}
                   opacity={0.08}
                 />
-              );
-            })}
-            <text
-              data-testid="tapestry-empty-copy"
-              x={VB_W / 2}
-              y={VB_H - 24}
-              textAnchor="middle"
-              style={{
-                fontFamily: "var(--f-mono)",
-                fontSize: 11,
-                fill: "var(--t3)",
-                letterSpacing: ".04em",
-                userSelect: "none",
-              }}
-            >
-              your tapestry begins when LOOM weaves its first organ.
-            </text>
-          </g>
+              ))}
+            </g>
+          )}
+        </g>
+
+        {/* empty-state copy sits outside the mask so it stays readable */}
+        {empty && (
+          <text
+            data-testid="tapestry-empty-copy"
+            x={width / 2}
+            y={BAND_H - 24}
+            textAnchor="middle"
+            style={{
+              fontFamily: "var(--f-mono)",
+              fontSize: 11,
+              fill: "var(--t3)",
+              letterSpacing: ".04em",
+              userSelect: "none",
+            }}
+          >
+            your tapestry begins when LOOM weaves its first organ.
+          </text>
         )}
       </svg>
 

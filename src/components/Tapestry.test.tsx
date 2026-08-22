@@ -3,6 +3,9 @@
  *
  * Tests for the Tapestry component — LOOM's history woven as a band:
  * - Renders warp threads from timeline commits and weft threads from organs
+ * - Woven geometry: bowed warp paths and Catmull-Rom weft curves (never
+ *   straight <line> grids), checkerboard interlacing overdraws, a two-axis
+ *   gradient mask, and 12px invisible hit paths on interactive threads
  * - Hover shows a glass label naming the thread; unhover hides it
  * - Click on an organ thread dispatches organ-focus; commit threads open the
  *   timeline details panel
@@ -104,6 +107,95 @@ describe("Tapestry — render from LOOM's life", () => {
   });
 });
 
+describe("Tapestry — woven geometry (cloth, not grid)", () => {
+  it("warp threads render as bowed quadratic paths, not straight lines", async () => {
+    render(<Tapestry />);
+    const hit = await screen.findByTestId("tapestry-thread-warp-a0cee82ffff");
+    expect(hit.tagName.toLowerCase()).toBe("path");
+    // `M x,top Q x+bow,mid x,bottom` — the bow is what keeps it off graph paper
+    expect(hit.getAttribute("d")).toMatch(/^M [\d.]+ [\d.]+ Q /);
+    const group = hit.parentElement!;
+    const visible = group.querySelector('path[stroke^="var("]')!;
+    expect(visible.getAttribute("d")).toMatch(/ Q /);
+  });
+
+  it("weft threads render as smooth Catmull-Rom cubic curves", async () => {
+    render(<Tapestry />);
+    const hit = await screen.findByTestId("tapestry-thread-organ-water-tracker");
+    expect(hit.tagName.toLowerCase()).toBe("path");
+    expect(hit.getAttribute("d")).toMatch(/ C /); // cubic segments, not L-runs
+  });
+
+  it("interactive threads carry an invisible 12px-stroke hit path with pointer-events: stroke", async () => {
+    render(<Tapestry />);
+    const warpHit = await screen.findByTestId("tapestry-thread-warp-a0cee82ffff");
+    expect(warpHit.getAttribute("stroke")).toBe("transparent");
+    expect(warpHit.getAttribute("stroke-width")).toBe("12");
+    expect(warpHit.style.pointerEvents).toBe("stroke");
+    const weftHit = screen.getByTestId("tapestry-thread-organ-water-tracker");
+    expect(weftHit.getAttribute("stroke-width")).toBe("12");
+    expect(weftHit.style.pointerEvents).toBe("stroke");
+  });
+
+  it("overdraws short warp segments at every warp-over crossing ((i+j)%2===1)", async () => {
+    render(<Tapestry />);
+    await screen.findByTestId("tapestry-thread-organ-water-tracker");
+    const interlace = screen.getByTestId("tapestry-interlace");
+    const segments = interlace.querySelectorAll("line");
+    // 2 warps × 1 weft row → exactly one warp-over crossing (i=1, j=0)
+    expect(segments).toHaveLength(1);
+    const seg = segments[0]!;
+    // A short vertical overdraw: 12px tall (y±6), warp-colored
+    expect(Number(seg.getAttribute("y2")) - Number(seg.getAttribute("y1"))).toBe(12);
+    expect(seg.getAttribute("stroke")).toMatch(/^var\(--/);
+  });
+
+  it("wraps the weave in the two-axis gradient mask — no hard band edges", async () => {
+    render(<Tapestry />);
+    await screen.findByTestId("tapestry");
+    const weave = screen.getByTestId("tapestry-weave");
+    expect(weave.getAttribute("mask")).toBe("url(#loom-tap-mask)");
+    const mask = document.getElementById("loom-tap-mask")!;
+    expect(mask.tagName.toLowerCase()).toBe("mask");
+    // the mask's rect multiplies the vertical fade with the horizontal one
+    const rect = mask.querySelector("rect")!;
+    expect(rect.getAttribute("fill")).toBe("url(#loom-tap-fade-y)");
+    expect(rect.getAttribute("mask")).toBe("url(#loom-tap-mask-x)");
+  });
+
+  it("ties a knot circle (r 2.5) at a crossing of a repaired build's thread", async () => {
+    localStorage.setItem(
+      "loom.exp.v1",
+      JSON.stringify([
+        { ts: 1000, kind: "build", request: "x", organId: "water-tracker", ok: true, repairRounds: 2 },
+      ])
+    );
+    render(<Tapestry />);
+    await screen.findByTestId("tapestry-thread-build-water-tracker-1000");
+    const knot = screen.getByTestId("tapestry-knot-build-water-tracker-1000-0");
+    expect(knot.tagName.toLowerCase()).toBe("circle");
+    expect(knot.getAttribute("r")).toBe("2.5");
+    expect(knot.getAttribute("fill")).toBe("none");
+    expect(knot.getAttribute("stroke")).toBe("var(--accent)");
+  });
+
+  it("scar threads render dashed and stay ≤ 0.15 opacity", async () => {
+    localStorage.setItem("loom.organs.deleted", JSON.stringify(["old-timer"]));
+    render(<Tapestry />);
+    const hit = await screen.findByTestId("tapestry-thread-scar-old-timer");
+    const visible = hit.parentElement!.querySelector('path[stroke^="var("]')!;
+    expect(visible.getAttribute("stroke-dasharray")).toBe("3 5");
+    expect(Number(visible.getAttribute("opacity"))).toBeLessThanOrEqual(0.15);
+  });
+
+  it("warp opacity is capped at ~0.3 — structure, never the story", async () => {
+    render(<Tapestry />);
+    const hit = await screen.findByTestId("tapestry-thread-warp-a0cee82ffff");
+    const visible = hit.parentElement!.querySelector('path[stroke^="var("]')!;
+    expect(Number(visible.getAttribute("opacity"))).toBeLessThanOrEqual(0.3);
+  });
+});
+
 describe("Tapestry — hover label", () => {
   it("shows a glass label naming the thread on hover, hides on leave", async () => {
     render(<Tapestry />);
@@ -164,6 +256,18 @@ describe("Tapestry — empty state", () => {
     expect(screen.getByTestId("tapestry-empty-copy")).toHaveTextContent(
       "your tapestry begins when LOOM weaves its first organ."
     );
+  });
+
+  it("empty warps use the bowed rendering inside the mask — even empty looks intentional", async () => {
+    _commits = [];
+    _organs = [];
+    render(<Tapestry />);
+    const emptyWarp = await screen.findByTestId("tapestry-empty-warp");
+    const paths = emptyWarp.querySelectorAll("path");
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths[0].getAttribute("d")).toMatch(/ Q /); // bowed, not ruled
+    // the faint warps sit inside the masked weave group
+    expect(screen.getByTestId("tapestry-weave").contains(emptyWarp)).toBe(true);
   });
 
   it("does not show the empty copy when the life has threads", async () => {
