@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear, ShellUnavailableError, quoteFetch } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear, ShellUnavailableError, quoteFetch, marketChart, marketCrypto, marketBook, marketTrades, marketFx } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -215,5 +215,45 @@ describe("ShellUnavailableError: browser-mode rejection", () => {
     invoke.mockResolvedValue('[{"symbol":"SPY","body":null},{"symbol":"^VIX","body":null}]');
     await quoteFetch(["SPY", "^VIX"]);
     expect(invoke).toHaveBeenCalledWith("quote_fetch", { symbols: ["SPY", "^VIX"] });
+  });
+});
+
+// ── Market engine wrappers ─────────────────────────────────────────────────────
+
+describe("market engine wrappers", () => {
+  it("marketChart invokes market_chart with symbol and returns the typed shape", async () => {
+    const chart = { symbol: "SPY", name: "S&P 500", price: 450.5, prevClose: 445, open: 447.5, high: 451.5, low: 447, volume: 4500, closes: [448, 450.5], timestamps: [1000, 1120] };
+    invoke.mockResolvedValue(chart);
+    const out = await marketChart("SPY");
+    expect(invoke).toHaveBeenCalledWith("market_chart", { symbol: "SPY" });
+    expect(out.prevClose).toBe(445);
+    expect(out.closes).toHaveLength(2);
+  });
+
+  it("marketCrypto invokes market_crypto with product", async () => {
+    invoke.mockResolvedValue({ product: "BTC-USD", price: 77361.43, changePct24h: -0.02 });
+    const out = await marketCrypto("BTC-USD");
+    expect(invoke).toHaveBeenCalledWith("market_crypto", { product: "BTC-USD" });
+    expect(out.price).toBe(77361.43);
+  });
+
+  it("marketBook passes product and depth", async () => {
+    invoke.mockResolvedValue({ product: "BTC-USD", bids: [], asks: [] });
+    await marketBook("BTC-USD", 12);
+    expect(invoke).toHaveBeenCalledWith("market_book", { product: "BTC-USD", depth: 12 });
+  });
+
+  it("marketTrades invokes market_trades with product and returns the array", async () => {
+    invoke.mockResolvedValue([{ tradeId: 1, time: "t", price: 1, size: 2, side: "buy" }]);
+    const out = await marketTrades("ETH-USD");
+    expect(invoke).toHaveBeenCalledWith("market_trades", { product: "ETH-USD" });
+    expect(out[0].tradeId).toBe(1);
+  });
+
+  it("marketFx passes base and symbols array", async () => {
+    invoke.mockResolvedValue({ base: "USD", date: "2026-08-21", rates: { EUR: 0.85 } });
+    const out = await marketFx("USD", ["EUR", "GBP", "JPY"]);
+    expect(invoke).toHaveBeenCalledWith("market_fx", { base: "USD", symbols: ["EUR", "GBP", "JPY"] });
+    expect(out.rates.EUR).toBe(0.85);
   });
 });

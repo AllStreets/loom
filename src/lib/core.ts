@@ -137,11 +137,76 @@ export const agoraStatus = () =>
 export const agoraLogs = () =>
   safeInvoke<string[]>("agora_logs");
 
-// ── Quote proxy ────────────────────────────────────────────────────────────────
+// ── Market engine (market.rs) ──────────────────────────────────────────────────
+//
+// Typed keyless sources: Yahoo chart (browser UA — the 429 fix), Coinbase
+// Exchange, Frankfurter. Hosts hardcoded in Rust; inputs validated there.
+// All shapes are serialized camelCase by market.rs.
+
+/** Yahoo intraday chart, normalized. */
+export type MarketChart = {
+  symbol: string;
+  name: string | null;
+  price: number;
+  prevClose: number;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  volume: number | null;
+  /** Intraday closes with epoch-second timestamps — same length, nulls dropped. */
+  closes: number[];
+  timestamps: number[];
+};
+
+/** Coinbase spot ticker merged with 24h stats. */
+export type MarketCrypto = {
+  product: string;
+  price: number;
+  bid: number | null;
+  ask: number | null;
+  open24h: number | null;
+  high24h: number | null;
+  low24h: number | null;
+  volume24h: number | null;
+  changePct24h: number | null;
+  time: string | null;
+};
+
+export type BookLevel = { price: number; size: number };
+
+/** Coinbase level-2 order book, truncated per side. */
+export type MarketBook = { product: string; bids: BookLevel[]; asks: BookLevel[] };
+
+/** One Coinbase trade (side is the maker side, raw). */
+export type MarketTrade = {
+  tradeId: number;
+  time: string;
+  price: number;
+  size: number;
+  side: string;
+};
+
+/** Frankfurter daily FX rates. */
+export type MarketFx = { base: string; date: string; rates: Record<string, number> };
+
+export const marketChart = (symbol: string) =>
+  safeInvoke<MarketChart>("market_chart", { symbol });
+
+export const marketCrypto = (product: string) =>
+  safeInvoke<MarketCrypto>("market_crypto", { product });
+
+export const marketBook = (product: string, depth: number) =>
+  safeInvoke<MarketBook>("market_book", { product, depth });
+
+export const marketTrades = (product: string) =>
+  safeInvoke<MarketTrade[]>("market_trades", { product });
+
+export const marketFx = (base: string, symbols: string[]) =>
+  safeInvoke<MarketFx>("market_fx", { base, symbols });
 
 /**
- * Fetch Yahoo chart data for the given symbols via LOOM's own Rust proxy.
- * Returns the raw JSON array string produced by quotes.rs:
+ * Legacy batch chart fetch (market.rs, folded in from quotes.rs — command name
+ * unchanged). Returns the raw JSON array string:
  *   `[{"symbol":"SPY","body":<raw JSON or null>},...]`
  * Rejects with ShellUnavailableError in the browser (safeInvoke contract).
  */
