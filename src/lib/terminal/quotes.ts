@@ -33,6 +33,7 @@
  */
 
 import { quoteFetch } from "../core";
+import { getSetting, setSetting, TICKER_RE, WATCHLIST_MAX } from "../voice/settings";
 import { timeoutSignal } from "../util/timeoutSignal";
 
 export interface Quote {
@@ -57,9 +58,10 @@ export interface QuotesSnapshot {
 }
 
 /**
- * The tape's universe. Order is intentional: indices, then mega-cap equities,
- * then macro (VIX / 10Y yield / gold / oil / bitcoin). TerminalDeck slices by
- * membership sets below rather than re-listing symbols.
+ * The tape's universe. Order is intentional: indices, then the equities
+ * watchlist, then macro (VIX / 10Y yield / gold / oil / bitcoin). Index and
+ * macro symbols are FIXED; the equities slice is the owner's editable
+ * watchlist (`terminal.symbols` setting, default = EQUITY_SYMBOLS).
  */
 export const INDEX_SYMBOLS = ["SPY", "QQQ", "DIA", "IWM"] as const;
 export const EQUITY_SYMBOLS = [
@@ -73,11 +75,78 @@ export const EQUITY_SYMBOLS = [
 ] as const;
 export const MACRO_SYMBOLS = ["^VIX", "^TNX", "GC=F", "CL=F", "BTC-USD"] as const;
 
+/** The DEFAULT universe (default watchlist). Tests pin against this. */
 export const SYMBOLS: readonly string[] = [
   ...INDEX_SYMBOLS,
   ...EQUITY_SYMBOLS,
   ...MACRO_SYMBOLS,
 ];
+
+// ── Editable watchlist (terminal.symbols setting) ───────────────────────────
+
+/**
+ * Read the owner's watchlist from settings: comma-joined canonical tickers.
+ * Malformed entries are dropped, duplicates removed, order preserved. Falls
+ * back to EQUITY_SYMBOLS if settings are unreachable (never throws).
+ */
+export function getWatchlist(): string[] {
+  let raw: string;
+  try {
+    raw = getSetting("terminal.symbols");
+  } catch {
+    return [...EQUITY_SYMBOLS];
+  }
+  if (raw === "") return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(",")) {
+    const t = part.trim().toUpperCase();
+    if (TICKER_RE.test(t) && !seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+/**
+ * Add a ticker to the watchlist. Uppercases and validates; dedupes against
+ * the current list. Returns true when the list changed (setSetting fires
+ * `loom-settings-changed`, which the poller and deck both react to).
+ */
+export function addWatchSymbol(symbol: string): boolean {
+  const t = symbol.trim().toUpperCase();
+  if (!TICKER_RE.test(t)) return false;
+  const list = getWatchlist();
+  if (list.includes(t) || list.length >= WATCHLIST_MAX) return false;
+  setSetting("terminal.symbols", [...list, t].join(","));
+  return true;
+}
+
+/** Remove a ticker from the watchlist. Returns true when the list changed. */
+export function removeWatchSymbol(symbol: string): boolean {
+  const list = getWatchlist();
+  const next = list.filter((s) => s !== symbol);
+  if (next.length === list.length) return false;
+  setSetting("terminal.symbols", next.join(","));
+  return true;
+}
+
+/**
+ * The live poll universe: fixed indices + the owner's watchlist + fixed macro,
+ * deduped (a watchlisted BTC-USD does not fetch twice).
+ */
+export function activeSymbols(): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of [...INDEX_SYMBOLS, ...getWatchlist(), ...MACRO_SYMBOLS]) {
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
+}
 
 /** Human labels for symbols the endpoint may not name cleanly. */
 export const SYMBOL_LABELS: Record<string, string> = {
@@ -190,13 +259,13 @@ export async function fetchQuote(symbol: string, signal?: AbortSignal): Promise<
 }
 
 /**
- * Fetch all SYMBOLS via LOOM's own Rust proxy (Tauri path).
+ * Fetch the given symbols via LOOM's own Rust proxy (Tauri path).
  * Parses the array returned by quotes::quote_fetch into Quote objects using
  * the existing normalizer. Returns empty array on any failure.
  */
-async function fetchAllQuotesTauri(): Promise<Quote[]> {
+async function fetchAllQuotesTauri(symbols: string[]): Promise<Quote[]> {
   try {
-    const raw = await quoteFetch([...SYMBOLS]);
+    const raw = await quoteFetch(symbols);
     const arr: Array<{ symbol: string; body: unknown }> = JSON.parse(raw);
     const out: Quote[] = [];
     for (const entry of arr) {
@@ -212,19 +281,21 @@ async function fetchAllQuotesTauri(): Promise<Quote[]> {
 }
 
 /**
- * Fetch all SYMBOLS. Routes through LOOM's own Rust when inside Tauri (killing
- * the third-party corsproxy dependency in the desktop product); falls back to
- * the browser fetch chain (Yahoo-direct → corsproxy) in dev. // dev-only
- * Preserves SYMBOLS order in the returned array, dropping any symbol that
+ * Fetch the live universe (activeSymbols — fixed indices + the owner's
+ * watchlist + fixed macro). Routes through LOOM's own Rust when inside Tauri
+ * (killing the third-party corsproxy dependency in the desktop product); falls
+ * back to the browser fetch chain (Yahoo-direct → corsproxy) in dev. // dev-only
+ * Preserves universe order in the returned array, dropping any symbol that
  * failed. Never throws.
  */
 export async function fetchAllQuotes(signal?: AbortSignal): Promise<Quote[]> {
+  const symbols = activeSymbols();
   if (inTauri()) {
     // Desktop: quotes flow through LOOM's Rust — third-party proxy dead here.
-    return fetchAllQuotesTauri();
+    return fetchAllQuotesTauri(symbols);
   }
   // dev-only: browser fetch chain (Yahoo-direct in webview, corsproxy in plain browser)
-  const settled = await Promise.allSettled(SYMBOLS.map((s) => fetchQuote(s, signal)));
+  const settled = await Promise.allSettled(symbols.map((s) => fetchQuote(s, signal)));
   const out: Quote[] = [];
   for (const r of settled) {
     if (r.status === "fulfilled" && r.value) out.push(r.value);
@@ -238,6 +309,7 @@ let intervalId: ReturnType<typeof setInterval> | null = null;
 let inFlight = false;
 let abortCtrl: AbortController | null = null;
 let started = false;
+let pendingRefresh = false;
 let snapshot: QuotesSnapshot = { quotes: [], stale: false, updatedAt: 0 };
 
 /** Synchronous read of the current snapshot. */
@@ -273,7 +345,29 @@ async function poll(): Promise<void> {
   } finally {
     inFlight = false;
     abortCtrl = null;
+    // A watchlist edit landed while this poll was in flight — refresh once
+    // with the new universe (only while running and visible).
+    if (pendingRefresh) {
+      pendingRefresh = false;
+      if (started && intervalId !== null) void poll();
+    }
   }
+}
+
+/**
+ * Live watchlist pickup: when `terminal.symbols` changes while the poller is
+ * running, refresh immediately with the new universe (no 60s wait). Paused or
+ * stopped pollers do nothing — the next resume/start polls fresh anyway.
+ */
+function onSettingsChanged(ev: Event) {
+  const detail = (ev as CustomEvent<{ key?: string }>).detail;
+  if (detail?.key !== "terminal.symbols") return;
+  if (!started || intervalId === null) return; // stopped or hidden-paused
+  if (inFlight) {
+    pendingRefresh = true; // refresh right after the in-flight poll settles
+    return;
+  }
+  void poll();
 }
 
 function onVisibilityChange() {
@@ -311,6 +405,9 @@ export function startQuotes(): void {
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", onVisibilityChange, { passive: true });
   }
+  if (typeof window !== "undefined") {
+    window.addEventListener("loom-settings-changed", onSettingsChanged);
+  }
 
   if (typeof document !== "undefined" && document.hidden) {
     return; // start paused; resume on visibility
@@ -331,9 +428,13 @@ export function stopQuotes(): void {
   if (typeof document !== "undefined") {
     document.removeEventListener("visibilitychange", onVisibilityChange);
   }
+  if (typeof window !== "undefined") {
+    window.removeEventListener("loom-settings-changed", onSettingsChanged);
+  }
 
   pausePolling();
   inFlight = false;
+  pendingRefresh = false;
 }
 
 /** True while the poller is running (test/introspection helper). */
@@ -347,8 +448,12 @@ export function _resetQuotesForTests(): void {
   started = false;
   inFlight = false;
   abortCtrl = null;
+  pendingRefresh = false;
   snapshot = { quotes: [], stale: false, updatedAt: 0 };
   if (typeof document !== "undefined") {
     document.removeEventListener("visibilitychange", onVisibilityChange);
+  }
+  if (typeof window !== "undefined") {
+    window.removeEventListener("loom-settings-changed", onSettingsChanged);
   }
 }

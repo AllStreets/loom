@@ -22,8 +22,15 @@ import {
   stopQuotes,
   getQuotes,
   isPolling,
+  getWatchlist,
+  addWatchSymbol,
+  removeWatchSymbol,
+  activeSymbols,
   SYMBOLS,
   SYMBOL_LABELS,
+  INDEX_SYMBOLS,
+  EQUITY_SYMBOLS,
+  MACRO_SYMBOLS,
   _resetQuotesForTests,
 } from "./quotes";
 
@@ -398,5 +405,121 @@ describe("fetchAllQuotes — Tauri path (LOOM's Rust proxy)", () => {
     mockQuoteFetch.mockResolvedValue("not-json");
     const quotes = await fetchAllQuotes();
     expect(quotes).toEqual([]);
+  });
+});
+
+// ── Editable watchlist (terminal.symbols) ─────────────────────────────────────
+describe("watchlist config", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it("getWatchlist defaults to EQUITY_SYMBOLS when never set", () => {
+    expect(getWatchlist()).toEqual([...EQUITY_SYMBOLS]);
+  });
+
+  it("getWatchlist reads the setting, dropping malformed entries and dupes", () => {
+    localStorage.setItem("terminal.symbols", "AAPL,IBM,AAPL,bad$,GC=F");
+    // "bad$" uppercases to "BAD$" which fails the ticker regex → dropped.
+    expect(getWatchlist()).toEqual(["AAPL", "IBM", "GC=F"]);
+  });
+
+  it("getWatchlist returns [] for an explicitly empty setting", () => {
+    localStorage.setItem("terminal.symbols", "");
+    expect(getWatchlist()).toEqual([]);
+  });
+
+  it("addWatchSymbol uppercases, validates, dedupes, persists", () => {
+    expect(addWatchSymbol("ibm")).toBe(true);
+    expect(getWatchlist()).toEqual([...EQUITY_SYMBOLS, "IBM"]);
+    expect(addWatchSymbol("IBM")).toBe(false); // dupe
+    expect(addWatchSymbol("bad$")).toBe(false); // invalid
+    expect(getWatchlist()).toEqual([...EQUITY_SYMBOLS, "IBM"]);
+  });
+
+  it("removeWatchSymbol removes and persists; unknown symbol is a no-op", () => {
+    expect(removeWatchSymbol("TSLA")).toBe(true);
+    expect(getWatchlist()).not.toContain("TSLA");
+    expect(removeWatchSymbol("TSLA")).toBe(false);
+  });
+
+  it("activeSymbols = fixed indices + watchlist + fixed macro, deduped", () => {
+    localStorage.setItem("terminal.symbols", "AAPL,BTC-USD,SPY");
+    const syms = activeSymbols();
+    // Fixed sets always present; watchlisted dupes (BTC-USD, SPY) not doubled.
+    for (const s of [...INDEX_SYMBOLS, ...MACRO_SYMBOLS, "AAPL"]) expect(syms).toContain(s);
+    expect(syms.filter((s) => s === "BTC-USD")).toHaveLength(1);
+    expect(syms.filter((s) => s === "SPY")).toHaveLength(1);
+  });
+
+  it("activeSymbols equals SYMBOLS with the default watchlist", () => {
+    expect(activeSymbols()).toEqual([...SYMBOLS]);
+  });
+});
+
+// ── Live watchlist pickup (loom-settings-changed → immediate refresh) ─────────
+describe("poll runtime — watchlist live pickup", () => {
+  let restoreTauriWL: () => void;
+  beforeEach(() => {
+    restoreTauriWL = stripTauriGlobals();
+    localStorage.clear();
+    _resetQuotesForTests();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    _resetQuotesForTests();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    localStorage.clear();
+    restoreTauriWL();
+  });
+
+  function settingsEvent(key: string) {
+    window.dispatchEvent(new CustomEvent("loom-settings-changed", { detail: { key, value: "x" } }));
+  }
+
+  it("refreshes immediately (with the new universe) on terminal.symbols change", async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: string) => {
+      fetched.push(url);
+      return { ok: true, json: async () => chartBody({ price: 100, prevClose: 99 }) };
+    }));
+    startQuotes();
+    await vi.waitFor(() => expect(getQuotes().quotes.length).toBeGreaterThan(0));
+    const callsAfterStart = fetched.length;
+
+    localStorage.setItem("terminal.symbols", "IBM"); // watchlist = IBM only
+    settingsEvent("terminal.symbols");
+    // Immediate re-poll: indices + IBM + macro = 10 symbols, no 60s wait.
+    await vi.waitFor(() => expect(fetched.length).toBe(callsAfterStart + 10));
+    expect(fetched.slice(callsAfterStart).some((u) => u.includes("IBM"))).toBe(true);
+  });
+
+  it("ignores other settings keys", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => chartBody({ price: 100, prevClose: 99 }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    startQuotes();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const calls = fetchSpy.mock.calls.length;
+    settingsEvent("cockpit.deck");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchSpy.mock.calls.length).toBe(calls);
+  });
+
+  it("does nothing when stopped (no leaked listener)", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => chartBody({ price: 100, prevClose: 99 }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    startQuotes();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    stopQuotes();
+    const calls = fetchSpy.mock.calls.length;
+    settingsEvent("terminal.symbols");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fetchSpy.mock.calls.length).toBe(calls);
   });
 });

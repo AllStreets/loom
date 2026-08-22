@@ -67,6 +67,27 @@ export function isValidAgoraUrl(url: string): boolean {
   }
 }
 
+// ── Terminal watchlist validation ─────────────────────────────────────────────
+
+/** One equity/index/future ticker: uppercase, 1–12 chars of A-Z 0-9 . ^ = - */
+export const TICKER_RE = /^[A-Z0-9.^=-]{1,12}$/;
+
+/** Rate-friendliness cap — the Terminal fans out one request per symbol. */
+export const WATCHLIST_MAX = 24;
+
+/**
+ * Validate a candidate `terminal.symbols` value: a comma-joined list of
+ * canonical tickers (no whitespace, already uppercased), each matching
+ * TICKER_RE, at most WATCHLIST_MAX entries. Empty string = empty watchlist
+ * (valid — the movers panel states it honestly).
+ */
+export function isValidSymbolList(value: string): boolean {
+  if (value === "") return true;
+  const parts = value.split(",");
+  if (parts.length > WATCHLIST_MAX) return false;
+  return parts.every((t) => TICKER_RE.test(t));
+}
+
 // ── Whitelist ──────────────────────────────────────────────────────────────────
 
 export type SettingsKey =
@@ -84,7 +105,8 @@ export type SettingsKey =
   | "cockpit.watchOpen"
   | "cockpit.chatMin"
   | "deck.agora.url"
-  | "deck.agora.path";
+  | "deck.agora.path"
+  | "terminal.symbols";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "voice.default",
@@ -102,6 +124,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "cockpit.chatMin",
   "deck.agora.url",
   "deck.agora.path",
+  "terminal.symbols",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
@@ -112,6 +135,9 @@ const URL_KEYS = new Set<SettingsKey>(["deck.agora.url"]);
 
 // Keys that use free-text path validation (Rust validates existence/structure)
 const PATH_KEYS = new Set<SettingsKey>(["deck.agora.path"]);
+
+// Keys that hold a comma-joined ticker watchlist (isValidSymbolList)
+const SYMBOL_LIST_KEYS = new Set<SettingsKey>(["terminal.symbols"]);
 
 // Allowed values for enumerated keys (model.* keys validate via isValidModelTag instead)
 const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
@@ -145,6 +171,8 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "cockpit.chatMin": "off",
   "deck.agora.url": "http://localhost:3000",
   "deck.agora.path": "",
+  // The Terminal's default tape — the pre-watchlist hardcoded equities list.
+  "terminal.symbols": "AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA",
 };
 
 // Legacy key the orb's detectTier reads
@@ -216,6 +244,13 @@ export function setSetting(key: string, value: string): void {
     // Free-text path: client-side always valid; Rust validates existence/structure
     if (!isValidAgoraPath(value)) {
       throw new Error(`Invalid path "${value}" for key "${key}".`);
+    }
+  } else if (SYMBOL_LIST_KEYS.has(k)) {
+    // Comma-joined ticker watchlist; empty = empty watchlist
+    if (!isValidSymbolList(value)) {
+      throw new Error(
+        `Invalid symbol list "${value}" for key "${key}". Comma-joined tickers matching ${TICKER_RE}, max ${WATCHLIST_MAX}, or empty.`
+      );
     }
   } else {
     const allowed = ALLOWED[k]!;

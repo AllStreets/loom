@@ -9,6 +9,8 @@ import {
   VOICE_LABELS,
   isValidModelTag,
   isValidAgoraUrl,
+  isValidSymbolList,
+  WATCHLIST_MAX,
 } from "./settings";
 
 // jsdom provides localStorage
@@ -36,7 +38,8 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("cockpit.chatMin");
     expect(SETTINGS_KEYS).toContain("deck.agora.url");
     expect(SETTINGS_KEYS).toContain("deck.agora.path");
-    expect(SETTINGS_KEYS).toHaveLength(15);
+    expect(SETTINGS_KEYS).toContain("terminal.symbols");
+    expect(SETTINGS_KEYS).toHaveLength(16);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -103,6 +106,46 @@ describe("cockpit.tapestry setting", () => {
     expect(SETTINGS_KEYS).not.toContain("cockpit.constellation");
     expect(() => getSetting("cockpit.constellation")).toThrow(/Unknown settings key/);
     expect(() => setSetting("cockpit.constellation", "on")).toThrow(/Unknown settings key/);
+  });
+});
+
+describe("terminal.symbols setting", () => {
+  it("defaults to the pre-watchlist hardcoded equities list", () => {
+    expect(getSetting("terminal.symbols")).toBe("AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA");
+  });
+
+  it("accepts a canonical comma-joined list including index/future forms", () => {
+    setSetting("terminal.symbols", "AAPL,^VIX,GC=F,BRK.B,BTC-USD");
+    expect(getSetting("terminal.symbols")).toBe("AAPL,^VIX,GC=F,BRK.B,BTC-USD");
+  });
+
+  it("accepts the empty string (empty watchlist — stated, not hidden)", () => {
+    setSetting("terminal.symbols", "");
+    expect(getSetting("terminal.symbols")).toBe("");
+  });
+
+  it("rejects lowercase, whitespace, junk chars, and over-long tickers", () => {
+    expect(() => setSetting("terminal.symbols", "aapl")).toThrow(/Invalid symbol list/);
+    expect(() => setSetting("terminal.symbols", "AAPL, MSFT")).toThrow(/Invalid symbol list/);
+    expect(() => setSetting("terminal.symbols", "AAPL,BAD$")).toThrow(/Invalid symbol list/);
+    expect(() => setSetting("terminal.symbols", "TOOLONGSYMBOL")).toThrow(/Invalid symbol list/);
+  });
+
+  it("rejects a list longer than WATCHLIST_MAX (rate friendliness)", () => {
+    const list = Array.from({ length: WATCHLIST_MAX + 1 }, (_, i) => `S${i}`).join(",");
+    expect(() => setSetting("terminal.symbols", list)).toThrow(/Invalid symbol list/);
+  });
+});
+
+describe("isValidSymbolList", () => {
+  it("validates each comma-joined ticker against the ticker regex", () => {
+    expect(isValidSymbolList("AAPL")).toBe(true);
+    expect(isValidSymbolList("AAPL,MSFT")).toBe(true);
+    expect(isValidSymbolList("^TNX,CL=F,BRK-B")).toBe(true);
+    expect(isValidSymbolList("")).toBe(true);
+    expect(isValidSymbolList(",")).toBe(false); // empty entries
+    expect(isValidSymbolList("AAPL,,MSFT")).toBe(false);
+    expect(isValidSymbolList("aapl")).toBe(false);
   });
 });
 
