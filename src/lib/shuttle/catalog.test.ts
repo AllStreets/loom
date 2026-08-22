@@ -62,6 +62,15 @@ describe("buildCatalog — shape", () => {
     expect(entries.some((e) => e.group === "decks")).toBe(true);
     expect(entries.some((e) => e.group === "build")).toBe(true);
   });
+
+  it("does not advertise 'open settings' without an organs context (it could not route)", () => {
+    // findMentionedOrgan matches against real organ ids; with no organs known
+    // the phrase would dead-end, so the catalog must not offer it.
+    const entries = buildCatalog({});
+    expect(entries.some((e) => e.id === "system-settings")).toBe(false);
+    const emptyOrgans = buildCatalog({ organs: [] });
+    expect(emptyOrgans.some((e) => e.id === "system-settings")).toBe(false);
+  });
 });
 
 // ── no-drift: deck entries classify through the real deck rules ──────────────

@@ -245,7 +245,12 @@ export default function Shuttle() {
       <div
         data-testid="shuttle-backdrop"
         className={reducedMotion ? undefined : "loom-shuttle-fade"}
-        onMouseDown={close}
+        onMouseDown={() => {
+          // native blur fires before React's synthetic mousedown — flag the
+          // close first so the input's focus trap doesn't re-grab focus
+          closingRef.current = true;
+          close();
+        }}
         style={{
           position: "absolute",
           inset: 0,

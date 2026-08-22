@@ -130,9 +130,11 @@ function organEntries(ctx: CatalogCtx): CatalogEntry[] {
 
 function systemEntries(ctx: CatalogCtx): CatalogEntry[] {
   const entries: CatalogEntry[] = [];
-  // Settings organ — only advertised when it actually exists (seed-installed).
+  // Settings organ — only advertised when it actually exists (seed-installed);
+  // without an organs context the phrase cannot route (findMentionedOrgan
+  // matches against real organ ids), so it is not advertised.
   const hasSettings = (ctx.organs ?? []).some((o) => o.id === "settings");
-  if (hasSettings || ctx.organs === undefined) {
+  if (hasSettings) {
     entries.push({
       id: "system-settings",
       phrase: "open settings",

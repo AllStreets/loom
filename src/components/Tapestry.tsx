@@ -339,8 +339,9 @@ export default function Tapestry() {
           data-testid="tapestry-hover-label"
           style={{
             position: "fixed",
-            left: hover.x + 12,
-            top: hover.y + 12,
+            // clamp so labels on the rightmost (newest) threads stay readable
+            left: Math.min(hover.x + 12, Math.max(0, window.innerWidth - 240)),
+            top: Math.min(hover.y + 12, Math.max(0, window.innerHeight - 36)),
             zIndex: BAND_Z + 1, // above the band, still below chrome (z 10)
             background: "var(--glass-raised)",
             border: "1px solid var(--glass-border)",
