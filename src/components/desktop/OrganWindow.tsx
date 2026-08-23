@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { type OrganState, mountOrgan } from "../../lib/organs/host";
 import { windowRegistry } from "../../lib/ambient/windowRegistry";
-import { organDelete } from "../../lib/core";
-import { addOrganTombstone, purgeOrganStorage } from "../../lib/organs/api";
-import { IconTrash } from "../chrome/icons";
+import { organDelete, organGrant } from "../../lib/core";
+import { addOrganTombstone, purgeOrganStorage, clearOrganPulses } from "../../lib/organs/api";
+import { POWER_LABELS, type Power } from "../../lib/loom/validate";
+import { IconTrash, IconBolt } from "../chrome/icons";
 
 type WinPos = {
   x: number;
@@ -84,6 +85,15 @@ export default function OrganWindow({ state, focused, minimized, onFocus, onMini
   const id = state.entry.id;
   const [pos, setPos] = useState<WinPos>(() => loadPos(id, initial));
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showPowers, setShowPowers] = useState(false);
+  // Bump to re-render after a revoke/re-grant mutates state.granted in place.
+  const [, setGrantTick] = useState(0);
+  // Which power is currently throttled (null = none). One at a time is enough —
+  // the chip is a calm signal, not a ledger.
+  const [throttledPower, setThrottledPower] = useState<string | null>(null);
+  const throttleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const declaredPowers = state.manifest.powers ?? [];
   // Keep a ref always in sync with the latest pos so drag/resize onUp closures
   // read the live value rather than the stale capture from pointerdown.
   const posRef = useRef(pos);
@@ -117,13 +127,49 @@ export default function OrganWindow({ state, focused, minimized, onFocus, onMini
     }
   }, [id, minimized, pos.x, pos.y, pos.w, pos.h]);
 
-  // Clean up registry on unmount
+  // Clean up registry + any live pulses on unmount
   useEffect(() => {
     return () => {
       windowRegistry.delete(id);
+      clearOrganPulses(id);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // THROTTLED chip — listen for this organ's budget exhaustion; clear when the
+  // bucket refills (the event carries retryMs).
+  useEffect(() => {
+    function onThrottled(ev: Event) {
+      const detail = (ev as CustomEvent<{ id: string; power: string; retryMs: number }>).detail;
+      if (!detail || detail.id !== id) return;
+      setThrottledPower(detail.power);
+      if (throttleTimer.current) clearTimeout(throttleTimer.current);
+      throttleTimer.current = setTimeout(() => {
+        setThrottledPower(null);
+        throttleTimer.current = null;
+      }, Math.max(0, detail.retryMs));
+    }
+    window.addEventListener("loom-throttled", onThrottled);
+    return () => {
+      window.removeEventListener("loom-throttled", onThrottled);
+      if (throttleTimer.current) clearTimeout(throttleTimer.current);
+    };
+  }, [id]);
+
+  // Revoke/re-grant one power. Mutates state.granted in place — the running
+  // organ's api captured this exact array, so the next call sees it live.
+  function handleTogglePower(p: string) {
+    const idx = state.granted.indexOf(p);
+    if (idx >= 0) {
+      state.granted.splice(idx, 1);
+      // A revoked pulse power stops the clock, not just future registrations.
+      if (p === "pulse") clearOrganPulses(id);
+    } else {
+      state.granted.push(p);
+    }
+    void organGrant(id, JSON.stringify(state.granted));
+    setGrantTick((v) => v + 1);
+  }
 
   // Viewport-resize re-clamp: listen for Desktop's single resize dispatcher.
   // Re-clamps this window's position and persists any corrections.
@@ -419,7 +465,52 @@ export default function OrganWindow({ state, focused, minimized, onFocus, onMini
             <span style={{ fontSize: 13, fontWeight: 600, color: "var(--t1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
               {state.manifest.name}
             </span>
+            {throttledPower !== null && (
+              <span
+                data-testid={`throttle-chip-${id}`}
+                title={`"${throttledPower}" budget spent — it refills on its own`}
+                style={{
+                  fontFamily: "var(--f-mono)",
+                  fontSize: 9,
+                  letterSpacing: ".08em",
+                  color: "var(--t3)",
+                  border: "1px solid var(--glass-border)",
+                  borderRadius: 999,
+                  padding: "1px 6px",
+                  opacity: 0.6,
+                  flexShrink: 0,
+                  marginRight: 4,
+                  pointerEvents: "none",
+                }}
+              >
+                THROTTLED
+              </span>
+            )}
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }} className="win-title-actions">
+              {declaredPowers.length > 0 && (
+                <button
+                  data-action="win-powers"
+                  data-testid={`powers-toggle-${id}`}
+                  title="Powers"
+                  onClick={(e) => { e.stopPropagation(); setShowPowers((p) => !p); }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    color: showPowers ? "var(--accent)" : "var(--t3)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 22,
+                    height: 22,
+                    borderRadius: 3,
+                    padding: 0,
+                    flexShrink: 0,
+                  }}
+                >
+                  <IconBolt size={12} />
+                </button>
+              )}
               <button
                 data-action="win-delete"
                 title="Delete organ"
@@ -457,6 +548,65 @@ export default function OrganWindow({ state, focused, minimized, onFocus, onMini
           </>
         )}
       </div>
+      {showPowers && !pos.collapsed && declaredPowers.length > 0 && (
+        <div
+          data-testid={`powers-row-${id}`}
+          style={{
+            borderBottom: "1px solid var(--glass-border)",
+            padding: "6px 12px 8px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: ".1em", color: "var(--t3)" }}>
+            POWERS
+          </div>
+          {declaredPowers.map((p) => {
+            const isGranted = state.granted.includes(p);
+            return (
+              <div
+                key={p}
+                style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}
+              >
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: isGranted ? "var(--t2)" : "var(--t3)",
+                    flex: 1,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {POWER_LABELS[p as Power] ?? p}
+                </span>
+                <button
+                  data-action="power-toggle"
+                  data-testid={`power-toggle-${id}-${p}`}
+                  onClick={(e) => { e.stopPropagation(); handleTogglePower(p); }}
+                  title={isGranted ? `revoke "${p}"` : `grant "${p}"`}
+                  style={{
+                    background: "none",
+                    border: "1px solid var(--glass-border)",
+                    borderRadius: 999,
+                    padding: "1px 8px",
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 9,
+                    letterSpacing: ".08em",
+                    color: isGranted ? "var(--accent)" : "var(--t3)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  {isGranted ? "GRANTED" : "REVOKED"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div style={bodyStyle}>
         <div ref={mountRef} style={{ minHeight: "100%", padding: "8px" }} />
       </div>

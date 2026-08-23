@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useOrgans, type OrganState } from "../../lib/organs/host";
+import { POWER_LABELS, type Power } from "../../lib/loom/validate";
 import OrganWindow from "./OrganWindow";
 import Dock from "./Dock";
 import { windowRegistry } from "../../lib/ambient/windowRegistry";
@@ -361,6 +362,32 @@ export default function Desktop() {
                 ))}
               </div>
             </div>
+            {(modalOrgan.manifest.powers ?? []).length > 0 && (
+              <div style={{ marginBottom: 16 }} data-testid="powers-section">
+                <div style={{ color: "var(--t3)", fontSize: 12, marginBottom: 6 }}>
+                  this organ can:
+                </div>
+                <div style={{ maxHeight: 140, overflowY: "auto" }}>
+                  {(modalOrgan.manifest.powers ?? []).map((p) => (
+                    <div
+                      key={p}
+                      style={{
+                        fontSize: 12,
+                        color: "var(--t2)",
+                        padding: "2px 0",
+                        display: "flex",
+                        alignItems: "baseline",
+                        gap: 6,
+                        overflowWrap: "break-word",
+                      }}
+                    >
+                      <span aria-hidden style={{ color: "var(--accent)", fontSize: 10 }}>·</span>
+                      <span>{POWER_LABELS[p as Power] ?? p}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 10 }}>
               <button
                 onClick={() => handleApprove(modalOrgan.entry.id)}

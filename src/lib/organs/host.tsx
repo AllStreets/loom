@@ -31,7 +31,12 @@ export function useOrgans(): {
       } catch {
         granted = [];
       }
-      const approved = manifest.permissions.every((p) => granted.includes(p));
+      // Approved = every permission granted; on first sight (never granted at
+      // all) the declared powers must be approved too. Once the owner has
+      // approved, revoking a single power must NOT resurface the card.
+      const permissionsOk = manifest.permissions.every((p) => granted.includes(p));
+      const powersOk = (manifest.powers ?? []).every((p) => granted.includes(p));
+      const approved = entry.granted !== null ? permissionsOk : permissionsOk && powersOk;
       states.push({ entry, manifest, granted, approved, error: null });
     }
     setOrgans(states);
@@ -45,7 +50,9 @@ export function useOrgans(): {
   async function approve(id: string) {
     const state = organs.find((o) => o.entry.id === id);
     if (!state) return;
-    await organGrant(id, JSON.stringify(state.manifest.permissions));
+    // Grant exactly what the card showed: permissions + declared powers.
+    const tokens = [...new Set([...state.manifest.permissions, ...(state.manifest.powers ?? [])])];
+    await organGrant(id, JSON.stringify(tokens));
     await load();
   }
 

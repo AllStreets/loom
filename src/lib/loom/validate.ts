@@ -2,7 +2,21 @@ import { PERMISSIONS } from "./prompts";
 import { sandboxRun, type SandboxVerdict, type OrganFilesIn } from "./sandbox";
 export type { OrganFilesIn };
 
-export type OrganManifest = { id: string; name: string; description: string; version: number; permissions: string[] };
+export type OrganManifest = { id: string; name: string; description: string; version: number; permissions: string[]; powers?: string[] };
+
+/** The six organ powers — the only capabilities a manifest may request. */
+export const POWERS = ["market", "watch", "timeline", "voice", "notify", "pulse"] as const;
+export type Power = (typeof POWERS)[number];
+
+/** Plain-language labels for the permission card and the POWERS row. */
+export const POWER_LABELS: Record<Power, string> = {
+  market: "read market data",
+  watch: "read your watch feed",
+  timeline: "read the timeline",
+  voice: "speak aloud",
+  notify: "notify you",
+  pulse: "run on a schedule (up to every 30s)",
+};
 
 const ID_RE = /^[a-z0-9-]{1,32}$/;
 
@@ -22,6 +36,12 @@ export function manifestGuard(manifestRaw: string, expectedId?: string):
   if (!Array.isArray(man.permissions)) return { ok: false, error: "permissions must be an array" };
   for (const p of man.permissions) {
     if (!(PERMISSIONS as readonly string[]).includes(p)) return { ok: false, error: `unknown permission: ${String(p)}` };
+  }
+  if (man.powers !== undefined && man.powers !== null) {
+    if (!Array.isArray(man.powers)) return { ok: false, error: "powers must be an array" };
+    for (const p of man.powers) {
+      if (!(POWERS as readonly string[]).includes(p)) return { ok: false, error: `unknown power: ${String(p)}` };
+    }
   }
   return { ok: true, manifest: man as OrganManifest };
 }

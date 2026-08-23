@@ -991,3 +991,223 @@ describe("Desktop", () => {
     }
   });
 });
+
+// ── Vigor: powers on the permission card, POWERS row, THROTTLED chip ───────────
+
+const POWERED_MANIFEST = {
+  id: "btc",
+  name: "BTC Watch",
+  description: "Watches BTC for you",
+  version: 1,
+  permissions: ["storage"],
+  powers: ["market", "notify", "pulse"],
+};
+
+const UNAPPROVED_POWERED_ORGAN = {
+  id: "btc",
+  manifest: JSON.stringify(POWERED_MANIFEST),
+  granted: null,
+};
+
+const APPROVED_POWERED_ORGAN = {
+  id: "btc",
+  manifest: JSON.stringify(POWERED_MANIFEST),
+  granted: JSON.stringify(["storage", "market", "notify", "pulse"]),
+};
+
+describe("permission card powers", () => {
+  it("lists requested powers in plain language and grants them on approve", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [UNAPPROVED_POWERED_ORGAN];
+      if (cmd === "organ_grant") return "sha";
+      return null;
+    });
+
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByText("BTC Watch")).toBeInTheDocument();
+    });
+
+    // Plain-language powers, not raw tokens
+    expect(screen.getByTestId("powers-section")).toBeInTheDocument();
+    expect(screen.getByText("read market data")).toBeInTheDocument();
+    expect(screen.getByText("notify you")).toBeInTheDocument();
+    expect(screen.getByText("run on a schedule (up to every 30s)")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "organ_grant",
+        expect.objectContaining({
+          id: "btc",
+          grantedJson: JSON.stringify(["storage", "market", "notify", "pulse"]),
+        }),
+      );
+    });
+  });
+
+  it("an organ with no powers renders the card unchanged (no powers section)", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [UNAPPROVED_ORGAN];
+      return null;
+    });
+
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Run Tracker")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("powers-section")).not.toBeInTheDocument();
+  });
+});
+
+describe("POWERS row and revocation", () => {
+  function mockPoweredOrgan() {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_POWERED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'btc', render(el){ el.textContent = 'btc-content'; } }";
+      if (cmd === "organ_grant") return "sha";
+      return null;
+    });
+  }
+
+  it("the title bar gains a powers toggle that opens the POWERS row", async () => {
+    mockPoweredOrgan();
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-btc")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId("powers-row-btc")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("powers-toggle-btc"));
+
+    const row = screen.getByTestId("powers-row-btc");
+    expect(row).toHaveTextContent("POWERS");
+    expect(row).toHaveTextContent("read market data");
+    expect(row).toHaveTextContent("notify you");
+    expect(row).toHaveTextContent("run on a schedule (up to every 30s)");
+    // All granted
+    expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("GRANTED");
+  });
+
+  it("revoking a power clears the token live and persists via organ_grant", async () => {
+    mockPoweredOrgan();
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-btc")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByTestId("powers-toggle-btc"));
+    await userEvent.click(screen.getByTestId("power-toggle-btc-market"));
+
+    expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("REVOKED");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        "organ_grant",
+        expect.objectContaining({
+          id: "btc",
+          grantedJson: JSON.stringify(["storage", "notify", "pulse"]),
+        }),
+      );
+    });
+
+    // Toggle back re-grants
+    await userEvent.click(screen.getByTestId("power-toggle-btc-market"));
+    expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("GRANTED");
+  });
+
+  it("a window without powers shows no powers toggle", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'notes', render(el){ el.textContent = 'ok'; } }";
+      return null;
+    });
+    render(<Desktop />);
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-notes")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("powers-toggle-notes")).not.toBeInTheDocument();
+  });
+});
+
+describe("THROTTLED chip", () => {
+  it("appears on loom-throttled for this organ and clears when the bucket refills", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_POWERED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'btc', render(el){ el.textContent = 'btc-content'; } }";
+      return null;
+    });
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-btc")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("throttle-chip-btc")).not.toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("loom-throttled", {
+        detail: { id: "btc", power: "market", retryMs: 40 },
+      }));
+    });
+    expect(screen.getByTestId("throttle-chip-btc")).toBeInTheDocument();
+
+    // Clears on its own once retryMs has passed
+    await waitFor(() => {
+      expect(screen.queryByTestId("throttle-chip-btc")).not.toBeInTheDocument();
+    });
+  });
+
+  it("ignores another organ's throttle event", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [APPROVED_POWERED_ORGAN];
+      if (cmd === "organ_read")
+        return "export default { id: 'btc', render(el){ el.textContent = 'btc-content'; } }";
+      return null;
+    });
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-btc")).toBeInTheDocument();
+    });
+    act(() => {
+      window.dispatchEvent(new CustomEvent("loom-throttled", {
+        detail: { id: "other", power: "market", retryMs: 1000 },
+      }));
+    });
+    expect(screen.queryByTestId("throttle-chip-btc")).not.toBeInTheDocument();
+  });
+});
+
+describe("revoked powers and the approval card", () => {
+  it("an organ with a revoked power stays approved — the card never resurfaces", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [{
+        id: "btc",
+        manifest: JSON.stringify(POWERED_MANIFEST),
+        granted: JSON.stringify(["storage", "notify", "pulse"]), // market revoked
+      }];
+      if (cmd === "organ_read")
+        return "export default { id: 'btc', render(el){ el.textContent = 'btc-content'; } }";
+      return null;
+    });
+    render(<Desktop />);
+
+    // Window renders (approved), no auto-modal (description text only shows on the card)
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-btc")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Watches BTC for you")).not.toBeInTheDocument();
+
+    // And the POWERS row reflects the revocation
+    await userEvent.click(screen.getByTestId("powers-toggle-btc"));
+    expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("REVOKED");
+    expect(screen.getByTestId("power-toggle-btc-notify")).toHaveTextContent("GRANTED");
+  });
+});

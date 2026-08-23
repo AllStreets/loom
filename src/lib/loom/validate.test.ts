@@ -26,6 +26,33 @@ describe("manifestGuard", () => {
   });
 });
 
+describe("manifestGuard powers", () => {
+  const base = { id: "btc", name: "BTC", description: "d", version: 1, permissions: ["storage"] };
+  it("accepts a manifest with no powers field (unchanged path)", () => {
+    const r = manifestGuard(JSON.stringify(base));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.manifest.powers).toBeUndefined();
+  });
+  it("accepts any subset of the six powers", () => {
+    const r = manifestGuard(JSON.stringify({ ...base, powers: ["market", "watch", "timeline", "voice", "notify", "pulse"] }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.manifest.powers).toEqual(["market", "watch", "timeline", "voice", "notify", "pulse"]);
+  });
+  it("accepts an empty powers array", () => {
+    expect(manifestGuard(JSON.stringify({ ...base, powers: [] })).ok).toBe(true);
+  });
+  it("rejects an unknown power with a reason string", () => {
+    const r = manifestGuard(JSON.stringify({ ...base, powers: ["market", "filesystem"] }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("unknown power: filesystem");
+  });
+  it("rejects a non-array powers field with a reason string", () => {
+    const r = manifestGuard(JSON.stringify({ ...base, powers: "market" }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("powers must be an array");
+  });
+});
+
 describe("buildHarnessSrc", () => {
   it("embeds the nonce, both modules, and the postMessage report", () => {
     const src = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce");
@@ -63,6 +90,37 @@ describe("buildHarnessSrc", () => {
     expect(src).toContain("PROBE_ONLY");
     // default opts: probeOnly is false
     expect(src).toContain("false");
+  });
+});
+
+describe("buildHarnessSrc power mocks", () => {
+  const src = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce");
+
+  it("mocks all six powers deterministically", () => {
+    // market — canned fixtures matching the core.ts shapes
+    expect(src).toContain("prevClose");
+    expect(src).toContain("changePct24h");
+    expect(src).toContain("bids");
+    expect(src).toContain("tradeId");
+    expect(src).toContain("rates");
+    // watch — canned ranked rows + watchlist
+    expect(src).toContain("BTC slides 5% in the hour");
+    expect(src).toContain("WATCHLIST");
+    // timeline — canned commits
+    expect(src).toContain("first weave");
+  });
+
+  it("records voice.say into loom.voice.said with the 300-char cap", () => {
+    expect(src).toContain("voiceApi.said.push(String(text).slice(0, 300))");
+  });
+
+  it("records notify into loom.notify.sent", () => {
+    expect(src).toContain("notifyFn.sent.push");
+  });
+
+  it("pulse.every fires the callback once immediately and records the interval", () => {
+    expect(src).toContain("pulseApi.registered.push(ms)");
+    expect(src).toContain("try { fn(); }");
   });
 });
 

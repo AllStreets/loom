@@ -104,6 +104,15 @@ export function IconTrash(props: GlyphProps) {
 }
 
 // crosshair — locate on globe
+// paths.bolt — 'M13 2L3 14h9l-1 8 10-12h-9l1-8z' (feather zap — organ powers)
+export function IconBolt(props: GlyphProps) {
+  return (
+    <Svg {...props}>
+      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+    </Svg>
+  );
+}
+
 export function IconLocate(props: GlyphProps) {
   return (
     <Svg {...props}>

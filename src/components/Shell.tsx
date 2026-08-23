@@ -18,6 +18,7 @@ import type { DeckId } from './decks/DeckLayer';
 import { startWatch, stopWatch } from '../lib/watch/runtime';
 import Tapestry from './Tapestry';
 import LoomGlyph from './chrome/LoomGlyph';
+import Notices from './chrome/Notices';
 import WatchPanel from './WatchPanel';
 import Shuttle from './Shuttle';
 import ErrorBoundary from './ErrorBoundary';
@@ -956,6 +957,12 @@ export default function Shell() {
           orb-band screen-blend so threads stay legible) ── */}
       <ErrorBoundary zone="tapestry">
         <Tapestry />
+      </ErrorBoundary>
+
+      {/* ── Notices: the notify power's glass toast stack (z 1500, top-right
+          under the top bar — above windows/dock, below modals) ── */}
+      <ErrorBoundary zone="notices">
+        <Notices />
       </ErrorBoundary>
 
       {/* ── Watch panel: collapsible salience feed (z 900, right side) ── */}
