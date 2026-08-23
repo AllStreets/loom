@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, fireEvent, cleanup } from "@testing-library/react";
 import Notices from "./Notices";
+import { mintNotifyToken } from "../../lib/organs/notifyGate";
+import { makeLoomApi } from "../../lib/organs/api";
+import { makeLedger } from "../../lib/organs/budgets";
 
 // Controllable reduced-motion — flipped per test.
 let mockRm = false;
@@ -9,9 +12,13 @@ vi.mock("framer-motion", async (importOriginal) => {
   return { ...mod, useReducedMotion: () => mockRm };
 });
 
+// Notices only renders events stamped with a live notifyGate token — mint one
+// for the test dispatcher, exactly as makeLoomApi does per mount.
+const TEST_TOKEN = mintNotifyToken("notices-test");
+
 function notify(title: string, body?: string, id = "btc") {
   act(() => {
-    window.dispatchEvent(new CustomEvent("loom-notify", { detail: { id, title, body } }));
+    window.dispatchEvent(new CustomEvent("loom-notify", { detail: { id, title, body, token: TEST_TOKEN } }));
   });
 }
 
@@ -42,8 +49,35 @@ describe("Notices", () => {
   it("ignores malformed events without a title", () => {
     render(<Notices />);
     act(() => {
-      window.dispatchEvent(new CustomEvent("loom-notify", { detail: {} }));
+      window.dispatchEvent(new CustomEvent("loom-notify", { detail: { token: TEST_TOKEN } }));
       window.dispatchEvent(new CustomEvent("loom-notify"));
+    });
+    expect(screen.queryByTestId("notices-stack")).toBeNull();
+  });
+
+  it("legit path: api.notify (grant + budget + token) renders a toast", () => {
+    render(<Notices />);
+    const api = makeLoomApi("legit-organ", ["notify"], { ledger: makeLedger(() => 0) });
+    act(() => {
+      api.notify("From the api", "with a minted token");
+    });
+    expect(screen.getByText("From the api")).toBeTruthy();
+    expect(screen.getByText("with a minted token")).toBeTruthy();
+  });
+
+  it("honesty gate: a forged tokenless dispatch is ignored", () => {
+    render(<Notices />);
+    act(() => {
+      // What a misbehaving same-realm organ could do around the grant + budget.
+      window.dispatchEvent(new CustomEvent("loom-notify", { detail: { id: "rogue", title: "forged" } }));
+    });
+    expect(screen.queryByTestId("notices-stack")).toBeNull();
+  });
+
+  it("honesty gate: a guessed token that was never minted is ignored", () => {
+    render(<Notices />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("loom-notify", { detail: { id: "rogue", title: "forged", token: "not-a-real-token" } }));
     });
     expect(screen.queryByTestId("notices-stack")).toBeNull();
   });

@@ -1,4 +1,7 @@
-export const PERMISSIONS = ["storage", "model", "notify", "settings"] as const;
+// "notify" is NOT here — it is gated exclusively as a power (see validate.ts
+// POWERS); manifestGuard migrates legacy manifests that still declare it under
+// permissions.
+export const PERMISSIONS = ["storage", "model", "settings"] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
 // ── Powers — when a request smells like it needs real hands ───────────────────
@@ -9,8 +12,8 @@ export type Permission = (typeof PERMISSIONS)[number];
 const POWER_HINTS = [
   // market — prices, tickers, coins, currencies
   "markets?", "prices?", "stocks?", "tickers?", "crypto", "bitcoin", "btc", "eth", "ethereum", "forex", "fx", "currenc(?:y|ies)", "quotes?", "exchange",
-  // notify — alerts and notices
-  "alert\\w*", "notif\\w*", "toasts?",
+  // notify — alerts and notices (plain-speech phrasings included: recall-biased)
+  "alert\\w*", "notif\\w*", "toasts?", "tell me", "ping", "let me know", "warn\\w*",
   // voice — the organ speaks
   "speak\\w*", "say", "voice", "aloud", "announce\\w*",
   // pulse — schedules and repetition
@@ -51,7 +54,8 @@ export const POWERS_FEWSHOT = {
       const c = await loom.market.crypto("BTC-USD");
       ui.setStat(price, "$" + Math.round(c.price));
       const last = loom.storage.get("lastAlertPct", null);
-      if (c.changePct24h <= -5 && last !== c.changePct24h) {
+      // changePct24h can be null on live data — always guard before comparing.
+      if (c.changePct24h !== null && c.changePct24h <= -5 && last !== c.changePct24h) {
         loom.storage.set("lastAlertPct", c.changePct24h);
         loom.notify("BTC down " + c.changePct24h.toFixed(1) + "%", "Now $" + Math.round(c.price));
         loom.voice.say("Bitcoin is down " + Math.abs(c.changePct24h).toFixed(1) + " percent.");
@@ -78,8 +82,8 @@ export const POWERS_FEWSHOT = {
 export const POWERS_CONTRACT = `POWERS — six gated capabilities beyond the basics. The manifest MUST declare every power the organ calls in an optional "powers" array (any subset of "market", "watch", "timeline", "voice", "notify", "pulse"); the owner approves them, and undeclared or revoked calls throw a permission error. Declare ONLY what the request truly needs.
 
    Signatures (on the same loom object):
-   await loom.market.chart(symbol)          -> { symbol, price, prevClose, open, high, low, volume, closes[], timestamps[] }        [needs "market"]
-   await loom.market.crypto(product)        -> { product, price, open24h, high24h, low24h, volume24h, changePct24h, time }          product e.g. "BTC-USD"
+   await loom.market.chart(symbol)          -> { symbol, name, price, prevClose, open, high, low, volume, closes[], timestamps[] }  [needs "market"] name/open/high/low/volume may be null
+   await loom.market.crypto(product)        -> { product, price, open24h, high24h, low24h, volume24h, changePct24h, time }          product e.g. "BTC-USD"; changePct24h may be null — guard before comparing
    await loom.market.book(product, depth?)  -> { product, bids: [{price,size}], asks: [{price,size}] }
    await loom.market.trades(product)        -> [{ tradeId, time, price, size, side }]
    await loom.market.fx(base, symbols)      -> { base, date, rates: { SYM: rate } }
@@ -96,7 +100,7 @@ export const POWERS_CONTRACT = `POWERS — six gated capabilities beyond the bas
    - loom.notify.sent      -> array of { title, body } the mock recorded
    - loom.voice.said       -> array of spoken strings (already capped at 300 chars)
    - loom.pulse.registered -> array of registered intervals (ms); pulse.every fires its callback ONCE immediately so tests observe one cycle
-   - market fixtures are canned: crypto changePct24h is -5.0 with price 61250; watch.top / watch.list / timeline.log return canned rows
+   - market fixtures are canned: crypto changePct24h is -5.0 with price 61250 (live data may be null — always null-guard); chart name is null; watch.top / watch.list / timeline.log return canned rows
    Test powered behavior by asserting on these hooks (and storage) — never on real network or timers.
 
    WORKED EXAMPLE — "alert me when BTC drops 5%":
@@ -115,7 +119,7 @@ export function ctxFor(chars: number): number {
 export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LOOM, made of exactly three files:
 
 1. manifest.json — {"id": "<kebab-case>", "name": "<Display Name>", "description": "<one line>", "version": 1, "permissions": [...]}
-   Allowed permissions (request ONLY what the organ truly needs): "storage" (persistent key-value store), "model" (chat with the local model), "notify" (show a notification), "settings" (read/write user preferences — request only for settings-type organs).
+   Allowed permissions (request ONLY what the organ truly needs): "storage" (persistent key-value store), "model" (chat with the local model), "settings" (read/write user preferences — request only for settings-type organs).
    Optional "powers" array (declare ONLY the capabilities the organ truly calls): "market" (read market data), "watch" (read the owner's watch feed), "timeline" (read commit history), "voice" (speak aloud), "notify" (glass toast notices), "pulse" (scheduled runs while LOOM is open). Each power is owner-approved and budgeted; full signatures arrive in a POWERS block when a request needs them.
 
 2. organ.js — an ES module:
@@ -125,7 +129,7 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
        // el: the organ's root HTMLElement (render all UI inside it)
        // loom.storage.get(key, fallback) / loom.storage.set(key, value) / loom.storage.del(key)  [needs "storage"]
        // await loom.model.chat([{role:"user",content:"..."}]) -> string                            [needs "model"]
-       // loom.notify(title, body?)                                                                 [needs "notify"]
+       // loom.notify(title, body?)                                          [needs the "notify" POWER — declare it in "powers"]
        // loom.settings — request only for settings-type organs                                     [needs "settings"]
        //   loom.settings.get(key) -> string          whitelisted keys: voice.default (voice id),
        //                                               voice.speakReplies ("always"|"whenSpoken"|"never"),

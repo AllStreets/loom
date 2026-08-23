@@ -5,6 +5,7 @@ import { playWav } from "../voice/player";
 import { getSalient } from "../watch/runtime";
 import { getWatchlist, type WatchlistEntry } from "../watch/store";
 import { makeLedger, type BudgetLedger, type BudgetedPower } from "./budgets";
+import { mintNotifyToken, revokeNotifyToken } from "./notifyGate";
 import { buildUiKit, type LoomUiKit } from "./uikit";
 import { KIT_TOKENS } from "./uikitSrc";
 
@@ -125,6 +126,7 @@ export function budgetError(power: string): Error {
 
 export function purgeOrganStorage(id: string): void {
   clearOrganPulses(id);
+  revokeNotifyToken(id);
   const prefix = `organ.${id}.`;
   const toRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
@@ -156,6 +158,14 @@ export function makeLoomApi(
   const need = (p: string) => {
     if (!granted.includes(p)) throw new Error(`permission "${p}" not granted`);
   };
+  // BE HONEST ABOUT THE THREAT MODEL: organs run in the shell's own JS realm,
+  // so nothing here stops organ code from calling window.dispatchEvent itself —
+  // same-realm organs are honesty-enforced, not security-sandboxed (the real
+  // walls are the gate + owner approval). This per-mount token lives only in
+  // this closure and the module-private notifyGate registry — it is never
+  // exposed on the api object — and Notices ignores untokened events, so the
+  // only notify path that renders is the one that passed need() + spend().
+  const notifyToken = mintNotifyToken(organId);
   const key = (k: string) => `organ.${organId}.${k}`;
   const chat = deps.chat ?? fleetChat;
 
@@ -229,7 +239,7 @@ export function makeLoomApi(
       need("notify");
       spend("notify");
       window.dispatchEvent(new CustomEvent("loom-notify", {
-        detail: { id: organId, title: String(title), body: body === undefined ? undefined : String(body) },
+        detail: { id: organId, title: String(title), body: body === undefined ? undefined : String(body), token: notifyToken },
       }));
       deps.notify?.(String(title));
     },

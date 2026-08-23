@@ -53,6 +53,36 @@ describe("manifestGuard powers", () => {
   });
 });
 
+describe("manifestGuard legacy notify normalization", () => {
+  const base = { id: "old", name: "Old", description: "d", version: 1 };
+  it('migrates a legacy "notify" permission into powers instead of rejecting', () => {
+    const r = manifestGuard(JSON.stringify({ ...base, permissions: ["storage", "notify"] }));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.manifest.permissions).toEqual(["storage"]);
+      expect(r.manifest.powers).toEqual(["notify"]);
+    }
+  });
+  it("dedupes when the manifest already declares the notify power", () => {
+    const r = manifestGuard(JSON.stringify({ ...base, permissions: ["notify"], powers: ["market", "notify"] }));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.manifest.permissions).toEqual([]);
+      expect(r.manifest.powers).toEqual(["market", "notify"]);
+    }
+  });
+  it("appends notify to existing powers that lack it", () => {
+    const r = manifestGuard(JSON.stringify({ ...base, permissions: ["storage", "notify"], powers: ["market"] }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.manifest.powers).toEqual(["market", "notify"]);
+  });
+  it("still rejects genuinely unknown permissions after the migration", () => {
+    const r = manifestGuard(JSON.stringify({ ...base, permissions: ["notify", "filesystem"] }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("unknown permission: filesystem");
+  });
+});
+
 describe("buildHarnessSrc", () => {
   it("embeds the nonce, both modules, and the postMessage report", () => {
     const src = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce");

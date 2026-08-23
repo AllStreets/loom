@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { purgeOrganStorage, addOrganTombstone, makeLoomApi, clearOrganPulses, organPulseCount, PULSE_MIN_MS, PULSE_MAX_PER_ORGAN } from "./api";
 import { makeLedger } from "./budgets";
+import { isLiveNotifyToken } from "./notifyGate";
 import type { ScoredEvent } from "../watch/types";
 
 beforeEach(() => { localStorage.clear(); });
@@ -174,17 +175,77 @@ describe("power: notify", () => {
     expect(() => api.notify("hello")).toThrow(/permission "notify" not granted/);
   });
 
-  it("dispatches loom-notify with title + body and the organ id", () => {
+  it("dispatches loom-notify with title + body, the organ id, and a live token", () => {
     const api = makeLoomApi("btc", ["notify"], { ledger: makeLedger(() => 0) });
-    const seen: unknown[] = [];
-    const onNotify = (e: Event) => seen.push((e as CustomEvent).detail);
+    const seen: { id: string; title: string; body?: string; token: string }[] = [];
+    const onNotify = (e: Event) => seen.push((e as CustomEvent<{ id: string; title: string; body?: string; token: string }>).detail);
     window.addEventListener("loom-notify", onNotify);
     try {
       api.notify("BTC alert", "down 5% in the hour");
-      expect(seen).toEqual([{ id: "btc", title: "BTC alert", body: "down 5% in the hour" }]);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({ id: "btc", title: "BTC alert", body: "down 5% in the hour" });
+      expect(isLiveNotifyToken(seen[0].token)).toBe(true);
     } finally {
       window.removeEventListener("loom-notify", onNotify);
     }
+  });
+
+  it("legacy grants that stored notify as a permission-era string still pass need()", () => {
+    // Grants are plain strings — an organ approved back when "notify" lived in
+    // the permissions catalog keeps its toast without any re-approval.
+    const api = makeLoomApi("old-timer", ["storage", "notify"], { ledger: makeLedger(() => 0) });
+    expect(() => api.notify("still here")).not.toThrow();
+  });
+
+  it("the per-mount token is not reachable through the api object", () => {
+    const api = makeLoomApi("btc-t", ["notify"], { ledger: makeLedger(() => 0) });
+    const seen: { token: string }[] = [];
+    const onNotify = (e: Event) => seen.push((e as CustomEvent<{ token: string }>).detail);
+    window.addEventListener("loom-notify", onNotify);
+    try {
+      api.notify("probe");
+    } finally {
+      window.removeEventListener("loom-notify", onNotify);
+    }
+    const token = seen[0].token;
+    expect(token.length).toBeGreaterThan(0);
+    // Organ code holds only the api object — serializing every enumerable
+    // property must never surface the token (it lives in a closure + the
+    // module-private notifyGate registry).
+    expect(JSON.stringify(api)).not.toContain(token);
+  });
+
+  it("a forged token is not live; a remount invalidates the previous token", () => {
+    expect(isLiveNotifyToken("forged")).toBe(false);
+    expect(isLiveNotifyToken(undefined)).toBe(false);
+    const seen: { token: string }[] = [];
+    const onNotify = (e: Event) => seen.push((e as CustomEvent<{ token: string }>).detail);
+    window.addEventListener("loom-notify", onNotify);
+    try {
+      const first = makeLoomApi("remount", ["notify"], { ledger: makeLedger(() => 0) });
+      first.notify("one");
+      const firstToken = seen[0].token;
+      expect(isLiveNotifyToken(firstToken)).toBe(true);
+      makeLoomApi("remount", ["notify"], { ledger: makeLedger(() => 0) }); // remount mints anew
+      expect(isLiveNotifyToken(firstToken)).toBe(false);
+    } finally {
+      window.removeEventListener("loom-notify", onNotify);
+    }
+  });
+
+  it("purgeOrganStorage revokes the organ's notify token", () => {
+    const api = makeLoomApi("purged", ["notify"], { ledger: makeLedger(() => 0) });
+    const seen: { token: string }[] = [];
+    const onNotify = (e: Event) => seen.push((e as CustomEvent<{ token: string }>).detail);
+    window.addEventListener("loom-notify", onNotify);
+    try {
+      api.notify("last words");
+    } finally {
+      window.removeEventListener("loom-notify", onNotify);
+    }
+    expect(isLiveNotifyToken(seen[0].token)).toBe(true);
+    purgeOrganStorage("purged");
+    expect(isLiveNotifyToken(seen[0].token)).toBe(false);
   });
 
   it("budget: 6 per hour, then the calm budget error", () => {

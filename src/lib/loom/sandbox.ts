@@ -69,9 +69,13 @@ const freshLoom = () => {
     notify: notifyFn,
     market: {
       chart: async function(symbol) {
-        return { symbol: String(symbol), name: String(symbol), price: 512.34, prevClose: 508.1, open: 509.0, high: 514.2, low: 506.8, volume: 1234567, closes: [508.1, 509.4, 511.0, 512.34], timestamps: [1755820800, 1755820860, 1755820920, 1755820980] };
+        // name is string|null in core.ts — the mock returns the realistic null
+        // case so generated organs learn to guard it before rendering.
+        return { symbol: String(symbol), name: null, price: 512.34, prevClose: 508.1, open: 509.0, high: 514.2, low: 506.8, volume: 1234567, closes: [508.1, 509.4, 511.0, 512.34], timestamps: [1755820800, 1755820860, 1755820920, 1755820980] };
       },
       crypto: async function(product) {
+        // changePct24h stays a deterministic -5.0 (the few-shot's tests depend
+        // on it) but is number|null in core.ts — live organs must null-guard.
         return { product: String(product), price: 61250.0, bid: 61249.5, ask: 61250.5, open24h: 64473.68, high24h: 64980.0, low24h: 60900.0, volume24h: 8421.5, changePct24h: -5.0, time: "2026-08-22T12:00:00Z" };
       },
       book: async function(product, depth) {

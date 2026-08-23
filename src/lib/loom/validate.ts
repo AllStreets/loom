@@ -34,6 +34,13 @@ export function manifestGuard(manifestRaw: string, expectedId?: string):
   if (typeof man.description !== "string") return { ok: false, error: 'manifest field "description" has the wrong type' };
   if (typeof man.version !== "number") return { ok: false, error: 'manifest field "version" has the wrong type' };
   if (!Array.isArray(man.permissions)) return { ok: false, error: "permissions must be an array" };
+  // Legacy normalization: "notify" was once a permission; it is now gated
+  // exclusively as a power. Old manifests that still declare it under
+  // "permissions" are migrated at read time — moved into "powers" (deduped),
+  // never rejected — so they keep working and their notify shows up in the
+  // per-power POWERS revocation row (which iterates manifest.powers).
+  const legacyNotify = man.permissions.includes("notify");
+  if (legacyNotify) man.permissions = man.permissions.filter((p) => p !== "notify");
   for (const p of man.permissions) {
     if (!(PERMISSIONS as readonly string[]).includes(p)) return { ok: false, error: `unknown permission: ${String(p)}` };
   }
@@ -42,6 +49,10 @@ export function manifestGuard(manifestRaw: string, expectedId?: string):
     for (const p of man.powers) {
       if (!(POWERS as readonly string[]).includes(p)) return { ok: false, error: `unknown power: ${String(p)}` };
     }
+  }
+  if (legacyNotify) {
+    const powers = Array.isArray(man.powers) ? (man.powers as string[]) : [];
+    if (!powers.includes("notify")) man.powers = [...powers, "notify"];
   }
   return { ok: true, manifest: man as OrganManifest };
 }

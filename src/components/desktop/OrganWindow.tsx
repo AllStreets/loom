@@ -163,6 +163,11 @@ export default function OrganWindow({ state, focused, minimized, onFocus, onMini
     if (idx >= 0) {
       state.granted.splice(idx, 1);
       // A revoked pulse power stops the clock, not just future registrations.
+      // Revocation race defense (intentional): any pulse callback already
+      // in flight keeps running past this point, but its next need() throws —
+      // granted was spliced in place above, and the running api holds this
+      // exact array — and the pulse wrapper swallows that error. The organ
+      // goes quiet instead of crashing the shell.
       if (p === "pulse") clearOrganPulses(id);
     } else {
       state.granted.push(p);

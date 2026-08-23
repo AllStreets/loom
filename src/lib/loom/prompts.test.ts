@@ -98,6 +98,18 @@ describe("requestImpliesPowers", () => {
     for (const r of powered) expect(requestImpliesPowers(r), r).toBe(true);
   });
 
+  it("hears plain-speech notify phrasings (tell me / ping / let me know / warn)", () => {
+    const powered = [
+      "tell me when BTC drops",
+      "tell me when the kettle has boiled",
+      "ping me at noon",
+      "let me know if anything changes",
+      "warn me before the disk fills up",
+      "a tool that warns about long meetings",
+    ];
+    for (const r of powered) expect(requestImpliesPowers(r), r).toBe(true);
+  });
+
   it("never fires on plain widget requests", () => {
     const plain = [
       "water tracker",
@@ -114,7 +126,9 @@ describe("requestImpliesPowers", () => {
   it("respects word boundaries and ignores case", () => {
     expect(requestImpliesPowers("build a stopwatch")).toBe(false);   // no bare "watch"
     expect(requestImpliesPowers("an essay grader")).toBe(false);     // no bare "say"
+    expect(requestImpliesPowers("a shopping list")).toBe(false);     // no bare "ping"
     expect(requestImpliesPowers("ALERT ME LOUDLY")).toBe(true);
+    expect(requestImpliesPowers("PING ME WHEN DONE")).toBe(true);
   });
 });
 
@@ -154,6 +168,12 @@ describe("POWERS_CONTRACT", () => {
     expect(POWERS_CONTRACT).toContain("loom.pulse.registered");
     expect(POWERS_CONTRACT).toContain("ONCE immediately");
     expect(POWERS_CONTRACT).toContain("changePct24h is -5.0");
+  });
+
+  it("teaches nullability: changePct24h and chart name can be null on live data", () => {
+    expect(POWERS_CONTRACT).toContain("changePct24h may be null — guard before comparing");
+    expect(POWERS_CONTRACT).toContain("always null-guard");
+    expect(POWERS_CONTRACT).toContain("chart name is null");
   });
 
   it("embeds the worked BTC-drop few-shot verbatim", () => {
@@ -203,8 +223,10 @@ describe("organSystemPrompt powers injection", () => {
 // through the guard, organ + tests against harness-equivalent power mocks.
 // CI proves the few-shot green without any model in the room.
 
-/** Mirror of the sandbox harness power mocks (sandbox.ts freshLoom). */
-function harnessLoom() {
+/** Mirror of the sandbox harness power mocks (sandbox.ts freshLoom).
+ *  changePct24h is overridable so the null-guard the few-shot teaches can be
+ *  exercised against the realistic live case (null). */
+function harnessLoom(changePct24h: number | null = -5.0) {
   const sent: { title: string; body?: string }[] = [];
   const notify = Object.assign(
     (title: string, body?: string) => {
@@ -241,7 +263,7 @@ function harnessLoom() {
       crypto: async (product: string) => ({
         product: String(product), price: 61250.0, bid: 61249.5, ask: 61250.5,
         open24h: 64473.68, high24h: 64980.0, low24h: 60900.0, volume24h: 8421.5,
-        changePct24h: -5.0, time: "2026-08-22T12:00:00Z",
+        changePct24h, time: "2026-08-22T12:00:00Z",
       }),
     },
   };
@@ -280,6 +302,16 @@ describe("POWERS few-shot fixture (offline gate proof)", () => {
       const assert = (c: unknown, msg?: string) => { if (!c) throw new Error(`${t.name}: ${msg ?? "assertion failed"}`); };
       await t.fn({ el, loom, assert, organ });
     }
+  });
+
+  it("a null changePct24h never alerts — the guard the few-shot teaches", async () => {
+    const organ = new Function(POWERS_FEWSHOT.code.replace(/^export\s+default\s+/m, "return "))() as FixtureOrgan;
+    const el = document.createElement("div");
+    const loom = harnessLoom(null); // the realistic live case core.ts allows
+    await organ.render(el, loom);
+    await new Promise((r) => setTimeout(r, 0)); // let the immediate mock pulse finish its async check
+    expect(loom.notify.sent).toHaveLength(0);
+    expect(loom.voice.said).toHaveLength(0);
   });
 
   it("test.js contains no import statements (sandbox law)", () => {

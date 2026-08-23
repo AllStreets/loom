@@ -2,14 +2,19 @@
  * Notices.tsx — the notify power's surface.
  *
  * A calm glass toast stack, top-right under the top bar, listening on the
- * `loom-notify` CustomEvent (detail: { id?, title, body? }). Each notice shows
- * its title + body with a ✕ to dismiss, and dims on its own after 12s —
- * present, not insistent. Reduced motion: static, no auto-dim animation.
- * At most 3 notices are visible; the rest wait behind a "+N more" chip.
+ * `loom-notify` CustomEvent (detail: { id?, title, body?, token }). Only
+ * events stamped with a live notifyGate token render — a bare dispatch from
+ * organ code (same-realm, so always possible) is honesty-filtered out; the
+ * only path that mints a token is api.notify, behind grant + budget. Each
+ * notice shows its title + body with a ✕ to dismiss, and dims on its own
+ * after 12s — present, not insistent. Reduced motion: static, no auto-dim
+ * animation. At most 3 notices are visible; the rest wait behind a "+N more"
+ * chip.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { useReducedMotion } from "framer-motion";
+import { isLiveNotifyToken } from "../../lib/organs/notifyGate";
 import { IconX } from "./icons";
 
 type Notice = {
@@ -41,8 +46,11 @@ export default function Notices() {
 
   useEffect(() => {
     function onNotify(ev: Event) {
-      const detail = (ev as CustomEvent<{ id?: string; title?: string; body?: string }>).detail;
+      const detail = (ev as CustomEvent<{ id?: string; title?: string; body?: string; token?: string }>).detail;
       if (!detail || !detail.title) return;
+      // Unstamped or stale-token events never render — see notifyGate.ts for
+      // the honest threat model (this filters dishonesty, it is not a sandbox).
+      if (!isLiveNotifyToken(detail.token)) return;
       const key = nextKey.current++;
       setNotices((prev) => {
         const next = [...prev, { key, organId: detail.id, title: String(detail.title), body: detail.body === undefined ? undefined : String(detail.body), dimmed: false }];

@@ -1121,6 +1121,34 @@ describe("POWERS row and revocation", () => {
     expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("GRANTED");
   });
 
+  it("a legacy manifest with notify under permissions shows notify in the POWERS row", async () => {
+    // Pre-vigor manifests declared "notify" as a permission. manifestGuard
+    // migrates it into powers at read time, so the revocation row (which
+    // iterates manifest.powers) must surface it like any other power.
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "organ_list") return [{
+        id: "legacy",
+        manifest: JSON.stringify({ id: "legacy", name: "Legacy Notifier", description: "An old friend", version: 1, permissions: ["storage", "notify"] }),
+        granted: JSON.stringify(["storage", "notify"]),
+      }];
+      if (cmd === "organ_read")
+        return "export default { id: 'legacy', render(el){ el.textContent = 'ok'; } }";
+      if (cmd === "organ_grant") return "sha";
+      return null;
+    });
+    render(<Desktop />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("title-bar-legacy")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByTestId("powers-toggle-legacy"));
+    const row = screen.getByTestId("powers-row-legacy");
+    expect(row).toHaveTextContent("notify you");
+    // The permission-era grant string still satisfies the power grant.
+    expect(screen.getByTestId("power-toggle-legacy-notify")).toHaveTextContent("GRANTED");
+  });
+
   it("a window without powers shows no powers toggle", async () => {
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "organ_list") return [APPROVED_ORGAN];
