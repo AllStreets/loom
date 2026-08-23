@@ -246,6 +246,29 @@ Four decks: **void · globe · terminal · ember**. Nothing on board that doesn'
 
 ---
 
+## Phase 19 — Vigor
+
+**Phase 19 — shipped.**
+
+Built organs had a toy ceiling: storage and a UI kit. *"Alert me when BTC drops 5% in an hour"* could not produce a working thing. Now it can.
+
+**Organs grow hands.** Six powers, each a token the organ's manifest must declare and you must approve:
+
+| power | what it grants |
+|---|---|
+| `market` | read market data — charts, crypto, order books, trades, FX — through LOOM's own engine |
+| `watch` | read the salience feed and your watchlist |
+| `timeline` | read LOOM's own git history |
+| `voice` | speak aloud through the cockpit's voice |
+| `notify` | raise a calm glass notice in the corner of the cockpit |
+| `pulse` | run on a schedule while LOOM is open — down to every 30 seconds |
+
+**Governed the LOOM way.** The permission card lists requested powers in plain language before anything runs. Every power is budgeted per organ — market 30 calls/min, voice one utterance per 30s, notices six an hour — and a throttled organ shows a dim THROTTLED chip instead of crashing. Every power is revocable live from the organ's title bar: flip the toggle and the organ's next call is calmly refused. The validation sandbox mocks all six powers deterministically, so an organ's generated tests prove its behavior — what it notifies, what it says, what it schedules — offline, before you ever approve it.
+
+**The builder knows its hands.** When your sentence implies powers, the builder's prompt carries the exact API contract and a worked example; the model declares the powers it needs, writes code that uses them, and writes tests against the sandbox's recorded outputs. Say the sentence. Approve the card. Own the tool.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -354,6 +377,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **16 · Identity** | the brand system (woven mark on every surface, BRAND.md) · the Tapestry (constellation removed; LOOM's history woven live behind the orb) · the Shuttle (⌘K palette + voice sharing one drift-proof command catalog, "what can you do") | **shipped** |
 | **17 · Depth** | the market engine (typed keyless sources: Yahoo UA-fixed · Coinbase Exchange · Frankfurter; 429 root cause dead) · Terminal depth (editable watchlist, symbol detail charts, crypto + FX strips, per-source health) · AGORA's native floor (order-book ladder, trades tape, launch strip) | **shipped** |
 | **18 · Excision** | AGORA removed entirely (spawn subsystem, deck, settings, voice — migration-clean) · the floor folds into the Terminal as the crypto detail overlay · four decks | **shipped** |
+| **19 · Vigor** | organs grow hands: six real powers (market · watch · timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
 | **later** | EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)

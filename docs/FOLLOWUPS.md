@@ -130,6 +130,19 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - **Keyed-source opt-ins** — a Settings-gated slot for owner-supplied keys (e.g. Finnhub/Twelve Data free tiers) following the cloud-builder key pattern (write-only, Tauri-side storage), for owners who want deeper equities data than Yahoo's unofficial endpoint.
 - **Yahoo fragility** — the chart endpoint is unofficial; the UA fix + query2 retry hold today (live-verified), but if Yahoo hardens further, the engine's typed seam is where a replacement source lands. Monitor.
 
+### Phase-19 backlog (Vigor — deliberate non-goals)
+
+- **OS-level notifications opt-in** — `loom.notify` is cockpit-native only; a Settings-gated bridge to macOS notifications (Tauri notification plugin) for owners who want alerts while LOOM is backgrounded.
+- **Background pulse while closed** — pulses run only while LOOM is open, by design; a "wake to check" daemon is a sovereignty question (always-on process) to design deliberately, not drift into.
+- **Organ-to-organ calls** — powers are organ↔kernel only; an organ bus (with its own permission tokens) would unlock composition but needs a loop-prevention design.
+- **Notify → event-source dedupe** — same threat class as any same-realm JS: organs share the webview realm with the shell, so the permission system is honesty-enforcement, not a security sandbox. The real isolation boundary (organ iframes / separate realm) is a larger architectural item.
+
+### Resolved in Phase 19 (Vigor)
+
+- Six organ powers — market/watch/timeline/voice/notify/pulse on `LoomApi` behind the `need()` grant seam; manifest `powers` validated (`POWERS`/`POWER_LABELS`); permission card lists powers in plain language; per-power live revocation UI (bolt toggle → POWERS row) on OrganWindow; token-bucket budgets (market 30/min, voice 1/30s, notify 6/h) with THROTTLED chip; pulse registry (min 30s, max 4/organ) cleared on unmount and delete; Notices glass toast stack. (`src/lib/organs/api.ts`, `src/lib/organs/budgets.ts`, `src/components/chrome/Notices.tsx`)
+- Sandbox power mocks — deterministic fixtures matching core.ts shapes; recorded `voice.said` / `notify.sent` / `pulse.registered` hooks for generated tests. (`src/lib/loom/sandbox.ts`)
+- Builder power knowledge — conditional `POWERS_CONTRACT` block (recall-biased `requestImpliesPowers` heuristic), BTC-5%-drop few-shot (manifest+code+tests), tests-gen prompt grounded in the mock hooks, ORGAN_CONTRACT documents powers, `build-powered-organ` selftest case + offline gate proof of the fixture. (`src/lib/loom/prompts.ts`)
+
 ### Resolved in Phase 18 (Excision)
 
 - AGORA removed entirely (owner verdict 2026-08-22): `agora.rs` + exit-kill hooks + `libc` dep, AgoraDeck, `deck.agora.*` settings (retired via the `RETIRED_KEYS` boot migration, incl. stored `cockpit.deck === "agora"` → void), voice phrases, Settings-organ fields, docs. Grep-gated: only the migration itself may name agora.
