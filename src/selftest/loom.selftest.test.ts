@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { organSystemPrompt, ctxFor } from "../lib/loom/prompts";
+import { organSystemPrompt, ctxFor, POWERS_FEWSHOT } from "../lib/loom/prompts";
 import { extractCode, applyEditBlocks } from "../lib/loom/edits";
 import { manifestGuard } from "../lib/loom/validate";
 import { classifyByRules, classifyIntent } from "../lib/compiler/intent";
@@ -623,6 +623,69 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
       expect(hasHeroPattern, `rep ${rep}: organ does not use a hero pattern (ui.hero / ui.progress / ui.stat)`).toBe(true);
     }
     console.info(`[build-dashboardy-organ] ${passed}/${REPS} passed`);
+  });
+
+  it("build-powered-organ: 3 reps — BTC drop alert reaches for pulse+market+notify", async () => {
+    // The one powered selftest case (spec: pulse+market+notify), modeled on the
+    // POWERS few-shot. The same fixture is proven offline by the gate tests in
+    // prompts.test.ts — here the real model must use its new hands.
+    const m = model ?? (await pickBuilder());
+    const request = "Alert me when BTC drops 5% in a day — check every minute and notify me.";
+    const system = organSystemPrompt("code", { request });
+    // Offline sanity: this request must summon the POWERS block + few-shot
+    expect(system).toContain("loom.pulse.every(ms, fn)");
+    expect(system).toContain(POWERS_FEWSHOT.manifest);
+
+    const POWERED_MANIFEST = JSON.stringify({
+      id: "btc-alert", name: "BTC Alert", description: "Alerts on a 5% BTC drop.",
+      version: 1, permissions: ["storage"], powers: ["market", "notify", "pulse"],
+    });
+    const user = `Request: ${request}\n\nManifest:\n${POWERED_MANIFEST}`;
+
+    let passed = 0;
+    for (let rep = 1; rep <= REPS; rep++) {
+      const t0 = Date.now();
+      const raw = await chat(m, system, user);
+      const code = extractCode(raw);
+      const ms = Date.now() - t0;
+
+      const hasExportDefault = code.includes("export default");
+      const hasRender = code.includes("render");
+      const usesPulse = code.includes("pulse.every");
+      const usesMarket = code.includes("market.crypto") || code.includes("market.chart");
+      const usesNotify = /\bnotify\(/.test(code);
+
+      const stripped = code
+        .replace(/^export\s+default\s+/, "const __organ = ")
+        .replace(/\bimport\b[^;]*;?\s*/g, "");
+      let fnOk = false;
+      let fnErr = "";
+      try {
+        new Function(stripped);
+        fnOk = true;
+      } catch (e) {
+        fnErr = String(e);
+      }
+
+      const ok = hasExportDefault && hasRender && fnOk && usesPulse && usesMarket && usesNotify;
+      if (ok) {
+        passed++;
+        console.info(`[build-powered-organ] rep ${rep} PASS (${ms}ms)`);
+      } else {
+        console.info(
+          `[build-powered-organ] rep ${rep} FAIL (${ms}ms) exportDefault=${hasExportDefault} render=${hasRender} fnOk=${fnOk} pulse=${usesPulse} market=${usesMarket} notify=${usesNotify} fnErr=${fnErr}`
+        );
+        console.info(`  code snippet:\n${code.slice(0, 400)}`);
+      }
+
+      expect(hasExportDefault, `rep ${rep}: missing 'export default'`).toBe(true);
+      expect(hasRender, `rep ${rep}: missing 'render'`).toBe(true);
+      expect(fnOk, `rep ${rep}: new Function threw: ${fnErr}`).toBe(true);
+      expect(usesPulse, `rep ${rep}: organ does not use loom.pulse.every`).toBe(true);
+      expect(usesMarket, `rep ${rep}: organ does not read the market power`).toBe(true);
+      expect(usesNotify, `rep ${rep}: organ never notifies`).toBe(true);
+    }
+    console.info(`[build-powered-organ] ${passed}/${REPS} passed`);
   });
 
   it("exemplars-injected: organSystemPrompt with exemplars injects EXPERIENCE block", () => {

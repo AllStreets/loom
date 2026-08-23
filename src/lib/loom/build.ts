@@ -43,7 +43,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
 
     // Phase 1: manifest
     emit("manifest", "generating manifest...");
-    const manifestSystem = organSystemPrompt("manifest");
+    const manifestSystem = organSystemPrompt("manifest", { request });
     const manifestMessages: Msg[] = [
       { role: "system", content: manifestSystem },
       { role: "user", content: request },
@@ -57,7 +57,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     if (!manifestResult.ok) {
       // Quick-win 1: ONE manifest repair round before giving up
       emit("manifest", "failed: " + manifestResult.error + " — attempting manifest repair...");
-      const repairSystem = organSystemPrompt("repair");
+      const repairSystem = organSystemPrompt("repair", { request });
       const repairUser =
         `FILE: manifest.json\n\nCURRENT (FAILED) CONTENT:\n${manifestCode}\n\n` +
         `VALIDATION ERRORS:\n${manifestResult.error}\n\n` +
@@ -90,7 +90,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     emit("code", "generating organ.js...");
     const exemplars = retrieveExemplars(request, 2);
     const lessons = retrieveLessons(request, 2);
-    const codeSystem = organSystemPrompt("code", { exemplars, lessons });
+    const codeSystem = organSystemPrompt("code", { exemplars, lessons, request });
     const codeUser = `Request: ${request}\n\nManifest:\n${finalManifestCode}`;
     const codeMessages: Msg[] = [
       { role: "system", content: codeSystem },
@@ -110,7 +110,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     if (!probeResult.ok) {
       // One code repair round on render failure
       emit("probe", "render failed: " + (probeResult.error ?? "unknown") + " — attempting code repair...");
-      const repairSystem = organSystemPrompt("repair");
+      const repairSystem = organSystemPrompt("repair", { request });
       const repairUser =
         `FILE: organ.js\n\nCURRENT (FAILED) CONTENT:\n${codeContent}\n\n` +
         `RENDER ERRORS:\n${probeResult.error ?? "render failed"}\n\n` +
@@ -138,7 +138,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     // Phase 4: test.js — generated WITH the real DOM so selectors are grounded
     // Quick-win 6: include original request in testsUser
     emit("tests", "generating test.js...");
-    const testsSystem = organSystemPrompt("tests");
+    const testsSystem = organSystemPrompt("tests", { request });
     const testsUser =
       `Original request: ${request}\n\n` +
       `Manifest:\n${finalManifestCode}\n\nCode:\n${codeContent}\n\n` +

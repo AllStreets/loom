@@ -1,6 +1,112 @@
 export const PERMISSIONS = ["storage", "model", "notify", "settings"] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
+// ── Powers — when a request smells like it needs real hands ───────────────────
+// Keyword classes, word-boundary matched: market/price/crypto, alert/notify,
+// speak/voice, remind/every/schedule (pulse), watch/news/feed, commit/history
+// (timeline). Generous on ambiguity — an unneeded block costs tokens, a missing
+// one costs the build — but plain widget requests ("water tracker") never match.
+const POWER_HINTS = [
+  // market — prices, tickers, coins, currencies
+  "markets?", "prices?", "stocks?", "tickers?", "crypto", "bitcoin", "btc", "eth", "ethereum", "forex", "fx", "currenc(?:y|ies)", "quotes?", "exchange",
+  // notify — alerts and notices
+  "alert\\w*", "notif\\w*", "toasts?",
+  // voice — the organ speaks
+  "speak\\w*", "say", "voice", "aloud", "announce\\w*",
+  // pulse — schedules and repetition
+  "every", "schedul\\w*", "periodic\\w*", "intervals?", "recurring", "remind\\w*", "pulses?", "poll\\w*",
+  // watch — the salience feed
+  "watch", "watchlist", "news", "headlines?", "feeds?", "salient",
+  // timeline — the history of the weave
+  "commits?", "history", "timeline", "changelog",
+];
+const POWER_HINT_RE = new RegExp("\\b(?:" + POWER_HINTS.join("|") + ")\\b", "i");
+
+/** True when a build request implies the organ may need one of the six powers. */
+export function requestImpliesPowers(request: string): boolean {
+  return POWER_HINT_RE.test(request);
+}
+
+/** The worked powered example — also the selftest fixture, so the few-shot the
+ *  model studies is the exact organ CI proves passes offline. */
+export const POWERS_FEWSHOT = {
+  manifest: `{
+  "id": "btc-drop-alert",
+  "name": "BTC Drop Alert",
+  "description": "Watches BTC and alerts on a 5% daily drop.",
+  "version": 1,
+  "permissions": ["storage"],
+  "powers": ["market", "notify", "pulse", "voice"]
+}`,
+  code: `export default {
+  id: "btc-drop-alert",
+  render(el, loom) {
+    const ui = loom.ui;
+    const { root, body } = ui.card({ title: "BTC Drop Alert" });
+    body.appendChild(ui.heading("BTC Drop Alert", "Notifies you when BTC falls 5% in 24h."));
+    const price = ui.stat("btc-usd", "—");
+    body.appendChild(ui.row(price, ui.badge("watching", "accent")));
+    el.appendChild(root);
+    const check = async () => {
+      const c = await loom.market.crypto("BTC-USD");
+      ui.setStat(price, "$" + Math.round(c.price));
+      const last = loom.storage.get("lastAlertPct", null);
+      if (c.changePct24h <= -5 && last !== c.changePct24h) {
+        loom.storage.set("lastAlertPct", c.changePct24h);
+        loom.notify("BTC down " + c.changePct24h.toFixed(1) + "%", "Now $" + Math.round(c.price));
+        loom.voice.say("Bitcoin is down " + Math.abs(c.changePct24h).toFixed(1) + " percent.");
+      }
+    };
+    loom.pulse.every(60000, check);
+  }
+};`,
+  tests: `export const tests = [
+  { name: "registers one pulse at a lawful interval", fn: async ({ loom, assert }) => {
+    assert(loom.pulse.registered.length === 1, "one pulse registered");
+    assert(loom.pulse.registered[0] >= 30000, "interval is at least 30s");
+  } },
+  { name: "a 5% drop notifies, speaks, and stores the baseline", fn: async ({ loom, assert }) => {
+    await new Promise((r) => setTimeout(r, 0)); // let the immediate mock pulse finish its async check
+    assert(loom.notify.sent.length === 1, "one notification sent");
+    assert(loom.notify.sent[0].title.indexOf("BTC") === 0, "title leads with BTC");
+    assert(loom.voice.said.length === 1, "spoke exactly once");
+    assert(loom.storage.get("lastAlertPct", null) === -5, "baseline stored for dedupe");
+  } },
+];`,
+};
+
+export const POWERS_CONTRACT = `POWERS — six gated capabilities beyond the basics. The manifest MUST declare every power the organ calls in an optional "powers" array (any subset of "market", "watch", "timeline", "voice", "notify", "pulse"); the owner approves them, and undeclared or revoked calls throw a permission error. Declare ONLY what the request truly needs.
+
+   Signatures (on the same loom object):
+   await loom.market.chart(symbol)          -> { symbol, price, prevClose, open, high, low, volume, closes[], timestamps[] }        [needs "market"]
+   await loom.market.crypto(product)        -> { product, price, open24h, high24h, low24h, volume24h, changePct24h, time }          product e.g. "BTC-USD"
+   await loom.market.book(product, depth?)  -> { product, bids: [{price,size}], asks: [{price,size}] }
+   await loom.market.trades(product)        -> [{ tradeId, time, price, size, side }]
+   await loom.market.fx(base, symbols)      -> { base, date, rates: { SYM: rate } }
+   loom.watch.top(n?)                       -> [{ title, source, score, reasons[] }] ranked salient items                           [needs "watch"]
+   loom.watch.list()                        -> [{ kind, value }] the owner's watchlist
+   await loom.timeline.log(n?)              -> [{ sha, message }] recent commits                                                    [needs "timeline"]
+   await loom.voice.say(text)               -> speaks aloud (300-char cap)                                                          [needs "voice"]
+   loom.notify(title, body?)                -> glass toast notice                                                                   [needs "notify"]
+   loom.pulse.every(ms, fn)                 -> runs fn every ms while LOOM is open; returns cancel(); min 30000ms, max 4 per organ  [needs "pulse"]
+
+   BUDGETS (per organ — an exceeded call throws a calm error, so pace yourself): market <= 30 req/min; voice <= 1 utterance/30s; notify <= 6/hour.
+
+   SANDBOX MOCKS (what test.js runs against — deterministic, offline):
+   - loom.notify.sent      -> array of { title, body } the mock recorded
+   - loom.voice.said       -> array of spoken strings (already capped at 300 chars)
+   - loom.pulse.registered -> array of registered intervals (ms); pulse.every fires its callback ONCE immediately so tests observe one cycle
+   - market fixtures are canned: crypto changePct24h is -5.0 with price 61250; watch.top / watch.list / timeline.log return canned rows
+   Test powered behavior by asserting on these hooks (and storage) — never on real network or timers.
+
+   WORKED EXAMPLE — "alert me when BTC drops 5%":
+   manifest.json:
+   ${POWERS_FEWSHOT.manifest}
+   organ.js:
+   ${POWERS_FEWSHOT.code}
+   test.js:
+   ${POWERS_FEWSHOT.tests}`;
+
 export function ctxFor(chars: number): number {
   const tokens = Math.ceil((chars * 2) / 3.3) + 3000;
   return Math.min(32768, Math.max(8192, Math.ceil(tokens / 2048) * 2048));
@@ -10,6 +116,7 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
 
 1. manifest.json — {"id": "<kebab-case>", "name": "<Display Name>", "description": "<one line>", "version": 1, "permissions": [...]}
    Allowed permissions (request ONLY what the organ truly needs): "storage" (persistent key-value store), "model" (chat with the local model), "notify" (show a notification), "settings" (read/write user preferences — request only for settings-type organs).
+   Optional "powers" array (declare ONLY the capabilities the organ truly calls): "market" (read market data), "watch" (read the owner's watch feed), "timeline" (read commit history), "voice" (speak aloud), "notify" (glass toast notices), "pulse" (scheduled runs while LOOM is open). Each power is owner-approved and budgeted; full signatures arrive in a POWERS block when a request needs them.
 
 2. organ.js — an ES module:
    export default {
@@ -18,7 +125,7 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
        // el: the organ's root HTMLElement (render all UI inside it)
        // loom.storage.get(key, fallback) / loom.storage.set(key, value) / loom.storage.del(key)  [needs "storage"]
        // await loom.model.chat([{role:"user",content:"..."}]) -> string                            [needs "model"]
-       // loom.notify(text)                                                                          [needs "notify"]
+       // loom.notify(title, body?)                                                                 [needs "notify"]
        // loom.settings — request only for settings-type organs                                     [needs "settings"]
        //   loom.settings.get(key) -> string          whitelisted keys: voice.default (voice id),
        //                                               voice.speakReplies ("always"|"whenSpoken"|"never"),
@@ -136,9 +243,14 @@ Rules: complete files only, no placeholders or TODOs; small and focused; real fu
 
 export function organSystemPrompt(
   kind: "manifest" | "code" | "tests" | "edit" | "repair",
-  opts?: { exemplars?: string; lessons?: string }
+  opts?: { exemplars?: string; lessons?: string; request?: string }
 ): string {
   const base = `You are the Loom, the build engine inside LOOM, a sovereign offline computer. You write organs.\n\n${ORGAN_CONTRACT}\n\nOutput ONLY the requested file content in a single fenced code block. No prose before or after.`;
+
+  // Powers are documented only when the request smells like it needs them —
+  // plain widget builds keep a lean prompt.
+  const powersBlock =
+    opts?.request && requestImpliesPowers(opts.request) ? `\n\n${POWERS_CONTRACT}` : "";
 
   // Build experience injection block
   let experienceBlock = "";
@@ -149,8 +261,8 @@ export function organSystemPrompt(
     experienceBlock += `\n\nLESSONS FROM PAST FAILURES:\n${opts.lessons}`;
   }
 
-  // Insert experience block between contract (base) and task instruction
-  const baseWithExp = base + experienceBlock;
+  // Insert powers + experience blocks between contract (base) and task instruction
+  const baseWithExp = base + powersBlock + experienceBlock;
 
   switch (kind) {
     case "manifest": return baseWithExp + `\nNow output manifest.json only. Choose a short kebab-case id and the MINIMAL permissions the request needs.`;
