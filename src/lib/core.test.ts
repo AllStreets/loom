@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear, ShellUnavailableError, quoteFetch, marketChart, marketCrypto, marketBook, marketTrades, marketFx } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear, ShellUnavailableError, quoteFetch, marketChart, marketCrypto, marketBook, marketTrades, marketFx, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -146,6 +146,81 @@ describe("cloudKey wrappers", () => {
     invoke.mockResolvedValueOnce(undefined);
     await cloudKeyClear();
     expect(invoke).toHaveBeenCalledWith("cloud_key_clear");
+  });
+});
+
+// ── Kernel self-edit wrappers (Phase 21) ────────────────────────────────────────
+
+describe("kernel self-edit wrappers", () => {
+  it("kernelEditable passes sourceRepo (null when omitted) and returns meta", async () => {
+    invoke.mockResolvedValue({ root: "/repo", protected: ["src/main.tsx"] });
+    const meta = await kernelEditable();
+    expect(invoke).toHaveBeenCalledWith("kernel_editable", { sourceRepo: null });
+    expect(meta.root).toBe("/repo");
+    expect(meta.protected).toContain("src/main.tsx");
+  });
+
+  it("kernelEditable forwards a supplied sourceRepo override", async () => {
+    invoke.mockResolvedValue({ root: "/x", protected: [] });
+    await kernelEditable("/x");
+    expect(invoke).toHaveBeenCalledWith("kernel_editable", { sourceRepo: "/x" });
+  });
+
+  it("kernelRead passes path + null sourceRepo and returns contents", async () => {
+    invoke.mockResolvedValue("export const n = 1;");
+    const src = await kernelRead("src/hello.ts");
+    expect(invoke).toHaveBeenCalledWith("kernel_read", { path: "src/hello.ts", sourceRepo: null });
+    expect(src).toContain("const n");
+  });
+
+  it("kernelPropose passes edits and returns { worktreeId, diff }", async () => {
+    invoke.mockResolvedValue({ worktreeId: "wt1", diff: "--- a\n+++ b" });
+    const edits = [{ path: "src/hello.ts", search: "1", replace: "2" }];
+    const out = await kernelPropose(edits);
+    expect(invoke).toHaveBeenCalledWith("kernel_propose", { edits, sourceRepo: null });
+    expect(out.worktreeId).toBe("wt1");
+    expect(out.diff).toContain("+++");
+  });
+
+  it("kernelValidate passes worktreeId and returns { ok, stage, output }", async () => {
+    invoke.mockResolvedValue({ ok: false, stage: "tsc", output: "error TS2322" });
+    const v = await kernelValidate("wt1");
+    expect(invoke).toHaveBeenCalledWith("kernel_validate", { worktreeId: "wt1" });
+    expect(v.ok).toBe(false);
+    expect(v.stage).toBe("tsc");
+  });
+
+  it("kernelApply passes worktreeId + message and returns { sha, prevSha }", async () => {
+    invoke.mockResolvedValue({ sha: "newsha", prevSha: "oldsha" });
+    const a = await kernelApply("wt1", "tidy hello");
+    expect(invoke).toHaveBeenCalledWith("kernel_apply", { worktreeId: "wt1", message: "tidy hello" });
+    expect(a.sha).toBe("newsha");
+    expect(a.prevSha).toBe("oldsha");
+  });
+
+  it("kernelDiscard passes worktreeId", async () => {
+    invoke.mockResolvedValue(undefined);
+    await kernelDiscard("wt1");
+    expect(invoke).toHaveBeenCalledWith("kernel_discard", { worktreeId: "wt1" });
+  });
+
+  it("kernelRollback passes sha + null sourceRepo", async () => {
+    invoke.mockResolvedValue(undefined);
+    await kernelRollback("abc123");
+    expect(invoke).toHaveBeenCalledWith("kernel_rollback", { sha: "abc123", sourceRepo: null });
+  });
+
+  it("kernelBootOk invokes kernel_boot_ok with no args", async () => {
+    invoke.mockResolvedValue(undefined);
+    await kernelBootOk();
+    expect(invoke).toHaveBeenCalledWith("kernel_boot_ok");
+  });
+
+  it("kernelBootCheck passes null sourceRepo and returns { rolledBackTo }", async () => {
+    invoke.mockResolvedValue({ rolledBackTo: "prev7" });
+    const b = await kernelBootCheck();
+    expect(invoke).toHaveBeenCalledWith("kernel_boot_check", { sourceRepo: null });
+    expect(b.rolledBackTo).toBe("prev7");
   });
 });
 

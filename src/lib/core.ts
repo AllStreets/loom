@@ -98,6 +98,58 @@ export const organGrant = (id: string, grantedJson: string) =>
   safeInvoke<string>("organ_grant", { id, grantedJson });
 export const organDelete = (id: string) => safeInvoke<string>("organ_delete", { id });
 
+// ── Kernel self-edit wrappers (Phase 21 — the safety core) ──────────────────────
+//
+// These drive LOOM editing its own TypeScript kernel behind the five walls.
+// The live source tree is NEVER written until validate passes in an isolated
+// worktree AND the owner approves (approval is enforced by the Task-2 pipeline;
+// kernelApply is the ONLY wrapper that touches the live tree).
+//
+// `sourceRepo` is an optional dev override (Rust falls back to the process cwd
+// and asserts it's a git work dir). It maps to the Rust `source_repo` arg.
+
+export type KernelEdit = { path: string; search: string; replace: string };
+export type EditableMeta = { root: string; protected: string[] };
+export type KernelProposal = { worktreeId: string; diff: string };
+export type KernelValidation = { ok: boolean; stage: "tsc" | "vitest" | "ok"; output: string };
+export type KernelApplied = { sha: string; prevSha: string };
+export type KernelBootCheck = { rolledBackTo: string | null };
+
+/** Meta for the UI/prompt: resolved source-repo root + the protected carve-out. */
+export const kernelEditable = (sourceRepo?: string) =>
+  safeInvoke<EditableMeta>("kernel_editable", { sourceRepo: sourceRepo ?? null });
+
+/** Read an editable kernel file's current contents (rejected for protected paths). */
+export const kernelRead = (path: string, sourceRepo?: string) =>
+  safeInvoke<string>("kernel_read", { path, sourceRepo: sourceRepo ?? null });
+
+/** Isolate: create a worktree, apply the edits there, return the unified diff. */
+export const kernelPropose = (edits: KernelEdit[], sourceRepo?: string) =>
+  safeInvoke<KernelProposal>("kernel_propose", { edits, sourceRepo: sourceRepo ?? null });
+
+/** Validate: run tsc then targeted vitest in the worktree; first failure wins. */
+export const kernelValidate = (worktreeId: string) =>
+  safeInvoke<KernelValidation>("kernel_validate", { worktreeId });
+
+/** Commit: apply the validated patch to the LIVE tree + commit + write sentinel. */
+export const kernelApply = (worktreeId: string, message: string) =>
+  safeInvoke<KernelApplied>("kernel_apply", { worktreeId, message });
+
+/** Discard a proposal and remove its worktree (no live-tree effect). */
+export const kernelDiscard = (worktreeId: string) =>
+  safeInvoke<void>("kernel_discard", { worktreeId });
+
+/** Hard-reset the source repo to a sha. */
+export const kernelRollback = (sha: string, sourceRepo?: string) =>
+  safeInvoke<void>("kernel_rollback", { sha, sourceRepo: sourceRepo ?? null });
+
+/** Confirm a good boot after an edit → clears the pending sentinel. */
+export const kernelBootOk = () => safeInvoke<void>("kernel_boot_ok");
+
+/** Startup guard: if a prior edit never confirmed, rolls back and reports the sha. */
+export const kernelBootCheck = (sourceRepo?: string) =>
+  safeInvoke<KernelBootCheck>("kernel_boot_check", { sourceRepo: sourceRepo ?? null });
+
 // ── Voice wrappers ─────────────────────────────────────────────────────────────
 
 export const voiceStatus = () => safeInvoke<VoiceStatus>("voice_status");

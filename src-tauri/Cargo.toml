@@ -31,6 +31,12 @@ sherpa-rs = { version = "0.6", default-features = false, features = ["tts", "dow
 tar = "0.4"
 bzip2 = { version = "0.4", features = [] }
 
+# Unix-only: group-kill of a spawned validation tree (exec.rs / kernel.rs).
+# Re-added in Phase 21 (was removed in Phase 18) — used solely for
+# libc::kill(-pgid, SIGKILL) to take down npx→tsc/vitest grandchildren.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 
