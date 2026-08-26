@@ -16,6 +16,7 @@ function baseInputs(over: Partial<ProposeInputs> = {}): ProposeInputs {
     signals: [],
     weights: computeWeights([]),
     organs: [],
+    watchlistCount: 0,
     neverList: [],
     lastProposalTs: NOW - 2 * DAY, // past the 24h rate-limit
     now: NOW,
@@ -141,55 +142,56 @@ describe("proposeFromObservation — price-alert archetype", () => {
 
 describe("proposeFromObservation — morning-brief archetype", () => {
   it("4 watch opens + 3 briefs (watchOpens below gate of 5) → null", () => {
-    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 4, briefs: 3 }) });
+    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 4, briefs: 3 }), watchlistCount: 3 });
     expect(proposeFromObservation(inputs)).toBeNull();
   });
 
   it("5 watch opens + 2 briefs (briefs below gate of 3) → null", () => {
-    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 5, briefs: 2 }) });
+    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 5, briefs: 2 }), watchlistCount: 3 });
     expect(proposeFromObservation(inputs)).toBeNull();
   });
 
-  it("5 watch opens + 3 briefs (path A at gate) → fires", () => {
-    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 5, briefs: 3 }) });
+  it("5 watch opens + 3 briefs + a non-empty watchlist (path A at gate) → fires", () => {
+    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 5, briefs: 3 }), watchlistCount: 3 });
     const p = proposeFromObservation(inputs);
     expect(p).not.toBeNull();
     expect(p!.archetype).toBe("morning-brief");
     expect(p!.id).toBe("morning-brief");
+    expect(p!.rationale).toContain("3"); // quotes the real watchlist count
   });
 
-  it("path B: 3 morning sessions + non-empty watchlist (positive weights) → fires", () => {
-    const inputs = baseInputs({
-      ledger: ledgerWith({ morningActivity: 3 }),
-      weights: computeWeights(actSignals("science", 1)), // a positive weight exists
-    });
-    const p = proposeFromObservation(inputs);
-    expect(p).not.toBeNull();
-    expect(p!.archetype).toBe("morning-brief");
-  });
-
-  it("path B: 3 morning sessions but NO positive weights (empty watchlist proxy) → null", () => {
-    const inputs = baseInputs({ ledger: ledgerWith({ morningActivity: 3 }) });
+  it("path A fully met but an EMPTY watchlist → null (nothing to read aloud)", () => {
+    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 8, briefs: 5 }), watchlistCount: 0 });
     expect(proposeFromObservation(inputs)).toBeNull();
   });
 
-  it("path B: 2 morning sessions (below gate) + positive weights → null", () => {
-    const inputs = baseInputs({
-      ledger: ledgerWith({ morningActivity: 2 }),
-      weights: computeWeights(actSignals("science", 1)),
-    });
+  it("path B: 3 morning sessions + non-empty watchlist → fires", () => {
+    const inputs = baseInputs({ ledger: ledgerWith({ morningActivity: 3 }), watchlistCount: 4 });
+    const p = proposeFromObservation(inputs);
+    expect(p).not.toBeNull();
+    expect(p!.archetype).toBe("morning-brief");
+    expect(p!.rationale).toContain("4"); // the real watchlist count
+  });
+
+  it("path B: 3 morning sessions but an EMPTY watchlist → null", () => {
+    const inputs = baseInputs({ ledger: ledgerWith({ morningActivity: 3 }), watchlistCount: 0 });
+    expect(proposeFromObservation(inputs)).toBeNull();
+  });
+
+  it("path B: 2 morning sessions (below gate) + non-empty watchlist → null", () => {
+    const inputs = baseInputs({ ledger: ledgerWith({ morningActivity: 2 }), watchlistCount: 4 });
     expect(proposeFromObservation(inputs)).toBeNull();
   });
 
   it("request triggers requestImpliesPowers and declares pulse+watch+voice", () => {
-    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 6, briefs: 4 }) });
+    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 6, briefs: 4 }), watchlistCount: 2 });
     const p = proposeFromObservation(inputs)!;
     expect(requestImpliesPowers(p.request)).toBe(true);
     expect(p.powers.sort()).toEqual(["pulse", "voice", "watch"]);
   });
 
   it("rationale quotes the real watch-open count", () => {
-    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 7, briefs: 3 }) });
+    const inputs = baseInputs({ ledger: ledgerWith({ watchOpens: 7, briefs: 3 }), watchlistCount: 2 });
     const p = proposeFromObservation(inputs)!;
     expect(p.rationale).toContain("7");
   });
@@ -290,9 +292,11 @@ describe("proposeFromObservation — existing-organ exclusion", () => {
 
 describe("proposeFromObservation — selection", () => {
   it("when multiple rules fire, the highest-evidence one is chosen", () => {
-    // price-alert: 20 floor opens (very strong). morning-brief: barely at gate.
+    // price-alert: 20 floor opens (very strong). morning-brief: barely at gate
+    // (watchlist present so it genuinely fires and competes).
     const inputs = baseInputs({
       ledger: ledgerWith({ watchOpens: 5, briefs: 3, floor: { product: "BTC-USD", count: 20 } }),
+      watchlistCount: 3,
     });
     const p = proposeFromObservation(inputs)!;
     expect(p.archetype).toBe("price-alert");

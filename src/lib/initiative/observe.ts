@@ -105,10 +105,10 @@ function capCountMap(map: Record<string, number>, max: number): Record<string, n
 
 // ── Morning detection ─────────────────────────────────────────────────────────
 
-/** Local calendar-day key "YYYY-M-D" for dedupe. */
+/** Local calendar-day key "YYYY-M-D" for dedupe (month 1-indexed). */
 function dayKey(now: number): string {
   const d = new Date(now);
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
 /** True when `now` falls in the local 5am–11am window. */

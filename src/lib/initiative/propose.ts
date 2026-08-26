@@ -50,6 +50,12 @@ export interface ProposeInputs {
   signals: EngagementSignal[];
   weights: LearnedWeights;
   organs: OrganRef[];
+  /**
+   * How many entries are in the actual watch watchlist right now. morning-brief
+   * only proposes to read items aloud when there ARE items — an empty watchlist
+   * means the built organ would read nothing, so it must not fire.
+   */
+  watchlistCount: number;
   neverList: string[];
   lastProposalTs: number;
   now: number;
@@ -131,22 +137,29 @@ function matchKey(p: Proposal): string[] {
 // ── morning-brief ─────────────────────────────────────────────────────────────
 
 function ruleMorningBrief(inputs: ProposeInputs): Candidate | null {
-  const { ledger, weights } = inputs;
+  const { ledger, watchlistCount } = inputs;
   const watchOpens = ledger.watchOpens;
-  const briefSignals = (ledger.commands.brief ?? 0) + (ledger.commands.watch ?? 0);
+  const feedSignals = (ledger.commands.brief ?? 0) + (ledger.commands.watch ?? 0);
 
-  // Path A: heavy watch use AND explicit brief/watch asks.
-  const pathA = watchOpens >= MORNING_BRIEF_WATCH_OPENS && briefSignals >= MORNING_BRIEF_BRIEF_SIGNALS;
-  // Path B: a morning habit AND a non-empty watchlist (proxied by any positive weight).
-  const pathB = ledger.morningActivity >= MORNING_BRIEF_MORNINGS && hasPositiveWeight(weights);
+  // Either path requires an actual non-empty watchlist — an organ that reads
+  // "your top items aloud" is worthless (and dishonest to propose) with nothing
+  // on the watch. This is the load-bearing "buildable and worth having" guard.
+  if (watchlistCount <= 0) return null;
+
+  // Path A: heavy watch use AND explicit asks about the feed.
+  const pathA = watchOpens >= MORNING_BRIEF_WATCH_OPENS && feedSignals >= MORNING_BRIEF_BRIEF_SIGNALS;
+  // Path B: a morning habit (the watchlist gate above already applies).
+  const pathB = ledger.morningActivity >= MORNING_BRIEF_MORNINGS;
 
   if (!pathA && !pathB) return null;
 
+  // feedSignals combines "brief me" and watch/news asks — the rationale says so
+  // honestly rather than claiming they were all briefing requests.
   const rationale = pathA
-    ? `you opened watch ${watchOpens} times and asked me to brief you ${briefSignals} times. i could read your top items aloud each morning.`
-    : `you've been active ${ledger.morningActivity} mornings running, and you keep a watchlist. i could read your top items aloud each morning.`;
+    ? `you opened the watch ${watchOpens} times and asked about your feed ${feedSignals} times, and you keep ${watchlistCount} on the watch. i could read your top items aloud each morning.`
+    : `you've been active ${ledger.morningActivity} mornings running, and you keep ${watchlistCount} on the watch. i could read your top items aloud each morning.`;
 
-  const evidence = pathA ? watchOpens + briefSignals : ledger.morningActivity * 3;
+  const evidence = pathA ? watchOpens + feedSignals : ledger.morningActivity * 3;
 
   return {
     evidence,
@@ -218,13 +231,3 @@ function ruleTopicDigest(inputs: ProposeInputs): Candidate | null {
   };
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-function hasPositiveWeight(weights: LearnedWeights): boolean {
-  for (const kind of ["category", "source", "token"] as const) {
-    for (const w of Object.values(weights[kind])) {
-      if (w > 0) return true;
-    }
-  }
-  return false;
-}

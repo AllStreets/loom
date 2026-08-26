@@ -21,7 +21,7 @@ import { mountObserver, loadUsage } from "./observe";
 import { proposeFromObservation, type Proposal, type OrganRef } from "./propose";
 import { getInitiativeState } from "./store";
 import { getSetting } from "../voice/settings";
-import { getSignals } from "../watch/store";
+import { getSignals, getWatchlist } from "../watch/store";
 import { computeWeights } from "../watch/learned";
 import { organList } from "../core";
 
@@ -92,6 +92,7 @@ export function mountInitiative(): () => void {
       signals: getSignals(),
       weights: computeWeights(getSignals()),
       organs,
+      watchlistCount: getWatchlist().length,
       neverList: gov.neverList,
       lastProposalTs: gov.lastProposalTs,
       now: Date.now(),

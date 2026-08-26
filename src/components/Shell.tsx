@@ -378,7 +378,11 @@ export default function Shell() {
   // via Shuttle free-text or voice and a reply bubble needs the surface".
   useEffect(() => {
     if (!chatMin) return;
-    function onUtterance() {
+    function onUtterance(ev: Event) {
+      // An initiative "weave it" dispatches loom-utterance too, but the user
+      // didn't type it — respect their minimize and don't reveal a synthetic
+      // bubble. The proposal card + permission modal carry that flow.
+      if ((ev as CustomEvent).detail?.initiative === true) return;
       setChatMin(false);
       setSetting('cockpit.chatMin', 'off');
     }

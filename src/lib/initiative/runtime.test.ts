@@ -11,10 +11,11 @@ import { mountInitiative } from "./runtime";
 import { saveUsage, emptyLedger } from "./observe";
 import { setSetting } from "../voice/settings";
 
-// A ledger with 6 btc floor opens earns the price-alert archetype (gate ≥4).
+// A ledger with 6 BTC-USD floor opens earns the price-alert archetype (gate ≥4).
+// Use the real product key TerminalDeck dispatches, not a lowercase stand-in.
 function seedEarnedLedger() {
   const l = emptyLedger(Date.now());
-  l.floorOpens = { btc: 6 };
+  l.floorOpens = { "BTC-USD": 6 };
   saveUsage(l);
 }
 
@@ -47,7 +48,7 @@ describe("mountInitiative", () => {
     stop();
     unmount();
     expect(proposals).toHaveLength(1);
-    expect((proposals[0] as { id: string }).id).toBe("price-alert:btc");
+    expect((proposals[0] as { id: string }).id).toBe("price-alert:BTC-USD");
   });
 
   it("emits nothing when the setting is off", async () => {
@@ -80,7 +81,7 @@ describe("mountInitiative", () => {
 
     // An activity event fires while the card is still open — debounced eval must
     // not stack a second proposal.
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "btc" } }));
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
     await vi.runOnlyPendingTimersAsync();
     stop();
     unmount();
@@ -98,7 +99,7 @@ describe("mountInitiative", () => {
     // The guard clears; a fresh activity event should be able to re-emit since
     // the store still has lastProposalTs 0 (rate-limit not tripped).
     window.dispatchEvent(new CustomEvent("loom-proposal-closed"));
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "btc" } }));
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
     await vi.runOnlyPendingTimersAsync();
     stop();
     unmount();
@@ -113,7 +114,7 @@ describe("mountInitiative", () => {
     const countAtUnmount = proposals.length;
     unmount();
 
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "btc" } }));
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
     await vi.runOnlyPendingTimersAsync();
     stop();
     expect(proposals.length).toBe(countAtUnmount);
