@@ -269,6 +269,20 @@ Built organs had a toy ceiling: storage and a UI kit. *"Alert me when BTC drops 
 
 ---
 
+## Phase 20 — Initiative
+
+**Phase 20 — shipped.**
+
+Until now LOOM built only what you asked. It waited. A computer that builds *itself for you* shouldn't wait — so LOOM began to notice, and to propose.
+
+**Earned, never guessed.** LOOM keeps a private, local ledger of how you actually use it — which decks you visit, what you ask for, how often you open the watch, which markets you check. A deterministic observer — no model call, no cloud — reads that ledger against the salience it has already learned about you. When, and *only* when, the evidence crosses a real threshold, it forms an idea and shows its receipt: *"you opened the BTC floor 6 times. I could notify you when it moves more than 3% in an hour."* If it can't quote what you did, it stays silent — and silence is the common case, by design. This is the opposite of a paperclip that guesses.
+
+**Proposed, then consented.** The idea arrives as one calm card near the orb — the woven mark, the reasoning in plain words, and the powers the organ would ask for, shown up front. Three choices: **weave it**, **not now**, **never**. "Weave it" doesn't do anything special — it drops the sentence into the exact same build pipeline a typed request uses, so the organ still plans, tests, and self-proves in the sandbox, and you still approve its powers on the permission card before it runs. "Not now" buys a day of quiet. "Never" retires that idea forever.
+
+**Governed.** At most one idea a day. One setting silences it completely. Every "never" is remembered. The organs LOOM grows on its own initiative are marked as its own in the timeline. A machine that grows tools for you, only ever with your consent — no wrapper can ship that, because no wrapper builds itself.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -378,6 +392,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **17 · Depth** | the market engine (typed keyless sources: Yahoo UA-fixed · Coinbase Exchange · Frankfurter; 429 root cause dead) · Terminal depth (editable watchlist, symbol detail charts, crypto + FX strips, per-source health) · AGORA's native floor (order-book ladder, trades tape, launch strip) | **shipped** |
 | **18 · Excision** | AGORA removed entirely (spawn subsystem, deck, settings, voice — migration-clean) · the floor folds into the Terminal as the crypto detail overlay · four decks | **shipped** |
 | **19 · Vigor** | organs grow hands: six real powers (market · watch · timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
+| **20 · Initiative** | LOOM proposes organs unprompted — a local usage observer + a deterministic rules engine that only fires on earned evidence · a calm consented proposal card (weave it / not now / never) whose "weave it" flows into the normal build pipeline · rate-limited, silenceable, tombstoned | **shipped** |
 | **later** | EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)

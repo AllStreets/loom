@@ -130,6 +130,20 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - **Keyed-source opt-ins** — a Settings-gated slot for owner-supplied keys (e.g. Finnhub/Twelve Data free tiers) following the cloud-builder key pattern (write-only, Tauri-side storage), for owners who want deeper equities data than Yahoo's unofficial endpoint.
 - **Yahoo fragility** — the chart endpoint is unofficial; the UA fix + query2 retry hold today (live-verified), but if Yahoo hardens further, the engine's typed seam is where a replacement source lands. Monitor.
 
+### Phase-20 backlog (Initiative — deliberate non-goals)
+
+- **Model-phrased rationale** — proposal rationales are rule-generated calm copy quoting real counts; a later pass could let the companion rephrase them in a warmer voice (still no model call for *detection* — only for phrasing an already-earned idea).
+- **More archetypes** — v1 ships morning-brief / price-alert / topic-digest (all within the builder's proven power set). Adding archetypes is a rules-engine + threshold addition once more powers/organ patterns prove out.
+- **Proposal analytics / learning beyond never-list** — the observer doesn't yet learn from accept/reject rates to tune its own thresholds; a bandit-style confidence loop is possible but needs a sovereignty-safe design (local only).
+- **Richer usage observation** — floor-open and terminal-open are wired; deeper signals (dwell time, organ-usage frequency, time-of-day precision) would sharpen archetypes but widen the observation surface — add deliberately, stay local.
+
+### Resolved in Phase 20 (Initiative)
+
+- The observer — passive local usage ledger (`loom.usage.v1`, capped, corruption-tolerant); `foldUsage` pure reducer; `mountObserver` subscribes to existing events (`loom-deck`, `loom-utterance`, watch-open via `cockpit.watchOpen`, new `loom-floor-open`) — no feature-component edits, no polling. (`src/lib/initiative/observe.ts`)
+- The rules engine — pure `proposeFromObservation` with three earned archetypes (morning-brief pulse+watch+voice, price-alert pulse+market+notify, topic-digest pulse+watch+notify), hard evidence gates, stable ids, real-count rationales; returns null on empty/below-threshold/rate-limited/disabled/never-listed/already-installed — silence is the common case. (`src/lib/initiative/propose.ts`)
+- The proposal surface — calm glass card (z 1600, lower-center, woven glyph), weave-it/not-now/never; weave-it dispatches the same `loom-utterance` seam a typed build uses (`initiative: true` labels the experience only); first-proposal intro; one card at a time via debounced event-driven runtime + single-live guard. (`src/components/chrome/Proposal.tsx`, `src/lib/initiative/runtime.ts`)
+- Governance — `cockpit.initiative` setting (default on, Settings toggle), `loom.initiative.v1` store (`markProposed`/`addNever`, written on all three actions), `BuildRecord.proposalSource: "initiative"`. (`src/lib/initiative/store.ts`)
+
 ### Phase-19 backlog (Vigor — deliberate non-goals)
 
 - **OS-level notifications opt-in** — `loom.notify` is cockpit-native only; a Settings-gated bridge to macOS notifications (Tauri notification plugin) for owners who want alerts while LOOM is backgrounded.
