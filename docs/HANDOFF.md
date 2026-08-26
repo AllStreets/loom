@@ -1,6 +1,8 @@
-# LOOM — session handoff (2026-08-23)
+# LOOM — session handoff (updated 2026-08-26)
 
-*Written by Claude Fable 5 for the next model taking over. Read this, then `README.md` (roadmap table), `docs/BRAND.md`, and `docs/FOLLOWUPS.md`. Repo: `~/Downloads/LOOM`, remote `github.com/AllStreets/loom`, everything below is merged to `main` and pushed.*
+*Started by Claude Fable 5, continued by Claude Opus 4.8, for the next model taking over. Read this, then `README.md` (roadmap table), `docs/BRAND.md`, and `docs/FOLLOWUPS.md`. Repo: `~/Downloads/LOOM`, remote `github.com/AllStreets/loom`, everything below is merged to `main` and pushed.*
+
+> **Update 2026-08-26:** Phase 20 (Initiative) is SHIPPED (was "next up" below). The remaining unbuilt horizon is **Phase 21 — Selfhood** (kernel self-modification). See "Where we're going" — Phase 21 is unchanged and is now the immediate next phase.
 
 ## The vision
 
@@ -24,9 +26,9 @@ Diagnosis he agreed with: the surfaces got polished but the revolutionary loop h
 
 ## Where we're going
 
-**Phase 20 — Initiative (next up, not started).** LOOM observes how it's used and *proposes organs unprompted*: engagement signals + learned weights + deck/shuttle usage patterns → a rules-based observer (v1, no model call for detection; companion may phrase the proposal) → a calm proposal card ("the loom has an idea — build it / not now / never"), rate-limited (~1/day), "never" tombstoned. Approval flows into the NORMAL build pipeline with the Phase-19 permission card. The pitch: a machine that grows organs for you, governed by consent. No spec/plan written yet — follow the house rhythm below.
+**Phase 20 — Initiative (SHIPPED 2026-08-26).** LOOM observes usage and proposes organs unprompted. `src/lib/initiative/`: `observe.ts` (passive usage ledger `loom.usage.v1`, subscribes to existing events, no polling), `propose.ts` (pure deterministic rules engine — three earned archetypes morning-brief/price-alert/topic-digest, hard evidence gates, returns null as the common case), `store.ts` (`loom.initiative.v1` rate-limit + never-list), `runtime.ts` (debounced event-driven emit). `src/components/chrome/Proposal.tsx` = the calm card (weave it / not now / never); "weave it" dispatches the SAME `loom-utterance {..., initiative:true}` a typed build uses → normal pipeline + permission card. Setting `cockpit.initiative` (default on). Design principle enforced throughout: **earned, not guessed** — every proposal quotes real observed counts; a rule that can't must not fire (the review caught and we fixed a morning-brief path that would've fired on an empty watchlist). If extending: add archetypes as rules with hard evidence gates, keep detection model-free.
 
-**Phase 21 — Selfhood (after 20).** The guardrail flip: LOOM edits its own kernel source behind the walls that already exist (gate → git timeline → recovery boot). Sketch discussed: builder edits real kernel files; validation = tsc + targeted vitest via a Rust command; commit to timeline first; in dev, vite HMR shows the change live; packaged builds need a rebuild path (design carefully — the spawn machinery was deliberately deleted in 18, so any new spawn must be as hardened as `agora.rs` was: fixed argv, canonicalized paths, process-group kill). This is the headline claim of the whole project ("full self-modification" in the README roadmap's vision row). Treat it as the crown jewel: spec it tightly, review it adversarially.
+**Phase 21 — Selfhood (NEXT, not started).** The guardrail flip: LOOM edits its own kernel source behind the walls that already exist (gate → git timeline → recovery boot). Sketch discussed: builder edits real kernel files; validation = tsc + targeted vitest via a Rust command; commit to timeline first; in dev, vite HMR shows the change live; packaged builds need a rebuild path (design carefully — the spawn machinery was deliberately deleted in 18, so any new spawn must be as hardened as `agora.rs` was: fixed argv, canonicalized paths, process-group kill). This is the headline claim of the whole project ("full self-modification" in the README roadmap's vision row). Treat it as the crown jewel: spec it tightly, review it adversarially.
 
 ## How this codebase is worked (the house rhythm — keep it)
 
