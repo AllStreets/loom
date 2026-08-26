@@ -1091,6 +1091,8 @@ export default function TerminalDeck() {
   const openFloor = (product: string) => {
     setDetail(null);
     setFloor(product);
+    // Initiative observer listens for this — a floor open is real price interest.
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product } }));
   };
   const [crypto, setCrypto] = useState<SourceState<MarketCrypto[]>>({ data: null, updatedAt: 0, error: false });
   const [fx, setFx] = useState<SourceState<MarketFx>>({ data: null, updatedAt: 0, error: false });

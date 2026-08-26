@@ -252,6 +252,39 @@ describe("mountObserver", () => {
     unmount();
   });
 
+  it("folds a loom-floor-open event into the persisted ledger (per product)", () => {
+    const unmount = mountObserver();
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "ETH-USD" } }));
+    const l = loadUsage();
+    expect(l.floorOpens["BTC-USD"]).toBe(2);
+    expect(l.floorOpens["ETH-USD"]).toBe(1);
+    unmount();
+  });
+
+  it("ignores a floor-open with no product", () => {
+    const unmount = mountObserver();
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: {} }));
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: null }));
+    expect(loadUsage().floorOpens).toEqual({});
+    unmount();
+  });
+
+  it("a terminal deck visit folds a terminal-open (deck→terminal path)", () => {
+    const unmount = mountObserver();
+    window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "terminal" } }));
+    expect(loadUsage().terminalOpens).toBe(1);
+    unmount();
+  });
+
+  it("floor-open listener is removed on unmount", () => {
+    const unmount = mountObserver();
+    unmount();
+    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
+    expect(loadUsage().floorOpens).toEqual({});
+  });
+
   it("folds a watch-open (cockpit.watchOpen → on) settings change", () => {
     const unmount = mountObserver();
     window.dispatchEvent(

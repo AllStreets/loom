@@ -242,6 +242,25 @@ describe("buildOrgan", () => {
       expect(record.organId).toBe("runs");
     });
 
+    it("threads proposalSource: 'initiative' onto the success record when the build originated from a proposal (weave it)", async () => {
+      const spy = vi.spyOn(experienceModule, "recordExperience");
+      const deps = mkDeps({ proposalSource: "initiative" });
+      const r = await buildOrgan("track my runs", deps);
+      expect(r.ok).toBe(true);
+      expect(spy).toHaveBeenCalledOnce();
+      const [record] = spy.mock.calls[0];
+      expect(record.proposalSource).toBe("initiative");
+    });
+
+    it("omits proposalSource for an ordinary typed build", async () => {
+      const spy = vi.spyOn(experienceModule, "recordExperience");
+      const deps = mkDeps();
+      const r = await buildOrgan("track my runs", deps);
+      expect(r.ok).toBe(true);
+      const [record] = spy.mock.calls[0];
+      expect(record.proposalSource).toBeUndefined();
+    });
+
     it("recordExperience is called on gate failure", async () => {
       const spy = vi.spyOn(experienceModule, "recordExperience");
       const failGate = vi.fn().mockResolvedValue({

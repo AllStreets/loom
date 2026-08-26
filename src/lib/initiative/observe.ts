@@ -268,13 +268,22 @@ export function mountObserver(): () => void {
     }
   };
 
+  const onFloorOpen = (ev: Event) => {
+    // TerminalDeck's openFloor dispatches this when the crypto floor overlay
+    // opens — the sole evidence source for the price-alert archetype.
+    const product = (ev as CustomEvent<{ product?: string }>).detail?.product;
+    if (typeof product === "string" && product) fold({ type: "floor-open", product });
+  };
+
   window.addEventListener("loom-deck", onDeck);
   window.addEventListener("loom-utterance", onUtterance);
   window.addEventListener("loom-settings-changed", onSettings);
+  window.addEventListener("loom-floor-open", onFloorOpen);
 
   return () => {
     window.removeEventListener("loom-deck", onDeck);
     window.removeEventListener("loom-utterance", onUtterance);
     window.removeEventListener("loom-settings-changed", onSettings);
+    window.removeEventListener("loom-floor-open", onFloorOpen);
   };
 }

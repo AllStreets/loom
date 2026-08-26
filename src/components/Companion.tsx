@@ -611,7 +611,7 @@ export default function Companion() {
   const spokenTurnRef = useRef(false);
 
   // Stable ref to runTurn so the loom-utterance listener doesn't need to re-register
-  const runTurnRef = useRef<((utterance: string) => Promise<void>) | null>(null);
+  const runTurnRef = useRef<((utterance: string, opts?: { initiative?: boolean }) => Promise<void>) | null>(null);
 
   const convoRef = useRef<HTMLDivElement | null>(null);
 
@@ -674,9 +674,12 @@ export default function Companion() {
     setItems((prev) => prev.filter((item) => item.id !== id));
   }
 
-  async function runTurn(utterance: string) {
+  async function runTurn(utterance: string, opts?: { initiative?: boolean }) {
     if (busy || !utterance.trim()) return;
     const text = utterance.trim();
+    // When the turn originated from an unprompted LOOM proposal (weave it), the
+    // resulting build records proposalSource: "initiative" on its experience.
+    const fromInitiative = opts?.initiative === true;
     setBusy(true);
 
     // Mood: cancel any in-flight idle timer and start thinking
@@ -742,6 +745,7 @@ export default function Companion() {
           gate,
           onEvent: appendEventWithMood,
           getBrain: () => lastBrainRef.v,
+          ...(fromInitiative ? { proposalSource: "initiative" as const } : {}),
           ...(reviewOn ? { review: requestReview } : {}),
         }),
       edit: (id: string, req: string) =>
@@ -998,10 +1002,10 @@ export default function Companion() {
   // loom-utterance listener — triggered by voice PTT
   useEffect(() => {
     function onUtterance(ev: Event) {
-      const detail = (ev as CustomEvent<{ text: string; spoken?: boolean }>).detail;
+      const detail = (ev as CustomEvent<{ text: string; spoken?: boolean; initiative?: boolean }>).detail;
       if (!detail?.text) return;
       spokenTurnRef.current = detail.spoken === true;
-      void runTurnRef.current?.(detail.text);
+      void runTurnRef.current?.(detail.text, { initiative: detail.initiative === true });
     }
     window.addEventListener("loom-utterance", onUtterance);
     return () => window.removeEventListener("loom-utterance", onUtterance);

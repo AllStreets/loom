@@ -735,6 +735,63 @@ const ORGAN_JS = `export default {
     }
     appearancePage.appendChild(interactRow);
 
+    // Initiative section
+    appearancePage.appendChild(ui.section("Initiative"));
+
+    var initNote = document.createElement("div");
+    initNote.style.fontSize = "12px";
+    initNote.style.color = ui.tokens.t3;
+    initNote.style.marginBottom = "8px";
+    initNote.textContent = "Let LOOM propose organs from how you use it. Earned from your activity, one idea at a time, never a nag.";
+    appearancePage.appendChild(initNote);
+
+    var initOptions = [
+      { label: "On", value: "on", action: "initiative-on" },
+      { label: "Off", value: "off", action: "initiative-off" },
+    ];
+    var initBtns = [];
+    var initRow = document.createElement("div");
+    initRow.style.display = "flex";
+    initRow.style.gap = "6px";
+
+    function refreshInitBtns(current) {
+      for (var i = 0; i < initBtns.length; i++) {
+        var b = initBtns[i];
+        var isActive = b._value === current;
+        b.style.background = isActive ? ui.tokens.accent : "transparent";
+        b.style.color = isActive ? "#04222b" : ui.tokens.t1;
+        b.style.border = isActive ? "none" : "1px solid rgba(255,255,255,.18)";
+        b.style.fontWeight = isActive ? "700" : "600";
+      }
+    }
+
+    for (var iti = 0; iti < initOptions.length; iti++) {
+      (function(opt) {
+        var btn = document.createElement("button");
+        btn.className = "lui-btn";
+        btn.style.borderRadius = "8px";
+        btn.style.padding = "7px 14px";
+        btn.style.fontWeight = "600";
+        btn.style.fontSize = "14px";
+        btn.style.cursor = "pointer";
+        btn.style.fontFamily = "inherit";
+        btn.style.transition = "filter .15s, background .15s, border-color .15s";
+        btn.style.background = "transparent";
+        btn.style.border = "1px solid rgba(255,255,255,.18)";
+        btn.style.color = ui.tokens.t1;
+        btn.dataset.action = opt.action;
+        btn._value = opt.value;
+        btn.textContent = opt.label;
+        btn.addEventListener("click", function() {
+          settings.set("cockpit.initiative", opt.value);
+          refreshInitBtns(opt.value);
+        });
+        initBtns.push(btn);
+        initRow.appendChild(btn);
+      })(initOptions[iti]);
+    }
+    appearancePage.appendChild(initRow);
+
     // ========================================================================
     // PAGE: Building
     // ========================================================================
@@ -898,6 +955,7 @@ const ORGAN_JS = `export default {
     refreshOrbBtns(settings.get("orb.tier") || "auto");
     refreshTapBtns(settings.get("cockpit.tapestry") || "on");
     refreshInteractBtns(settings.get("cockpit.interact") || "on");
+    refreshInitBtns(settings.get("cockpit.initiative") || "on");
     refreshReviewBtns(settings.get("loom.reviewBeforeSave") || "0");
     refreshStatus();
     showPage("voice");
@@ -1106,6 +1164,24 @@ const TEST_JS = `export const tests = [
       confirmBtn.click();
       await new Promise(function(r) { setTimeout(r, 60); });
       assert(resetAllCalls === 1, "settings.resetAll called once (got: " + resetAllCalls + ")");
+    },
+  },
+  {
+    name: "initiative toggle sets cockpit.initiative via settings.set",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var appearanceNav = el.querySelector('[data-action="page-appearance"]');
+      assert(appearanceNav !== null, "page-appearance nav button exists");
+      appearanceNav.click();
+      await new Promise(function(r) { setTimeout(r, 30); });
+      var offBtn = el.querySelector('[data-action="initiative-off"]');
+      assert(offBtn !== null, "initiative-off button exists");
+      offBtn.click();
+      assert(loom.settings.get("cockpit.initiative") === "off", "initiative-off sets cockpit.initiative to off");
+      var onBtn = el.querySelector('[data-action="initiative-on"]');
+      assert(onBtn !== null, "initiative-on button exists");
+      onBtn.click();
+      assert(loom.settings.get("cockpit.initiative") === "on", "initiative-on sets cockpit.initiative to on");
     },
   },
   {

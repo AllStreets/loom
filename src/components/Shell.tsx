@@ -19,6 +19,8 @@ import { startWatch, stopWatch } from '../lib/watch/runtime';
 import Tapestry from './Tapestry';
 import LoomGlyph from './chrome/LoomGlyph';
 import Notices from './chrome/Notices';
+import Proposal from './chrome/Proposal';
+import { mountInitiative } from '../lib/initiative/runtime';
 import WatchPanel from './WatchPanel';
 import Shuttle from './Shuttle';
 import ErrorBoundary from './ErrorBoundary';
@@ -179,6 +181,15 @@ export default function Shell() {
     migrateSettings();
     startWatch();
     return () => stopWatch();
+  }, []);
+
+  // ----- Initiative runtime — the passive observer + the rules engine.
+  // Mounts the usage observer and evaluates (debounced, event-driven) whether
+  // LOOM has earned an idea; emits loom-proposal for the Proposal card. Unmounts
+  // every listener/timer on Shell unmount. -----
+  useEffect(() => {
+    const unmount = mountInitiative();
+    return unmount;
   }, []);
 
   // ----- loom-salience — increment unseen badge when panel is closed -----
@@ -963,6 +974,13 @@ export default function Shell() {
           under the top bar — above windows/dock, below modals) ── */}
       <ErrorBoundary zone="notices">
         <Notices />
+      </ErrorBoundary>
+
+      {/* ── Proposal: the initiative surface (z 1600 — above notices, below the
+          permission modal; lower-center, non-blocking). LOOM floats one earned
+          idea; weave it flows through the normal loom-utterance build seam. ── */}
+      <ErrorBoundary zone="proposal">
+        <Proposal />
       </ErrorBoundary>
 
       {/* ── Watch panel: collapsible salience feed (z 900, right side) ── */}

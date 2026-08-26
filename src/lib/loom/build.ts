@@ -21,6 +21,9 @@ export type BuildDeps = {
   /** Optional: returns the brain used by the most recent builder call.
    *  When provided, build.ts records brain in experience and emits a log line. */
   getBrain?: () => Brain;
+  /** Set when this build originated from an unprompted LOOM proposal (Phase 20).
+   *  Threaded onto the experience BuildRecord as proposalSource: "initiative". */
+  proposalSource?: "initiative";
 };
 
 // Re-export isBusy from flight for backward compat with LoomConsole/Companion imports
@@ -233,6 +236,7 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
       repairRounds,
       manifest: finalManifestCode, code, tests,
       brain,
+      ...(deps.proposalSource ? { proposalSource: deps.proposalSource } : {}),
     });
 
     return { ok: true, organId, sha, log, brain };
