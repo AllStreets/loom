@@ -15,6 +15,8 @@ export type BuildRecord = {
   errors?: string[];
   /** Which brain built this organ: "local" = local fleet, "cloud" = claude-opus-4-8 */
   brain?: "local" | "cloud";
+  /** Set when the build originated from an unprompted LOOM proposal (Phase 20). */
+  proposalSource?: "initiative";
 };
 
 const STORE_KEY = "loom.exp.v1";

@@ -35,8 +35,9 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("cockpit.tapestry");
     expect(SETTINGS_KEYS).toContain("cockpit.watchOpen");
     expect(SETTINGS_KEYS).toContain("cockpit.chatMin");
+    expect(SETTINGS_KEYS).toContain("cockpit.initiative");
     expect(SETTINGS_KEYS).toContain("terminal.symbols");
-    expect(SETTINGS_KEYS).toHaveLength(14);
+    expect(SETTINGS_KEYS).toHaveLength(15);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -379,6 +380,23 @@ describe("cockpit.watchOpen setting", () => {
 
   it("cockpit.watchOpen rejects unknown values", () => {
     expect(() => setSetting("cockpit.watchOpen", "maybe")).toThrow();
+  });
+});
+
+describe("cockpit.initiative setting", () => {
+  it("cockpit.initiative default is 'on'", () => {
+    expect(getSetting("cockpit.initiative")).toBe("on");
+  });
+
+  it("cockpit.initiative accepts 'on' and 'off'", () => {
+    setSetting("cockpit.initiative", "off");
+    expect(getSetting("cockpit.initiative")).toBe("off");
+    setSetting("cockpit.initiative", "on");
+    expect(getSetting("cockpit.initiative")).toBe("on");
+  });
+
+  it("cockpit.initiative rejects unknown values", () => {
+    expect(() => setSetting("cockpit.initiative", "maybe")).toThrow();
   });
 });
 

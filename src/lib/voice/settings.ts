@@ -72,6 +72,7 @@ export type SettingsKey =
   | "cockpit.tapestry"
   | "cockpit.watchOpen"
   | "cockpit.chatMin"
+  | "cockpit.initiative"
   | "terminal.symbols";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
@@ -88,6 +89,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "cockpit.tapestry",
   "cockpit.watchOpen",
   "cockpit.chatMin",
+  "cockpit.initiative",
   "terminal.symbols",
 ];
 
@@ -109,6 +111,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "cockpit.tapestry": ["on", "off"],
   "cockpit.watchOpen": ["on", "off"],
   "cockpit.chatMin": ["on", "off"],
+  "cockpit.initiative": ["on", "off"],
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -127,6 +130,9 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "cockpit.watchOpen": "off",
   // Default OFF — the typing box is present until its owner folds it away.
   "cockpit.chatMin": "off",
+  // Default ON — initiative is the vision; the toggle honors the house rule
+  // that any active surface must be silenceable.
+  "cockpit.initiative": "on",
   // The Terminal's default tape — the pre-watchlist hardcoded equities list.
   "terminal.symbols": "AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA",
 };

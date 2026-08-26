@@ -193,3 +193,17 @@ describe("experience store", () => {
     expect(ids).toContain(`org-${count - 1}`);
   });
 });
+
+describe("proposalSource — initiative provenance threads through recordExperience", () => {
+  it("defaults to undefined for a normal typed build", () => {
+    recordExperience(makeRecord({ organId: "typed" }));
+    const rec = listExperience().find((r) => r.organId === "typed")!;
+    expect(rec.proposalSource).toBeUndefined();
+  });
+
+  it("persists proposalSource: 'initiative' when set", () => {
+    recordExperience(makeRecord({ organId: "grown", proposalSource: "initiative" }));
+    const rec = listExperience().find((r) => r.organId === "grown")!;
+    expect(rec.proposalSource).toBe("initiative");
+  });
+});
