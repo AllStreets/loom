@@ -47,19 +47,34 @@ function dispatchReview(proposal: KernelReviewProposal) {
   window.dispatchEvent(new CustomEvent("loom-kernel-review", { detail: { proposal } }));
 }
 
+/** A full KernelDiffApi mock (approve + apply + discard). */
+function mockApi(
+  over: Partial<{
+    approve: ReturnType<typeof vi.fn>;
+    apply: ReturnType<typeof vi.fn>;
+    discard: ReturnType<typeof vi.fn>;
+  }> = {},
+) {
+  return {
+    approve: over.approve ?? vi.fn(async () => {}),
+    apply: over.apply ?? vi.fn(),
+    discard: over.discard ?? vi.fn(),
+  };
+}
+
 afterEach(() => {
   vi.clearAllMocks();
 });
 
 describe("KernelDiff", () => {
   it("does not render until a validated proposal arrives", () => {
-    const api = { apply: vi.fn(), discard: vi.fn() };
+    const api = mockApi();
     render(<KernelDiff api={api} />);
     expect(screen.queryByTestId("kernel-diff-card")).not.toBeInTheDocument();
   });
 
   it("shows the brand header, target path, and token-tinted diff on review", () => {
-    const api = { apply: vi.fn(), discard: vi.fn() };
+    const api = mockApi();
     render(<KernelDiff api={api} />);
     act(() => dispatchReview(sampleProposal()));
 
@@ -74,11 +89,18 @@ describe("KernelDiff", () => {
     expect(body.querySelector('[data-diff-kind="hunk"]')).not.toBeNull();
   });
 
-  it("Approve applies via the injected api, then shows the reload note", async () => {
-    const api = {
-      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+  it("Approve approves THEN applies via the injected api, then shows the reload note", async () => {
+    const order: string[] = [];
+    const api = mockApi({
+      approve: vi.fn(async () => {
+        order.push("approve");
+      }),
+      apply: vi.fn(async () => {
+        order.push("apply");
+        return { sha: "abc1234", prevSha: "def5678" };
+      }),
       discard: vi.fn(async () => {}),
-    };
+    });
     render(<KernelDiff api={api} />);
     act(() => dispatchReview(sampleProposal()));
 
@@ -86,6 +108,9 @@ describe("KernelDiff", () => {
       fireEvent.click(screen.getByTestId("kernel-diff-approve"));
     });
 
+    // approve MUST run before apply — the Rust-enforced gate.
+    expect(order).toEqual(["approve", "apply"]);
+    expect(api.approve).toHaveBeenCalledWith("wt-good");
     expect(api.apply).toHaveBeenCalledWith("wt-good", "make the mood bright");
     expect(api.discard).not.toHaveBeenCalled();
     // the calm "changed — reloading" note replaces the action buttons
@@ -94,10 +119,7 @@ describe("KernelDiff", () => {
   });
 
   it("Discard cleans up the worktree and closes without applying", async () => {
-    const api = {
-      apply: vi.fn(),
-      discard: vi.fn(async () => {}),
-    };
+    const api = mockApi({ discard: vi.fn(async () => {}) });
     render(<KernelDiff api={api} />);
     act(() => dispatchReview(sampleProposal()));
 
@@ -107,11 +129,12 @@ describe("KernelDiff", () => {
 
     expect(api.discard).toHaveBeenCalledWith("wt-good");
     expect(api.apply).not.toHaveBeenCalled();
+    expect(api.approve).not.toHaveBeenCalled();
     // discard removes the worktree without ever writing the live tree
   });
 
   it("shows only one card at a time (a live review ignores further proposals)", () => {
-    const api = { apply: vi.fn(), discard: vi.fn() };
+    const api = mockApi();
     render(<KernelDiff api={api} />);
     act(() => dispatchReview(sampleProposal({ targetPaths: ["src/lib/loom/moods.ts"] })));
     act(() => dispatchReview(sampleProposal({ worktreeId: "wt-2", targetPaths: ["src/lib/other.ts"] })));

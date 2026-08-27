@@ -125,15 +125,26 @@ describe("five-wall ordering — happy path", () => {
     if (!result.ok) throw new Error("expected ok");
 
     // Draft finished with no apply. Now the review card's Approve handler is the
-    // ONLY thing that can reach the live tree — via the separate export.
+    // ONLY thing that can reach the live tree — via the separate export, and
+    // only after an explicit approve (the Rust-enforced gate).
     expect(calls).not.toContain("apply");
-    const applied = await applyKernelEdit(result.worktreeId, "self: brighten", apply);
+    const approve = vi.fn(async () => {
+      calls.push("approve");
+    });
+    const applied = await applyKernelEdit(
+      result.worktreeId,
+      "self: brighten",
+      apply,
+      approve,
+    );
     expect(apply).toHaveBeenCalledTimes(1);
     expect(apply).toHaveBeenCalledWith("wt-0", "self: brighten");
     expect(applied).toEqual({ sha: "newsha", prevSha: "oldsha" });
-    // And it fired AFTER validation, not before.
+    // Ordering: validate → approve → apply, apply last.
     expect(calls.indexOf("validate")).toBeGreaterThan(-1);
+    expect(calls.indexOf("approve")).toBeGreaterThan(calls.indexOf("validate"));
     expect(calls[calls.length - 1]).toBe("apply");
+    expect(calls.indexOf("apply")).toBeGreaterThan(calls.indexOf("approve"));
   });
 });
 

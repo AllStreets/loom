@@ -1,4 +1,5 @@
 import React from "react";
+import { noteBootError } from "../lib/loom/recovery";
 
 interface Props {
   zone: string;
@@ -20,6 +21,11 @@ export default class ErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // Veto the boot-ok beacon (Finding 2): a boundaried crash is still a broken
+    // boot. noteBootError only MATTERS during the boot window — markBootOk reads
+    // it once, at settle — so always noting is safe and keeps this simple: a
+    // later, post-boot boundary catch is harmless (the beacon already fired).
+    noteBootError();
     console.debug("[ErrorBoundary] zone=" + this.props.zone, error, info);
   }
 

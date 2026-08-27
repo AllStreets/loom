@@ -113,7 +113,7 @@ export type EditableMeta = { root: string; protected: string[] };
 export type KernelProposal = { worktreeId: string; diff: string };
 export type KernelValidation = { ok: boolean; stage: "tsc" | "vitest" | "ok"; output: string };
 export type KernelApplied = { sha: string; prevSha: string };
-export type KernelBootCheck = { rolledBackTo: string | null };
+export type KernelBootCheck = { rolledBackTo: string | null; rollbackFailed: boolean };
 
 /** Meta for the UI/prompt: resolved source-repo root + the protected carve-out. */
 export const kernelEditable = (sourceRepo?: string) =>
@@ -130,6 +130,15 @@ export const kernelPropose = (edits: KernelEdit[], sourceRepo?: string) =>
 /** Validate: run tsc then targeted vitest in the worktree; first failure wins. */
 export const kernelValidate = (worktreeId: string) =>
   safeInvoke<KernelValidation>("kernel_validate", { worktreeId });
+
+/**
+ * Approve a validated proposal (the explicit gate the KernelDiff "approve the
+ * change" button triggers). Rust refuses this unless the proposal has already
+ * passed validation, and refuses kernel_apply unless BOTH validated AND
+ * approved are true — so the wall ordering is structural in Rust, not just here.
+ */
+export const kernelApprove = (worktreeId: string) =>
+  safeInvoke<void>("kernel_approve", { worktreeId });
 
 /** Commit: apply the validated patch to the LIVE tree + commit + write sentinel. */
 export const kernelApply = (worktreeId: string, message: string) =>

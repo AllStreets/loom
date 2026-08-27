@@ -3,7 +3,13 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { runBootCheck, markBootOk, RECOVERY_EVENT } from "./recovery";
+import {
+  runBootCheck,
+  markBootOk,
+  noteBootError,
+  bootHadError,
+  RECOVERY_EVENT,
+} from "./recovery";
 
 afterEach(() => vi.clearAllMocks());
 
@@ -43,16 +49,50 @@ describe("runBootCheck", () => {
 });
 
 describe("markBootOk", () => {
-  it("calls the boot-ok beacon", async () => {
+  it("calls the boot-ok beacon on a clean boot", async () => {
     const ok = vi.fn(async () => {});
-    await markBootOk(ok);
+    // Explicit hadError=false → a clean boot confirms.
+    const confirmed = await markBootOk(ok, () => false);
     expect(ok).toHaveBeenCalledTimes(1);
+    expect(confirmed).toBe(true);
   });
 
   it("swallows errors so recovery never becomes a boot hazard", async () => {
     const ok = vi.fn(async () => {
       throw new Error("no sentinel");
     });
-    await expect(markBootOk(ok)).resolves.toBeUndefined();
+    await expect(markBootOk(ok, () => false)).resolves.toBe(false);
+  });
+
+  it("does NOT confirm when an ErrorBoundary caught during boot (sentinel stays pending)", async () => {
+    // Finding 2: a boundaried crash is still a broken boot. The beacon must be
+    // suppressed so the NEXT boot rolls back.
+    const ok = vi.fn(async () => {});
+    const confirmed = await markBootOk(ok, () => true);
+    expect(ok).not.toHaveBeenCalled();
+    expect(confirmed).toBe(false);
+  });
+});
+
+describe("boot-health flag (Finding 2)", () => {
+  it("noteBootError flips bootHadError, and markBootOk reads it to veto confirmation", async () => {
+    // Uses the real module flag: before any note it is false; after a note the
+    // default markBootOk path suppresses the beacon.
+    // (No reset API by design — the flag is a one-way boot-window veto.)
+    const okBefore = vi.fn(async () => {});
+    // Drive the real default reader path when nothing has errored yet.
+    if (!bootHadError()) {
+      const confirmed = await markBootOk(okBefore);
+      expect(okBefore).toHaveBeenCalledTimes(1);
+      expect(confirmed).toBe(true);
+    }
+
+    noteBootError();
+    expect(bootHadError()).toBe(true);
+
+    const okAfter = vi.fn(async () => {});
+    const confirmed = await markBootOk(okAfter);
+    expect(okAfter).not.toHaveBeenCalled();
+    expect(confirmed).toBe(false);
   });
 });

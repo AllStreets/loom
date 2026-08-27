@@ -23,7 +23,7 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { kernelApply, kernelDiscard, type KernelApplied } from "../../lib/core";
+import { kernelApply, kernelApprove, kernelDiscard, type KernelApplied } from "../../lib/core";
 import { applyKernelEdit, discardKernelEdit } from "../../lib/loom/kernelBuild";
 
 /** z 2000 — the permission-modal tier: the only surfaces allowed to block. */
@@ -43,11 +43,13 @@ export type KernelReviewProposal = {
  * so no Tauri round-trip is needed and Approve/Discard can be asserted.
  */
 export type KernelDiffApi = {
+  approve: (worktreeId: string) => Promise<void>;
   apply: (worktreeId: string, message: string) => Promise<KernelApplied>;
   discard: (worktreeId: string) => Promise<void>;
 };
 
 const DEFAULT_API: KernelDiffApi = {
+  approve: (worktreeId) => kernelApprove(worktreeId),
   apply: (worktreeId, message) => kernelApply(worktreeId, message),
   discard: (worktreeId) => kernelDiscard(worktreeId),
 };
@@ -107,7 +109,7 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
     setBusy(true);
     try {
       const message = proposal.request.slice(0, 72);
-      await applyKernelEdit(proposal.worktreeId, message, api.apply);
+      await applyKernelEdit(proposal.worktreeId, message, api.apply, api.approve);
       // The change is committed to the live tree; Vite HMR hot-reloads it.
       // Show the calm note briefly, then close.
       setApplied(true);

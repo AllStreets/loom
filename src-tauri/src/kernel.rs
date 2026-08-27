@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 // ── Timeouts ────────────────────────────────────────────────────────────────
@@ -182,6 +182,47 @@ fn head_sha(root: &Path) -> Result<String, LoomError> {
     Ok(git_ok(root, root, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
+// ── Validator toolchain resolution (Finding 8) ────────────────────────────────
+//
+// `kernel_validate` must not spawn `npx` resolved from an inherited PATH on
+// every call: a PATH hijacked between startup and a validate call could swap in
+// a validator that lies. Instead we resolve the ABSOLUTE path of `npx` ONCE (a
+// OnceLock cache) by walking PATH ourselves, and use that absolute path as
+// argv[0] thereafter — keeping the fixed-argv discipline intact.
+//
+// Residual, stated honestly: if PATH is ALREADY hijacked at process startup the
+// machine is already compromised and no in-process check can save it. This
+// removes the *per-call re-resolution* window, not that root compromise.
+
+static NPX_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Walk `PATH` looking for an executable named `bin` (with common Windows
+/// extensions on that platform). Returns the first absolute match.
+fn which(bin: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let exts: &[&str] = if cfg!(windows) {
+        &["", ".cmd", ".exe", ".bat"]
+    } else {
+        &[""]
+    };
+    for dir in std::env::split_paths(&path) {
+        for ext in exts {
+            let cand = dir.join(format!("{bin}{ext}"));
+            if cand.is_file() {
+                // Canonicalize so argv[0] is a stable absolute path.
+                return cand.canonicalize().ok().or(Some(cand));
+            }
+        }
+    }
+    None
+}
+
+/// The absolute `npx` path, resolved once and cached. `None` if unresolvable —
+/// in which case `kernel_validate` fails honestly (can't prove → can't pass).
+fn npx_path() -> Option<PathBuf> {
+    NPX_PATH.get_or_init(|| which("npx")).clone()
+}
+
 // ── SEARCH/REPLACE (exact, unique) ─────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +268,14 @@ struct Proposal {
     worktree: PathBuf,
     base_sha: String,
     edits: Vec<(String, String, String)>, // (rel, search, replace) — validated editable
+    /// WALL ORDERING (structural, Rust-enforced): a proposal starts unvalidated
+    /// and unapproved. `kernel_validate` sets `validated = true` ONLY on a fully
+    /// passing result (tsc AND vitest). `kernel_approve` sets `approved = true`
+    /// ONLY if `validated`. `kernel_apply` refuses to touch the live tree unless
+    /// BOTH are true. This makes "apply straight after propose" impossible at the
+    /// Tauri IPC boundary, not merely in the TS orchestrator.
+    validated: bool,
+    approved: bool,
 }
 
 static REGISTRY: Mutex<Option<HashMap<String, Proposal>>> = Mutex::new(None);
@@ -240,13 +289,19 @@ fn with_registry<T>(f: impl FnOnce(&mut HashMap<String, Proposal>) -> T) -> T {
 /// Remove a worktree directory and prune the source repo's worktree metadata.
 /// Best-effort but thorough — used on every error path and on apply/discard.
 fn cleanup_worktree(source_root: &Path, worktree: &Path) {
-    // `git worktree remove --force` unregisters and deletes it.
-    let _ = git(
-        source_root,
-        source_root,
-        &["worktree", "remove", "--force", &worktree.to_string_lossy()],
-    );
-    // If the dir somehow survives (removed out of band), nuke it.
+    // `git worktree remove --force` unregisters and deletes it. If the path is
+    // not valid UTF-8 we can't form the git argv (fixed-argv discipline forbids
+    // lossy coercion) — fall straight through to remove_dir_all, which takes a
+    // &Path and needs no UTF-8 (Finding 4).
+    if let Some(wt) = worktree.to_str() {
+        let _ = git(
+            source_root,
+            source_root,
+            &["worktree", "remove", "--force", wt],
+        );
+    }
+    // If the dir somehow survives (removed out of band, or git couldn't form the
+    // command above), nuke it directly — &Path, no UTF-8 required.
     if worktree.exists() {
         let _ = std::fs::remove_dir_all(worktree);
     }
@@ -260,7 +315,13 @@ fn cleanup_worktree(source_root: &Path, worktree: &Path) {
 pub struct Sentinel {
     pub prev_sha: String,
     pub applied_sha: String,
-    pub status: String, // "pending" | "ok"
+    pub status: String, // "pending" | "ok" | "rollback-failed"
+    /// The resolved absolute repo path the edit was applied to (Finding 6).
+    /// Recovery rolls back USING THIS, never the process cwd — so a shell
+    /// launched from a different directory still targets the right repo.
+    /// Defaulted for backward-compat with sentinels written before this field.
+    #[serde(default)]
+    pub source_root: String,
 }
 
 fn sentinel_path(app: &tauri::AppHandle) -> Result<PathBuf, LoomError> {
@@ -317,6 +378,12 @@ pub struct ApplyOut {
 pub struct BootCheckOut {
     #[serde(rename = "rolledBackTo")]
     pub rolled_back_to: Option<String>,
+    /// A distinct, honest signal when a pending edit was found but the rollback
+    /// itself FAILED (sha gc'd/corrupt) — the sentinel has been rewritten to
+    /// "rollback-failed" so the next boot does NOT retry forever (Finding 7).
+    /// The shell surfaces this so the user isn't silently stranded.
+    #[serde(rename = "rollbackFailed")]
+    pub rollback_failed: bool,
 }
 
 /// The full protected list surfaced to the UI/prompt (concrete + prefixes +
@@ -375,17 +442,23 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
         cleanup_worktree(source_root, &worktree);
     }
 
-    // WALL 1 (isolation): detached worktree at HEAD.
+    // WALL 1 (isolation): detached worktree at HEAD. Use to_str (NOT
+    // to_string_lossy) so a non-UTF-8 worktree path is refused honestly rather
+    // than silently corrupted into a path git can't remove later (Finding 4).
+    let worktree_str = match worktree.to_str() {
+        Some(s) => s,
+        None => {
+            cleanup_worktree(source_root, &worktree);
+            return Err(LoomError::Parse(format!(
+                "worktree path is not valid UTF-8: {}",
+                worktree.display()
+            )));
+        }
+    };
     if let Err(e) = git_ok(
         source_root,
         source_root,
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            &worktree.to_string_lossy(),
-            &base_sha,
-        ],
+        &["worktree", "add", "--detach", worktree_str, &base_sha],
     ) {
         cleanup_worktree(source_root, &worktree);
         return Err(e);
@@ -445,6 +518,8 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
                 worktree: worktree.clone(),
                 base_sha: base_sha.clone(),
                 edits: applied,
+                validated: false,
+                approved: false,
             },
         );
     });
@@ -499,10 +574,25 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
     let prop = with_registry(|reg| reg.get(&worktree_id).cloned())
         .ok_or_else(|| LoomError::NotFound(format!("unknown worktreeId: {worktree_id}")))?;
 
+    // Re-validation resets the gate: a validate call must re-prove the current
+    // proposal from scratch, so clear validated (and, since re-validating means
+    // the prior decision is stale, approved) BEFORE running the checks. Only a
+    // fully-passing result at the end sets validated = true (Finding 1/5).
+    set_flags(&worktree_id, false, false);
+
+    // Resolve the validator's ABSOLUTE path once (Finding 8). If npx can't be
+    // found we cannot prove the edit is safe → we must not pass.
+    let npx = npx_path().ok_or_else(|| {
+        LoomError::NotFound("npx not found on PATH — cannot validate".into())
+    })?;
+    let npx = npx
+        .to_str()
+        .ok_or_else(|| LoomError::Parse("npx path is not valid UTF-8".into()))?;
+
     // WALL 2 (validation): tsc first, then targeted vitest. Fixed argv; cwd is
     // the worktree, asserted under itself. First failure returns stage+output.
     let tsc = run_checked(
-        &["npx", "tsc", "--noEmit"],
+        &[npx, "tsc", "--noEmit"],
         &prop.worktree,
         &prop.worktree,
         TSC_TIMEOUT,
@@ -528,7 +618,7 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
     // De-dup while preserving order.
     targets.dedup();
 
-    let mut argv: Vec<&str> = vec!["npx", "vitest", "run"];
+    let mut argv: Vec<&str> = vec![npx, "vitest", "run"];
     for t in &targets {
         argv.push(t.as_str());
     }
@@ -543,11 +633,26 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
         });
     }
 
+    // Fully passing (tsc AND vitest) → mark validated. This is the ONLY place
+    // validated flips true, and apply refuses without it (Finding 1/5).
+    set_flags(&worktree_id, true, false);
+
     Ok(ValidateOut {
         ok: true,
         stage: "ok".into(),
         output: String::new(),
     })
+}
+
+/// Mutate the validated/approved flags of a registered proposal in place.
+/// No-op if the proposal is gone (already applied/discarded).
+fn set_flags(worktree_id: &str, validated: bool, approved: bool) {
+    with_registry(|reg| {
+        if let Some(p) = reg.get_mut(worktree_id) {
+            p.validated = validated;
+            p.approved = approved;
+        }
+    });
 }
 
 /// `.test`/`.spec` sibling candidates for a source file (both .ts and .tsx).
@@ -567,6 +672,40 @@ fn test_siblings(rel: &str) -> Vec<String> {
     out
 }
 
+/// The structural apply gate (Finding 1/5): the live tree may be written ONLY
+/// when the proposal is both validated AND approved. Extracted so the exact
+/// refusal logic is unit-testable without an AppHandle.
+fn check_apply_gate(validated: bool, approved: bool) -> Result<(), LoomError> {
+    if !validated || !approved {
+        return Err(LoomError::Parse(format!(
+            "refusing apply: proposal must be validated AND approved first \
+             (validated={validated}, approved={approved})"
+        )));
+    }
+    Ok(())
+}
+
+/// Approve a validated proposal (the explicit gate the KernelDiff "approve the
+/// change" button triggers). Sets `approved = true` — but ONLY if the proposal
+/// has already been `validated`. This is the structural wall between
+/// review-and-approve and apply: approve can never precede validate (Finding
+/// 1/5). Returns a typed error if the proposal is unknown or not yet validated.
+#[tauri::command]
+pub fn kernel_approve(worktree_id: String) -> Result<(), LoomError> {
+    with_registry(|reg| {
+        let p = reg
+            .get_mut(&worktree_id)
+            .ok_or_else(|| LoomError::NotFound(format!("unknown worktreeId: {worktree_id}")))?;
+        if !p.validated {
+            return Err(LoomError::Parse(
+                "cannot approve: proposal has not passed validation (tsc + vitest)".into(),
+            ));
+        }
+        p.approved = true;
+        Ok(())
+    })
+}
+
 #[tauri::command]
 pub fn kernel_apply(
     app: tauri::AppHandle,
@@ -575,6 +714,21 @@ pub fn kernel_apply(
 ) -> Result<ApplyOut, LoomError> {
     let prop = with_registry(|reg| reg.get(&worktree_id).cloned())
         .ok_or_else(|| LoomError::NotFound(format!("unknown worktreeId: {worktree_id}")))?;
+
+    // WALL ORDERING, ENFORCED IN RUST (Finding 1/5). The live tree is NEVER
+    // written unless this proposal is BOTH validated AND approved. This check
+    // runs BEFORE any live-tree write in apply_inner, so a caller cannot skip
+    // validate/approve by invoking kernel_apply straight after kernel_propose at
+    // the Tauri IPC boundary.
+    //
+    // TRUST BOUNDARY (honest): the only code that can reach these commands is
+    // same-realm JS in the main window. Organs run in sandboxed iframes and
+    // cannot invoke Tauri commands at all. So the residual trust is "our own
+    // main-window JS"; the validated+approved flags make the wall ordering
+    // STRUCTURAL — apply can never fire straight after propose, even from that
+    // same-realm JS, because the flags live in Rust and only the real
+    // validate→approve calls flip them.
+    check_apply_gate(prop.validated, prop.approved)?;
 
     let out = apply_inner(&prop, &message);
 
@@ -595,6 +749,9 @@ pub fn kernel_apply(
             prev_sha: prev_sha.clone(),
             applied_sha: sha.clone(),
             status: "pending".into(),
+            // Record the ABSOLUTE repo path so recovery rolls back THIS repo,
+            // never a cwd-derived guess (Finding 6).
+            source_root: prop.source_root.to_string_lossy().to_string(),
         },
     )?;
 
@@ -704,22 +861,65 @@ pub fn kernel_boot_check(
     source_repo: Option<String>,
 ) -> Result<BootCheckOut, LoomError> {
     let sp = sentinel_path(&app)?;
-    let Some(s) = read_sentinel(&sp) else {
-        return Ok(BootCheckOut { rolled_back_to: None });
-    };
-    if s.status == "pending" {
-        // A prior edit applied but the shell never confirmed a good boot →
-        // undo it BEFORE the webview loads the suspect code.
-        let root = resolve_source_repo(source_repo.as_deref())?;
-        rollback_to(&root, &s.prev_sha)?;
-        // Clear the sentinel so we don't loop.
-        let _ = std::fs::remove_file(&sp);
+    decide_boot_at(&sp, source_repo.as_deref())
+}
+
+/// The app-independent core of the boot decision. Testable without an
+/// AppHandle. `source_repo_override` is a last-resort fallback ONLY used when a
+/// legacy sentinel carries no `source_root` of its own.
+fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootCheckOut, LoomError> {
+    let Some(s) = read_sentinel(sp) else {
         return Ok(BootCheckOut {
-            rolled_back_to: Some(s.prev_sha),
+            rolled_back_to: None,
+            rollback_failed: false,
+        });
+    };
+    if s.status != "pending" {
+        // "ok" | "rollback-failed" | anything else → noop. A prior boot already
+        // resolved this sentinel; we never retry a rollback (Finding 7).
+        return Ok(BootCheckOut {
+            rolled_back_to: None,
+            rollback_failed: false,
         });
     }
-    // status == "ok" (or anything else) → noop.
-    Ok(BootCheckOut { rolled_back_to: None })
+
+    // A prior edit applied but the shell never confirmed a good boot → undo it
+    // BEFORE the webview loads the suspect code. Roll back the repo the edit was
+    // ACTUALLY applied to: the sentinel's own source_root (Finding 6), falling
+    // back to the override/cwd only for legacy sentinels with no source_root.
+    let root: PathBuf = if !s.source_root.trim().is_empty() {
+        PathBuf::from(&s.source_root)
+    } else {
+        resolve_source_repo(source_repo_override)?
+    };
+
+    match rollback_to(&root, &s.prev_sha) {
+        Ok(()) => {
+            // Success → remove the sentinel; the tree is home to prev_sha.
+            let _ = std::fs::remove_file(sp);
+            Ok(BootCheckOut {
+                rolled_back_to: Some(s.prev_sha),
+                rollback_failed: false,
+            })
+        }
+        Err(_) => {
+            // FAILURE (sha gc'd/corrupt, wrong repo, …). We must NEVER leave the
+            // sentinel "pending", or every boot would retry forever and strand
+            // the user (Finding 7). Rewrite it to "rollback-failed" so the next
+            // boot is a noop, and surface the distinct signal honestly. Best
+            // effort: if even the rewrite fails, remove the file so we still
+            // can't loop.
+            let mut failed = s.clone();
+            failed.status = "rollback-failed".into();
+            if write_sentinel(sp, &failed).is_err() {
+                let _ = std::fs::remove_file(sp);
+            }
+            Ok(BootCheckOut {
+                rolled_back_to: None,
+                rollback_failed: true,
+            })
+        }
+    }
 }
 
 /// Called early in Tauri setup (lib.rs). Swallows errors into a log-friendly
@@ -727,7 +927,16 @@ pub fn kernel_boot_check(
 /// broken edit if we safely can", not "refuse to start".
 pub fn boot_recover(app: &tauri::AppHandle) -> Option<String> {
     match kernel_boot_check(app.clone(), None) {
-        Ok(b) => b.rolled_back_to,
+        Ok(b) => {
+            if b.rollback_failed {
+                eprintln!(
+                    "[kernel] recovery boot: a pending edit was found but rollback FAILED — \
+                     sentinel marked rollback-failed so we do not loop; the tree may still \
+                     hold the suspect edit"
+                );
+            }
+            b.rolled_back_to
+        }
         Err(_) => None,
     }
 }
@@ -941,6 +1150,115 @@ mod tests {
         assert!(fs::read_to_string(root.join("src/hello.ts")).unwrap().contains("n = 1"));
     }
 
+    // ── WALL ORDERING enforced in Rust (Finding 1/5) ────────────────────────────
+    //
+    // These drive the flag lifecycle through the real registry + kernel_approve
+    // + set_flags + the extracted apply gate, proving apply is refused unless
+    // validated AND approved, in the exact orders the walls demand.
+
+    /// Propose a real edit and return its worktreeId (registered, flags false).
+    fn propose_registered(root: &Path) -> String {
+        let edits = vec![KernelEdit {
+            path: "src/hello.ts".into(),
+            search: "n = 1".into(),
+            replace: "n = 5".into(),
+        }];
+        propose_inner(root, &edits).unwrap().worktree_id
+    }
+
+    fn flags_of(id: &str) -> (bool, bool) {
+        with_registry(|reg| {
+            let p = reg.get(id).unwrap();
+            (p.validated, p.approved)
+        })
+    }
+
+    #[test]
+    fn apply_gate_refuses_without_validate() {
+        let (_d, root) = init_repo();
+        let id = propose_registered(&root);
+        // Fresh proposal: neither flag set.
+        assert_eq!(flags_of(&id), (false, false));
+        // The gate the command runs BEFORE any live write refuses it.
+        assert!(check_apply_gate(false, false).is_err());
+        kernel_discard(id).unwrap();
+    }
+
+    #[test]
+    fn approve_before_validate_refused() {
+        let (_d, root) = init_repo();
+        let id = propose_registered(&root);
+        // approve with validated=false → typed refusal, approved stays false.
+        let res = kernel_approve(id.clone());
+        assert!(matches!(res, Err(LoomError::Parse(_))), "got {res:?}");
+        assert_eq!(flags_of(&id), (false, false));
+        kernel_discard(id).unwrap();
+    }
+
+    #[test]
+    fn validate_then_apply_without_approve_refused() {
+        let (_d, root) = init_repo();
+        let id = propose_registered(&root);
+        // Simulate a passing validation (the ONLY thing that sets validated).
+        set_flags(&id, true, false);
+        assert_eq!(flags_of(&id), (true, false));
+        // Approve was NOT called → apply gate still refuses.
+        let (v, a) = flags_of(&id);
+        assert!(check_apply_gate(v, a).is_err(), "validate alone must not open apply");
+        kernel_discard(id).unwrap();
+    }
+
+    #[test]
+    fn validate_then_approve_then_apply_ok() {
+        let (_d, root) = init_repo();
+        let id = propose_registered(&root);
+        set_flags(&id, true, false); // validation passed
+        kernel_approve(id.clone()).unwrap(); // owner approved
+        let (v, a) = flags_of(&id);
+        assert_eq!((v, a), (true, true));
+        // Now — and only now — the gate opens; apply_inner writes the live tree.
+        check_apply_gate(v, a).unwrap();
+        let prop = with_registry(|reg| reg.get(&id).cloned()).unwrap();
+        let (sha, _prev) = apply_inner(&prop, "ordered").unwrap();
+        assert!(!sha.is_empty());
+        assert!(fs::read_to_string(root.join("src/hello.ts")).unwrap().contains("n = 5"));
+        kernel_discard(id).unwrap();
+    }
+
+    #[test]
+    fn revalidate_resets_flags_coherently() {
+        let (_d, root) = init_repo();
+        let id = propose_registered(&root);
+        // Reach validated+approved, then a re-validation must reset BOTH so a
+        // stale approval can never ride a fresh (unproven) validation.
+        set_flags(&id, true, true);
+        assert_eq!(flags_of(&id), (true, true));
+        // kernel_validate clears both up front (mirrors the reset it performs).
+        set_flags(&id, false, false);
+        assert_eq!(flags_of(&id), (false, false));
+        // A failed re-validation leaves validated=false → gate stays shut.
+        assert!(check_apply_gate(false, false).is_err());
+        // A passing re-validation sets validated only; approve is required again.
+        set_flags(&id, true, false);
+        assert!(check_apply_gate(true, false).is_err());
+        kernel_discard(id).unwrap();
+    }
+
+    // ── validator toolchain resolver (Finding 8) ────────────────────────────────
+
+    #[test]
+    fn npx_resolver_returns_absolute_path_or_skips() {
+        // Skip-guard like the existing ignored live tests: if npx is absent this
+        // asserts nothing (can't prove a resolver that has nothing to resolve).
+        match npx_path() {
+            Some(p) => {
+                assert!(p.is_absolute(), "resolved npx must be absolute: {}", p.display());
+                assert!(p.exists(), "resolved npx must exist: {}", p.display());
+            }
+            None => eprintln!("SKIP npx_resolver_returns_absolute_path_or_skips: npx not on PATH"),
+        }
+    }
+
     // ── boot_check decision table (pure sentinel logic) ─────────────────────────
 
     #[test]
@@ -950,7 +1268,8 @@ mod tests {
         let sp = sp_dir.path().join("kernel-boot.json");
 
         // absent → None
-        assert!(decide_boot(&sp, &root).unwrap().is_none());
+        let out = decide_boot_at(&sp, None).unwrap();
+        assert!(out.rolled_back_to.is_none() && !out.rollback_failed);
 
         // Simulate an apply: prev, then a real second commit as applied.
         let prev = head_sha(&root).unwrap();
@@ -961,35 +1280,102 @@ mod tests {
         // ok → noop (tree stays at applied)
         write_sentinel(
             &sp,
-            &Sentinel { prev_sha: prev.clone(), applied_sha: applied.clone(), status: "ok".into() },
+            &Sentinel {
+                prev_sha: prev.clone(),
+                applied_sha: applied.clone(),
+                status: "ok".into(),
+                source_root: root.to_string_lossy().to_string(),
+            },
         )
         .unwrap();
-        assert!(decide_boot(&sp, &root).unwrap().is_none());
+        let out = decide_boot_at(&sp, None).unwrap();
+        assert!(out.rolled_back_to.is_none() && !out.rollback_failed);
         assert_eq!(head_sha(&root).unwrap(), applied);
 
-        // pending → rollback to prev + clear sentinel
+        // pending → rollback to prev USING THE SENTINEL'S OWN source_root
+        // (Finding 6: no override supplied; the rollback still targets `root`).
         write_sentinel(
             &sp,
-            &Sentinel { prev_sha: prev.clone(), applied_sha: applied.clone(), status: "pending".into() },
+            &Sentinel {
+                prev_sha: prev.clone(),
+                applied_sha: applied.clone(),
+                status: "pending".into(),
+                source_root: root.to_string_lossy().to_string(),
+            },
         )
         .unwrap();
-        let rolled = decide_boot(&sp, &root).unwrap();
-        assert_eq!(rolled.as_deref(), Some(prev.as_str()));
+        let out = decide_boot_at(&sp, None).unwrap();
+        assert_eq!(out.rolled_back_to.as_deref(), Some(prev.as_str()));
+        assert!(!out.rollback_failed);
         assert_eq!(head_sha(&root).unwrap(), prev);
         assert!(!sp.exists(), "sentinel must be cleared after rollback");
     }
 
-    // App-independent core of kernel_boot_check, for testing without AppHandle.
-    fn decide_boot(sp: &Path, root: &Path) -> Result<Option<String>, LoomError> {
-        let Some(s) = read_sentinel(sp) else {
-            return Ok(None);
-        };
-        if s.status == "pending" {
-            rollback_to(root, &s.prev_sha)?;
-            let _ = std::fs::remove_file(sp);
-            return Ok(Some(s.prev_sha));
-        }
-        Ok(None)
+    #[test]
+    fn boot_check_uses_sentinel_source_root_not_cwd() {
+        // Finding 6: recovery must target the repo the edit was applied to,
+        // carried IN the sentinel, regardless of cwd / a missing override.
+        let (_d, root) = init_repo();
+        let sp_dir = tempfile::tempdir().unwrap();
+        let sp = sp_dir.path().join("kernel-boot.json");
+
+        let prev = head_sha(&root).unwrap();
+        fs::write(root.join("src/hello.ts"), "export const n = 7;\n").unwrap();
+        run(&root, &["commit", "-aqm", "self: applied"]);
+        let applied = head_sha(&root).unwrap();
+        assert_ne!(prev, applied);
+
+        write_sentinel(
+            &sp,
+            &Sentinel {
+                prev_sha: prev.clone(),
+                applied_sha: applied.clone(),
+                status: "pending".into(),
+                source_root: root.to_string_lossy().to_string(),
+            },
+        )
+        .unwrap();
+
+        // No override — the ONLY way this can roll back `root` is by reading the
+        // sentinel's own source_root.
+        let out = decide_boot_at(&sp, None).unwrap();
+        assert_eq!(out.rolled_back_to.as_deref(), Some(prev.as_str()));
+        assert_eq!(head_sha(&root).unwrap(), prev);
+    }
+
+    #[test]
+    fn boot_check_rollback_failure_does_not_loop() {
+        // Finding 7: if rollback_to fails (prev_sha absent/corrupt), we must NOT
+        // leave "pending" — rewrite to "rollback-failed" so the next boot is a
+        // noop, and surface the distinct signal.
+        let (_d, root) = init_repo();
+        let sp_dir = tempfile::tempdir().unwrap();
+        let sp = sp_dir.path().join("kernel-boot.json");
+
+        write_sentinel(
+            &sp,
+            &Sentinel {
+                // A sha that does not exist in the repo → reset must fail.
+                prev_sha: "0".repeat(40),
+                applied_sha: head_sha(&root).unwrap(),
+                status: "pending".into(),
+                source_root: root.to_string_lossy().to_string(),
+            },
+        )
+        .unwrap();
+
+        // First boot: rollback fails → distinct signal, sentinel rewritten.
+        let out = decide_boot_at(&sp, None).unwrap();
+        assert!(out.rolled_back_to.is_none());
+        assert!(out.rollback_failed, "must surface the failure honestly");
+        assert!(sp.exists(), "sentinel rewritten, not left dangling");
+        let s = read_sentinel(&sp).unwrap();
+        assert_eq!(s.status, "rollback-failed");
+
+        // Second boot: status is no longer "pending" → NOOP, no retry loop.
+        let out2 = decide_boot_at(&sp, None).unwrap();
+        assert!(out2.rolled_back_to.is_none());
+        assert!(!out2.rollback_failed, "must not retry a resolved sentinel");
     }
 
     // ── SKIP-GUARDED real-tsc integration test ─────────────────────────────────

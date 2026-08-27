@@ -340,12 +340,20 @@ export function extractPath(raw: string): string | null {
  * tree. It is intentionally NOT reachable from draftKernelEdit — the review
  * card's Approve handler calls it, and only after a successful draft (which
  * proves tsc+vitest passed) and the owner's explicit approval of the diff.
+ *
+ * The owner's approval is carried into Rust FIRST: `approve` flips the Rust-side
+ * `approved` flag (which Rust refuses unless the proposal already validated),
+ * and only then does `apply` run — Rust refuses apply unless BOTH validated AND
+ * approved. So the wall ordering is enforced structurally in Rust; this function
+ * simply wires the KernelDiff "approve the change" click to that gate.
  */
 export async function applyKernelEdit(
   worktreeId: string,
   message: string,
   apply: (worktreeId: string, message: string) => Promise<KernelApplied>,
+  approve: (worktreeId: string) => Promise<void>,
 ): Promise<KernelApplied> {
+  await approve(worktreeId);
   return apply(worktreeId, message);
 }
 

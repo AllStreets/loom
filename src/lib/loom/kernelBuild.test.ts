@@ -190,15 +190,44 @@ describe("draftKernelEdit — malformed draft", () => {
 });
 
 describe("applyKernelEdit — the only live-tree write", () => {
-  it("applies only when explicitly called (the review card's Approve)", async () => {
+  it("approves THEN applies (the review card's Approve carries the owner's gate)", async () => {
+    const order: string[] = [];
+    const approve = vi.fn(async () => {
+      order.push("approve");
+    });
     const apply = vi.fn<
       (worktreeId: string, message: string) => Promise<KernelApplied>
-    >(async () => ({ sha: "abc123", prevSha: "def456" }));
+    >(async () => {
+      order.push("apply");
+      return { sha: "abc123", prevSha: "def456" };
+    });
 
-    const applied = await applyKernelEdit("wt-good", "self: brighten the mood", apply);
+    const applied = await applyKernelEdit(
+      "wt-good",
+      "self: brighten the mood",
+      apply,
+      approve,
+    );
 
+    // approve MUST precede apply — Rust refuses apply without approved=true.
+    expect(order).toEqual(["approve", "apply"]);
+    expect(approve).toHaveBeenCalledWith("wt-good");
     expect(apply).toHaveBeenCalledWith("wt-good", "self: brighten the mood");
     expect(applied).toEqual({ sha: "abc123", prevSha: "def456" });
+  });
+
+  it("does NOT apply if approve throws (Rust refused the gate)", async () => {
+    const approve = vi.fn(async () => {
+      throw new Error("cannot approve: proposal has not passed validation");
+    });
+    const apply = vi.fn<
+      (worktreeId: string, message: string) => Promise<KernelApplied>
+    >(async () => ({ sha: "x", prevSha: "y" }));
+
+    await expect(
+      applyKernelEdit("wt-good", "msg", apply, approve),
+    ).rejects.toThrow(/cannot approve/);
+    expect(apply).not.toHaveBeenCalled();
   });
 });
 
