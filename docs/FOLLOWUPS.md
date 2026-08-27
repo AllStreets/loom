@@ -130,6 +130,21 @@ Items deferred from the Stage-1 spec non-goals and reviewer notes. Address in th
 - **Keyed-source opt-ins** — a Settings-gated slot for owner-supplied keys (e.g. Finnhub/Twelve Data free tiers) following the cloud-builder key pattern (write-only, Tauri-side storage), for owners who want deeper equities data than Yahoo's unofficial endpoint.
 - **Yahoo fragility** — the chart endpoint is unofficial; the UA fix + query2 retry hold today (live-verified), but if Yahoo hardens further, the engine's typed seam is where a replacement source lands. Monitor.
 
+### Phase-22 backlog (Selfhood, next horizon)
+
+- **Rust-core self-edit** — Phase 21 is TS-kernel only (`src/**`); editing `src-tauri/**` needs `cargo check` validation + a recompile, which HMR can't do. Design a hardened compiler spawn (the `exec.rs` runner is the seam) + a rebuild-and-relaunch path.
+- **Packaged self-rebuild** — dev-mode hot-reloads an approved edit live; a packaged app has no compiler. A supervised `npm run build` + `tauri build` + relaunch (hardened spawn, obvious "rebuilding LOOM" UI, recovery on failure) would extend self-editing beyond dev. High risk — spec adversarially.
+- **Multi-file / refactor edits** — v1 favors small bounded single-region edits; broader refactors across files need a larger diff-review surface and staged validation.
+- **Kernel-edit history surface** — the source-repo commits from self-edits (`self:` messages) could surface in a timeline view (the Tapestry already weaves source commits — a filtered "what LOOM changed about itself" lens).
+- **boot_recover honoring a sourceRepo override** — recovery boot resolves the repo via cwd (correct for dev-mode scope); if a non-default `kernel.sourceRepo` is ever supported, persist it somewhere Rust can read at boot.
+
+### Resolved in Phase 21 (Selfhood)
+
+- The safety core — `exec.rs` hardened command runner (fixed argv, canonicalized cwd under the source repo, process-group kill, timeout, ring-capped output); `kernel.rs` with worktree isolation, positive path whitelist + protected carve-out (self-protection invariant), SEARCH/REPLACE apply, source-repo timeline, `kernel_apply` as the sole live-tree write, recovery-boot sentinel + `boot_recover` wired before the webview loads. Real-`tsc` integration test proves the validation wall catches breakage. (`src-tauri/src/exec.rs`, `src-tauri/src/kernel.rs`, `src-tauri/src/lib.rs`)
+- The walls (TS) — `kernelBuild.ts` pipeline (draft → propose → validate → bounded repair → review; apply structurally reachable only after validate+approval), `KernelDiff.tsx` diff-review card ("LOOM wants to change itself"), recovery beacon + notice (in protected paths), `self_edit` intent routing, dev-only guard (`import.meta.env.DEV`). (`src/lib/loom/kernelBuild.ts`, `src/components/chrome/KernelDiff.tsx`, `src/lib/loom/recovery.ts`, `src/components/chrome/recoveryNotice.tsx`)
+- Builder self-edit knowledge — conditional `SELF_EDIT_CONTRACT` + worked example, injected only for self-edit drafting; ordering-proof test (apply never precedes validate+approval). (`src/lib/loom/prompts.ts`)
+- Honest scope note: the live HMR self-edit loop (real model + running app) is owner-verified in dev, not headless-CI-provable; CI proves the five-wall ordering, the whitelist/self-protection, the spawn hardening, recovery-boot decisions, and (via the real-`tsc` test) that validation genuinely catches breakage.
+
 ### Phase-20 backlog (Initiative — deliberate non-goals)
 
 - **Model-phrased rationale** — proposal rationales are rule-generated calm copy quoting real counts; a later pass could let the companion rephrase them in a warmer voice (still no model call for *detection* — only for phrasing an already-earned idea).

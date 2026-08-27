@@ -283,6 +283,26 @@ Until now LOOM built only what you asked. It waited. A computer that builds *its
 
 ---
 
+## Phase 21 — Selfhood
+
+**Phase 21 — shipped.**
+
+Until now, one thing was always off-limits: the kernel — the code LOOM itself lives in. Organs were free; the machine's own body was not. This is the flip. **LOOM edits its own source, and it cannot brick itself doing it.**
+
+The whole design is the safety. An edit to LOOM's own kernel passes five walls, in order, and can skip none:
+
+1. **Isolation.** LOOM's model drafts the change, but it is never written to the running code. The core spins up an isolated git worktree and applies it there. The live app is untouched while it's judged.
+2. **Proof.** In that isolation, LOOM runs the *real* compiler and the *real* test suite — `tsc` and `vitest` — over the change. Not a sandbox approximation: the same checks that guard every human commit. If it fails, LOOM's builder reads the compiler's own errors and repairs its edit, then proves it again. If it can't be made to pass, it's abandoned and the live tree never knew.
+3. **Approval.** You see the actual diff — the exact lines, added and removed, in the file LOOM wants to change — under a card that says plainly *LOOM wants to change itself*. You approve or you discard. Always.
+4. **Commit.** Only then does the change touch the live tree, as a git commit to LOOM's own source, with the prior state recorded as the last known good.
+5. **Recovery.** And if a change that passed every wall still somehow breaks the running app, LOOM comes home: on the next start it detects that the last edit never confirmed a healthy boot and rolls itself back to the last good commit, before the suspect code even loads. It cannot strand you.
+
+**It cannot edit its own conscience.** One invariant sits above the rest: LOOM may edit its kernel, but never the machinery that keeps the kernel safe — the validator, the isolation, the recovery boot, the approval gate, or the list of what's protected. That set is carved out and refused in the core, before an edit is ever isolated. A machine that can rewrite itself but not disable its own safety.
+
+This first turn is deliberately bounded — the TypeScript kernel, running from source in dev, where an approved change hot-reloads live in front of you. The Rust core and packaged-app self-rebuilds are the next horizon. But the thing the whole project was named for is now real: a computer that weaves itself into being, and can reach back and reweave the loom.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -393,7 +413,8 @@ Built in phases, each a working, tested, reviewed milestone.
 | **18 · Excision** | AGORA removed entirely (spawn subsystem, deck, settings, voice — migration-clean) · the floor folds into the Terminal as the crypto detail overlay · four decks | **shipped** |
 | **19 · Vigor** | organs grow hands: six real powers (market · watch · timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
 | **20 · Initiative** | LOOM proposes organs unprompted — a local usage observer + a deterministic rules engine that only fires on earned evidence · a calm consented proposal card (weave it / not now / never) whose "weave it" flows into the normal build pipeline · rate-limited, silenceable, tombstoned | **shipped** |
-| **later** | EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · mid-Earth chat overlay polish · full self-modification (kernel included) · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
+| **21 · Selfhood** | LOOM edits its own TypeScript kernel behind five walls — isolated-worktree validation (real tsc + vitest) · owner diff-approval · commit to source + hot-reload · recovery boot that rolls back a bad edit · a self-protection invariant (it cannot edit its own safety machinery) | **shipped** |
+| **later** | Rust-core self-edit + packaged self-rebuild (Phase 22) · EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 
