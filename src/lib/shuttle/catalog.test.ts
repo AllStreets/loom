@@ -174,6 +174,26 @@ describe("buildCatalog — build group", () => {
   });
 });
 
+describe("buildCatalog — system self-edit entry routes to self_edit", () => {
+  it("has a self-edit template whose completion classifies as self_edit", () => {
+    const entry = catalog().find((e) => e.id === "system-self-edit");
+    expect(entry).toBeDefined();
+    expect(entry!.group).toBe("system");
+    expect(entry!.kind).toBe("template");
+    // completing the template routes to self_edit (never a normal organ build)
+    const completed = entry!.phrase.replace(/…\s*$/, "") + "brighten the orb";
+    expect(classifyByRules(completed, [])?.intent).toBe("self_edit");
+    // aliases also classify as self_edit (given a target)
+    for (const alias of entry!.aliases) {
+      const withTarget = /your$/.test(alias) ? `${alias} orb moods` : alias;
+      expect(
+        classifyByRules(withTarget, [])?.intent,
+        `"${withTarget}" must be self_edit`,
+      ).toBe("self_edit");
+    }
+  });
+});
+
 // ── fuzzyFilter ──────────────────────────────────────────────────────────────
 
 describe("fuzzyFilter", () => {

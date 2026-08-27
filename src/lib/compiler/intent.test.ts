@@ -512,3 +512,35 @@ describe("classifyByRules — help", () => {
     expect(classifyByRules("how are you?", [])?.intent).toBe("converse");
   });
 });
+
+// ---- self_edit (Phase 21 — LOOM editing its own kernel) --------------------
+
+describe("classifyByRules — self_edit", () => {
+  it("routes 'change yourself …' to self_edit", () => {
+    expect(classifyByRules("change yourself so the orb is brighter", [])?.intent).toBe(
+      "self_edit",
+    );
+  });
+
+  it("routes 'edit your <x>' to self_edit", () => {
+    expect(classifyByRules("edit your companion prompt", [])?.intent).toBe("self_edit");
+  });
+
+  it("routes 'rewrite your own <x>' to self_edit", () => {
+    expect(classifyByRules("rewrite your own mood logic", [])?.intent).toBe("self_edit");
+  });
+
+  it("takes precedence over build/edit verbs (the possessive is unambiguous)", () => {
+    // "change" is an EDIT_VERB and "make" a BUILD phrase, but "yourself"/"your"
+    // must win — this is LOOM editing itself, never an organ.
+    expect(classifyByRules("change your orb color", ["orb"])?.intent).toBe("self_edit");
+    expect(classifyByRules("improve yourself", [])?.intent).toBe("self_edit");
+  });
+
+  it("does NOT fire for organ edits that mention no self-possessive", () => {
+    expect(classifyByRules("change the water tracker color", ["water-tracker"])?.intent).toBe(
+      "edit_organ",
+    );
+    expect(classifyByRules("build me a sleep tracker", [])?.intent).toBe("build_organ");
+  });
+});

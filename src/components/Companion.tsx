@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, type OrganFile, type Msg, type ChatOpts, type Brain } from "../lib/core";
+import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelDiscard, type OrganFile, type Msg, type ChatOpts, type Brain } from "../lib/core";
+import { draftKernelEdit, resolveSelfEditTarget, type KernelBuildEvent } from "../lib/loom/kernelBuild";
+import type { KernelReviewProposal } from "./chrome/KernelDiff";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
@@ -53,12 +55,18 @@ type ReviewCard = {
   id: string;
 };
 
+type SelfEditBlockedCard = {
+  kind: "self-edit-blocked";
+  id: string;
+};
+
 type ConvoItem =
   | MsgBubble
   | EventLogCard
   | SuccessCard
   | FailureCard
-  | ReviewCard;
+  | ReviewCard
+  | SelfEditBlockedCard;
 
 // ---------------------------------------------------------------------------
 // Shared style tokens (mirror LoomConsole visual language)
@@ -527,6 +535,45 @@ function ReviewCardView({
   );
 }
 
+// The honest dev-only state: self-editing needs the source repo under `tauri
+// dev`. Packaged builds (or a browser with no source repo) show this instead
+// of proceeding — self-modification is a Phase-21 dev capability.
+function SelfEditBlockedView() {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
+      <CyanDot />
+      <div
+        data-testid="self-edit-blocked"
+        style={{
+          flex: 1,
+          background: "rgba(248,113,113,0.06)",
+          border: "1px solid rgba(248,113,113,0.22)",
+          borderRadius: 8,
+          padding: "12px 14px",
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            letterSpacing: ".14em",
+            textTransform: "uppercase",
+            color: "var(--danger)",
+            marginBottom: 6,
+          }}
+        >
+          self-editing
+        </div>
+        <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}>
+          changing myself needs dev mode — run me from source under{" "}
+          <span style={{ fontFamily: "var(--f-mono)", color: "var(--t2)" }}>tauri dev</span>.
+          a packaged build can't rewrite its own kernel.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Error mapping — raw exceptions never reach the UI
 // ---------------------------------------------------------------------------
@@ -672,6 +719,87 @@ export default function Companion() {
     }
     // Remove the review card from the list
     setItems((prev) => prev.filter((item) => item.id !== id));
+  }
+
+  // ── self-edit routing (the walls) ─────────────────────────────────────────
+  // The deliberate, weightier act: LOOM editing its OWN kernel. DEV-ONLY.
+  // Guarded structurally: draftKernelEdit never applies — on success we dispatch
+  // loom-kernel-review so the KernelDiff card (Approve → applyKernelEdit) owns
+  // the only live-tree write, after the owner sees the validated diff.
+  async function runSelfEdit(
+    request: string,
+    chat: (role: string, messages: Msg[], opts?: ChatOpts) => Promise<string>,
+    emit: (e: BuildEvent) => void,
+  ): Promise<void> {
+    // Dev-only guard: packaged (import.meta.env.DEV false) OR no source repo
+    // (kernelEditable throws) → honest "needs dev mode" state, no pipeline.
+    if (!import.meta.env.DEV) {
+      appendItem({ kind: "self-edit-blocked", id: nextId() });
+      return;
+    }
+    try {
+      await kernelEditable();
+    } catch {
+      appendItem({ kind: "self-edit-blocked", id: nextId() });
+      return;
+    }
+
+    emit({ ts: Date.now(), phase: "self", detail: "resolving the target file..." });
+    const target = await resolveSelfEditTarget(request, {
+      chat,
+      read: (p: string) => kernelRead(p),
+    });
+    if (!target) {
+      emit({ ts: Date.now(), phase: "self", detail: "could not find an editable file for that — try naming the file" });
+      appendItem({
+        kind: "failure",
+        stage: "self-edit",
+        error: "I couldn't find an editable kernel file for that request. Try naming the file (e.g. \"edit your orb moods\").",
+        utterance: request,
+        id: nextId(),
+      });
+      return;
+    }
+    emit({ ts: Date.now(), phase: "self", detail: `target: ${target}` });
+
+    const draft = await draftKernelEdit(request, target, {
+      chat,
+      read: (p: string) => kernelRead(p),
+      propose: (edits) => kernelPropose(edits),
+      validate: (wt) => kernelValidate(wt),
+      discard: (wt) => kernelDiscard(wt),
+      onEvent: (e: KernelBuildEvent) =>
+        emit({ ts: e.ts, phase: e.phase, detail: e.detail, role: "builder" }),
+    });
+
+    if (!draft.ok) {
+      appendItem({
+        kind: "failure",
+        stage: draft.stage,
+        error: draft.error,
+        utterance: request,
+        id: nextId(),
+      });
+      return;
+    }
+
+    // Validated in isolation — hand the diff to the review card. This is the
+    // ONLY path to a live-tree write, and it goes through the owner's Approve.
+    const proposal: KernelReviewProposal = {
+      worktreeId: draft.worktreeId,
+      diff: draft.diff,
+      targetPaths: draft.targetPaths,
+      request,
+    };
+    window.dispatchEvent(
+      new CustomEvent("loom-kernel-review", { detail: { proposal } }),
+    );
+    appendItem({
+      kind: "bubble",
+      role: "assistant",
+      text: "I drafted a change to myself and proved it in isolation — review the diff above the fold.",
+      id: nextId(),
+    });
   }
 
   async function runTurn(utterance: string, opts?: { initiative?: boolean }) {
@@ -829,6 +957,14 @@ export default function Companion() {
     });
 
     // Process turn result
+    if (turn.kind === "self_edit") {
+      await runSelfEdit(turn.request, chatWithActivity, appendEventWithMood);
+      dispatchFleetActivity(null);
+      spokenTurnRef.current = false;
+      idleTimer.current = settleMood();
+      setBusy(false);
+      return;
+    }
     if (turn.kind === "reply") {
       const replyText = turn.text;
       appendItem({ kind: "bubble", role: "assistant", text: replyText, id: nextId() });
@@ -1164,6 +1300,9 @@ export default function Companion() {
                 onSettle={settleReview}
               />
             );
+          }
+          if (item.kind === "self-edit-blocked") {
+            return <SelfEditBlockedView key={item.id} />;
           }
           return null;
         })}

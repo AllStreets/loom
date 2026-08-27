@@ -20,6 +20,9 @@ import Tapestry from './Tapestry';
 import LoomGlyph from './chrome/LoomGlyph';
 import Notices from './chrome/Notices';
 import Proposal from './chrome/Proposal';
+import KernelDiff from './chrome/KernelDiff';
+import RecoveryNotice from './chrome/recoveryNotice';
+import { runBootCheck, markBootOk } from '../lib/loom/recovery';
 import { mountInitiative } from '../lib/initiative/runtime';
 import WatchPanel from './WatchPanel';
 import Shuttle from './Shuttle';
@@ -173,6 +176,31 @@ export default function Shell() {
   // Refs for the listening ring animation
   const ringRef = useRef<HTMLDivElement | null>(null);
   const ringRafRef = useRef<number | null>(null);
+
+  // ----- Recovery boot (fifth wall) — check early, confirm once settled -----
+  // On boot: runBootCheck asks Rust whether a prior self-edit failed to confirm
+  // a good boot; if so Rust already rolled the source tree back and this reports
+  // the sha (recovery.ts dispatches the notice event). Then, once this shell has
+  // mounted and first paint settled, markBootOk clears the pending sentinel —
+  // THIS boot held, so the last applied edit is confirmed good. Fires once.
+  const bootBeaconFired = useRef(false);
+  useEffect(() => {
+    if (bootBeaconFired.current) return;
+    bootBeaconFired.current = true;
+    // Early check — the RecoveryNotice card renders whatever it reports.
+    void runBootCheck();
+    // Confirm after first paint settles (two rAFs → after layout+paint).
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const raf1 = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        t = setTimeout(() => { void markBootOk(); }, 400);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (t) clearTimeout(t);
+    };
+  }, []);
 
   // ----- Boot migration + watch runtime — start with shell, stop on unmount -----
   useEffect(() => {
@@ -996,6 +1024,21 @@ export default function Shell() {
           through the same loom-utterance seam voice transcripts take) ── */}
       <ErrorBoundary zone="shuttle">
         <Shuttle />
+      </ErrorBoundary>
+
+      {/* ── Recovery notice: "an edit didn't hold — LOOM came home to <sha>"
+          (z 1550 — above notices, below the permission modal). One-shot,
+          listens on the recovery event runBootCheck dispatched. ── */}
+      <ErrorBoundary zone="recovery-notice">
+        <RecoveryNotice />
+      </ErrorBoundary>
+
+      {/* ── KernelDiff: the self-edit review card — the third wall made visible
+          (z 2000 — the permission-modal tier; the only surface that may block).
+          Appears ONLY on a validated loom-kernel-review event; Approve is the
+          ONLY live-tree write in the whole self-edit surface. ── */}
+      <ErrorBoundary zone="kernel-diff">
+        <KernelDiff />
       </ErrorBoundary>
 
       {/* ── Minimized typing box: bottom-center glass pill — the mark and the

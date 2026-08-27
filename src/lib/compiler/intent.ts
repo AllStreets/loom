@@ -1,7 +1,7 @@
 import { normalize } from "./normalize";
 import { classifyDeckCommand } from "../decks/commands";
 
-export type Intent = "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "deck_command" | "briefing" | "help";
+export type Intent = "self_edit" | "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "deck_command" | "briefing" | "help";
 
 export type IntentResult = {
   intent: Intent;
@@ -15,6 +15,7 @@ export type IntentResult = {
 export type HistoryMsg = { role: string; content: string };
 
 const VALID_INTENTS = new Set<string>([
+  "self_edit",
   "build_organ",
   "edit_organ",
   "act_on_organ",
@@ -23,6 +24,22 @@ const VALID_INTENTS = new Set<string>([
   "briefing",
   "help",
 ]);
+
+// Phrases that route a self-edit of LOOM's OWN kernel — deliberately weighty,
+// classified AWAY from normal organ builds. Matches "change yourself…",
+// "edit your <x>", "rewrite your <x>", "modify yourself", "change your own <x>".
+// The "your(self)" possessive is the tell that the target is LOOM itself, not
+// an organ (organ edits say "the water tracker", never "yourself"/"your own").
+// SELF_EDIT_PHRASES is the canonical table (data for the shuttle catalog);
+// SELF_EDIT_RE is its tolerant matcher — catalog.test asserts the phrase still
+// classifies so the table and the regex cannot drift apart.
+export const SELF_EDIT_PHRASES: readonly string[] = [
+  "change yourself",
+  "edit your",
+  "rewrite your",
+];
+const SELF_EDIT_RE =
+  /\b(?:change|edit|rewrite|modify|fix|update|improve|refactor)\b\s+(?:your\s*self|yourself|your\s+own\b|your\b)/i;
 
 // Verbs that signal an intent to modify an existing organ.
 const EDIT_VERB_RE =
@@ -134,6 +151,14 @@ export function classifyByRules(
   const hasEditVerb = EDIT_VERB_RE.test(lower);
   const hasAnaphora = ANAPHORA_RE.test(lower);
 
+  // -1. self_edit — LOOM editing its OWN kernel. Highest precedence: the
+  //     "yourself" / "your <x>" possessive is unambiguous and must never be
+  //     swallowed by the organ build/edit verbs below ("change", "edit",
+  //     "rewrite" all overlap). This is the deliberate, weightier act.
+  if (SELF_EDIT_RE.test(lower)) {
+    return { intent: "self_edit", confidence: 0.95, source: "rules" };
+  }
+
   // 0. BUILD_PHRASE takes priority — even if an organ substring appears in the
   //    utterance (e.g. "make me something like notes but for tasks" where
   //    "notes" matches a "notes" organ id). This fixes the misfire where
@@ -221,9 +246,14 @@ export function classifyByRules(
   return null;
 }
 
-const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: build_organ, edit_organ, act_on_organ, converse, deck_command, briefing, help.
+const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: self_edit, build_organ, edit_organ, act_on_organ, converse, deck_command, briefing, help.
+
+self_edit means the user is asking LOOM to change ITS OWN code/kernel ("change yourself", "edit your <x>", "rewrite your own <x>"). This is distinct from editing an organ (a tool LOOM built).
 
 Examples:
+User: "change yourself so the orb is brighter" -> {"intent":"self_edit","organId":null}
+User: "edit your companion prompt" -> {"intent":"self_edit","organId":null}
+User: "rewrite your own mood logic" -> {"intent":"self_edit","organId":null}
 User: "build me a sleep tracker" -> {"intent":"build_organ","organId":null}
 User: "make me something like notes but for tasks" -> {"intent":"build_organ","organId":null}
 User: "add a delete button to the water tracker" -> {"intent":"edit_organ","organId":"water-tracker"}

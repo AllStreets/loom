@@ -20,7 +20,7 @@
  */
 
 import { DECK_COMMAND_META, CAT_LABELS } from "../decks/commands";
-import { BRIEFING_PHRASES, HELP_PHRASES } from "../compiler/intent";
+import { BRIEFING_PHRASES, HELP_PHRASES, SELF_EDIT_PHRASES } from "../compiler/intent";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -152,6 +152,19 @@ function systemEntries(ctx: CatalogCtx): CatalogEntry[] {
     hint: "LOOM speaks its command grammar",
     group: "system",
     kind: "utterance",
+  });
+  // Self-edit — the deliberate, weightier act. A TEMPLATE (not immediate): the
+  // owner completes "change yourself: …" so nothing self-modifies on a stray
+  // click. Derived from SELF_EDIT_PHRASES so the sayable and typeable can't
+  // drift from the classifier.
+  const [selfCanonical, ...selfAliases] = SELF_EDIT_PHRASES;
+  entries.push({
+    id: "system-self-edit",
+    phrase: `${selfCanonical}: …`,
+    aliases: [...selfAliases],
+    hint: "LOOM edits its own kernel — dev mode, behind the walls",
+    group: "system",
+    kind: "template",
   });
   return entries;
 }

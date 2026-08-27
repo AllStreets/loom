@@ -259,3 +259,28 @@ describe("handle — help routes without model call", () => {
     expect(turn.kind).toBe("build");
   });
 });
+
+// ── self_edit fast path (Phase 21 — LOOM editing its own kernel) ─────────────
+
+describe("handle — self_edit routes without model call, without build/edit", () => {
+  it("'change yourself …' returns a self_edit turn carrying the request", async () => {
+    const deps = makeDeps();
+    const turn = await handle("change yourself so the orb is brighter", [], deps);
+    expect(turn.kind).toBe("self_edit");
+    if (turn.kind !== "self_edit") throw new Error("expected self_edit");
+    expect(turn.request).toMatch(/orb is brighter/i);
+    // The runtime never triggers an organ build/edit for a self-edit.
+    expect(deps.build).not.toHaveBeenCalled();
+    expect(deps.edit).not.toHaveBeenCalled();
+    // No model call — the pipeline (in Companion) does the drafting.
+    expect(deps.chat).not.toHaveBeenCalled();
+    expect(deps.askModel).not.toHaveBeenCalled();
+  });
+
+  it("'edit your <x>' never routes to an organ edit", async () => {
+    const deps = makeDeps({ organIds: vi.fn().mockResolvedValue(["orb"]) });
+    const turn = await handle("edit your orb moods", [], deps);
+    expect(turn.kind).toBe("self_edit");
+    expect(deps.edit).not.toHaveBeenCalled();
+  });
+});

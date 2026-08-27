@@ -22,6 +22,7 @@ export type CompanionDeps = {
 
 export type CompanionTurn =
   | { kind: "reply"; text: string }
+  | { kind: "self_edit"; request: string }
   | { kind: "build"; result: BuildResult }
   | { kind: "edit"; organId: string; result: BuildResult }
   | { kind: "act"; organId: string }
@@ -104,6 +105,14 @@ export async function handle(
       ];
       const text = await deps.chat("companion", messages);
       return { kind: "reply", text };
+    }
+
+    case "self_edit": {
+      // The deliberate, weightier act: LOOM editing its OWN kernel. The runtime
+      // stays pure — it hands the request back to Companion, which owns the
+      // dev-only guard and the kernelBuild pipeline (the walls). No model call
+      // here; the pipeline reads the real file and drafts the edit itself.
+      return { kind: "self_edit", request: c.request };
     }
 
     case "build_organ": {
