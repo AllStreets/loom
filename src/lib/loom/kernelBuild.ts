@@ -1,5 +1,14 @@
 /**
- * kernelBuild.ts — the self-edit pipeline orchestrator (Phase 21, Task 2).
+ * kernelBuild.ts — the self-edit pipeline orchestrator (Phase 21, Task 2/3).
+ *
+ * HONESTY NOTE: the branches below (draft → propose → validate → repair, and the
+ * separate applyKernelEdit) are proven headlessly by mocked-Rust tests, and the
+ * five-wall ORDERING is proven by kernelBuild.order.test.ts. The LIVE HMR
+ * self-edit loop — a REAL model drafting against the RUNNING app, hot-reloading
+ * an approved edit — is owner-verified in dev; it cannot be captured in headless
+ * CI. What CI proves: the ordering and every branch. What the owner proves in
+ * dev: the loop actually reloads a live app. Do not claim the live loop is
+ * CI-proven.
  *
  * LOOM editing its own TypeScript kernel travels through five ordered walls
  * (spec §"five walls"). This module owns the FIRST THREE steps of that path
@@ -27,6 +36,7 @@
  */
 
 import { extractCode } from "./edits";
+import { selfEditSystemPrompt } from "./prompts";
 import type {
   KernelEdit,
   KernelProposal,
@@ -140,10 +150,10 @@ export async function draftKernelEdit(
     emit("read", "ok");
 
     // ── Draft the initial edit ────────────────────────────────────────────────
-    // Task 3 ships the rich SELF-EDIT prompt contract. For now a simple, honest
-    // instruction: read the file, return a small SEARCH/REPLACE edit.
+    // The rich SELF-EDIT contract (whitelist, five walls, SEARCH/REPLACE format,
+    // worked example) is injected here and ONLY here — never into organ builds.
     emit("draft", "drafting a self-edit...");
-    const draftSystem = selfEditInstruction();
+    const draftSystem = selfEditSystemPrompt();
     const draftUser =
       `TARGET FILE: ${targetPath}\n\nCURRENT CONTENTS:\n${current}\n\n` +
       `SELF-EDIT REQUEST: ${request}\n\n` +
@@ -237,7 +247,7 @@ export async function draftKernelEdit(
       const repairRaw = await deps.chat(
         "builder",
         [
-          { role: "system", content: draftSystem },
+          { role: "system", content: selfEditSystemPrompt({ repair: true }) },
           { role: "user", content: repairUser },
         ],
         { temperature: 0.0 },
@@ -364,22 +374,4 @@ async function safeDiscard(
   } catch (err) {
     emit("discard", `cleanup warning: ${errText(err)}`);
   }
-}
-
-/**
- * The minimal self-edit instruction. The RICH self-edit contract (whitelist,
- * protected carve-out, "your edit is type-checked and tested before it can
- * apply — write it small, write it to pass") is Task 3. Kept here as a plain
- * placeholder so the pipeline is exercisable now.
- */
-function selfEditInstruction(): string {
-  return (
-    "You are the Loom, editing LOOM's own TypeScript kernel. You will be given " +
-    "the real current contents of one file and a change request. Return the " +
-    "SMALLEST correct edit as SEARCH/REPLACE blocks in this exact format:\n" +
-    "<<<<<<< SEARCH\n(lines copied exactly from the current file)\n=======\n" +
-    "(replacement lines)\n>>>>>>> REPLACE\n" +
-    "Your edit is type-checked and tested in isolation before it can apply — " +
-    "keep it small and write it to pass. No prose, no full file."
-  );
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { ctxFor, ORGAN_CONTRACT, PERMISSIONS, POWERS_CONTRACT, POWERS_FEWSHOT, organSystemPrompt, requestImpliesPowers } from "./prompts";
+import { ctxFor, ORGAN_CONTRACT, PERMISSIONS, POWERS_CONTRACT, POWERS_FEWSHOT, SELF_EDIT_CONTRACT, SELF_EDIT_FEWSHOT, organSystemPrompt, selfEditSystemPrompt, requestImpliesPowers } from "./prompts";
+import { applyEditBlocks } from "./edits";
 import { manifestGuard, POWERS } from "./validate";
 import { buildUiKit } from "../organs/uikit";
 import { KIT_TOKENS } from "../organs/uikitSrc";
@@ -317,5 +318,92 @@ describe("POWERS few-shot fixture (offline gate proof)", () => {
   it("test.js contains no import statements (sandbox law)", () => {
     expect(/^\s*import\b/m.test(POWERS_FEWSHOT.tests)).toBe(false);
     expect(POWERS_FEWSHOT.tests).not.toContain("./organ.js");
+  });
+});
+
+// ── SELF-EDIT contract (Phase 21 — the builder edits LOOM itself) ─────────────
+
+describe("SELF_EDIT_CONTRACT", () => {
+  it("teaches the SEARCH/REPLACE format against the real current file", () => {
+    expect(SELF_EDIT_CONTRACT).toContain("MINIMAL SEARCH/REPLACE edit");
+    expect(SELF_EDIT_CONTRACT).toContain("REAL current file contents");
+    expect(SELF_EDIT_CONTRACT).toContain("<<<<<<< SEARCH");
+    expect(SELF_EDIT_CONTRACT).toContain("=======");
+    expect(SELF_EDIT_CONTRACT).toContain(">>>>>>> REPLACE");
+    expect(SELF_EDIT_CONTRACT).toContain("copied exactly from the current file");
+  });
+
+  it("states the five walls in one honest line: isolated worktree, tsc+vitest, owner approval", () => {
+    expect(SELF_EDIT_CONTRACT).toContain("THE FIVE WALLS");
+    expect(SELF_EDIT_CONTRACT).toContain("isolated git worktree");
+    expect(SELF_EDIT_CONTRACT).toContain("tsc");
+    expect(SELF_EDIT_CONTRACT).toContain("vitest");
+    expect(SELF_EDIT_CONTRACT).toContain("owner must approve");
+    expect(SELF_EDIT_CONTRACT).toContain("keep it small");
+  });
+
+  it("states the whitelist reality: only src/** .ts(x); safety machinery off-limits", () => {
+    expect(SELF_EDIT_CONTRACT).toContain("src/** .ts/.tsx");
+    expect(SELF_EDIT_CONTRACT).toContain("kernelBuild.ts");
+    expect(SELF_EDIT_CONTRACT).toContain("OFF-LIMITS");
+    expect(SELF_EDIT_CONTRACT).toContain("refused in Rust before isolation");
+  });
+
+  it("states the repair contract: given the failing stage + do not fight the tests", () => {
+    expect(SELF_EDIT_CONTRACT).toContain("ON A REPAIR TURN");
+    expect(SELF_EDIT_CONTRACT).toContain("tsc | vitest");
+    expect(SELF_EDIT_CONTRACT).toContain("Do NOT fight the tests");
+    expect(SELF_EDIT_CONTRACT).toContain("they are the spec");
+  });
+
+  it("carries one worked example that PARSES and APPLIES under edits.ts", () => {
+    expect(SELF_EDIT_CONTRACT).toContain(SELF_EDIT_FEWSHOT);
+    // The exact fixture the example edits — proves the SEARCH text is real.
+    const base = "export const PULSE_MIN_MS = 30000;\n";
+    const applied = applyEditBlocks(base, SELF_EDIT_FEWSHOT);
+    expect(applied).not.toBeNull();
+    expect(applied).toContain("export const PULSE_MIN_MS = 15000;");
+    expect(applied).not.toContain("30000");
+  });
+});
+
+describe("selfEditSystemPrompt", () => {
+  it("injects the SELF_EDIT_CONTRACT and the output rule", () => {
+    const p = selfEditSystemPrompt();
+    expect(p).toContain("SELF-EDIT — you are editing LOOM's OWN TypeScript kernel");
+    expect(p).toContain("Output ONLY SEARCH/REPLACE edit blocks");
+    // Draft turn is not framed as a repair turn.
+    expect(p).not.toContain("This is a REPAIR turn");
+  });
+
+  it("the repair variant frames a correction turn", () => {
+    const p = selfEditSystemPrompt({ repair: true });
+    expect(p).toContain("This is a REPAIR turn");
+    expect(p).toContain("do not fight the tests");
+    // Still carries the contract.
+    expect(p).toContain("THE FIVE WALLS");
+  });
+
+  it("does NOT drag in the ORGAN_CONTRACT or POWERS block (lean, distinct prompt)", () => {
+    const p = selfEditSystemPrompt();
+    expect(p).not.toContain("An ORGAN is a small self-contained tool");
+    expect(p).not.toContain("POWERS — six gated capabilities");
+    expect(p).not.toContain("loom.ui");
+  });
+});
+
+describe("SELF_EDIT vs organ builds — conditional injection", () => {
+  it("the SELF_EDIT contract is ABSENT from every organ build kind", () => {
+    for (const kind of ["manifest", "code", "tests", "repair", "edit"] as const) {
+      // Even a powered request must not leak the self-edit contract into organ builds.
+      const prompt = organSystemPrompt(kind, { request: "alert me when btc drops 5%" });
+      expect(prompt, kind).not.toContain("SELF-EDIT — you are editing LOOM's OWN TypeScript kernel");
+      expect(prompt, kind).not.toContain("THE FIVE WALLS");
+    }
+  });
+
+  it("the ORGAN_CONTRACT notes the kernel is self-editable within the walls and safety is off-limits", () => {
+    expect(ORGAN_CONTRACT).toContain("self-editable WITHIN the five walls");
+    expect(ORGAN_CONTRACT).toContain("permanently off-limits");
   });
 });

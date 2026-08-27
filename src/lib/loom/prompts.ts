@@ -111,6 +111,58 @@ export const POWERS_CONTRACT = `POWERS — six gated capabilities beyond the bas
    test.js:
    ${POWERS_FEWSHOT.tests}`;
 
+// ── SELF-EDIT contract (Phase 21 — the builder edits LOOM itself) ─────────────
+//
+// Injected ONLY into the builder prompt for kernel-edit (self_edit) drafting,
+// never into organ builds. Conditionally built like POWERS_CONTRACT so a normal
+// organ build never pays these tokens. It teaches the SEARCH/REPLACE format
+// against the REAL current file, the five walls in one honest line, the
+// whitelist reality, the repair contract, and one worked example.
+
+/** The worked self-edit example — a small, safe numeric-constant edit, shown as
+ *  a proper SEARCH/REPLACE block against a plausible editable file. Exported so
+ *  the prompt test can prove it parses under edits.ts. */
+export const SELF_EDIT_FEWSHOT = `<<<<<<< SEARCH
+export const PULSE_MIN_MS = 30000;
+=======
+export const PULSE_MIN_MS = 15000;
+>>>>>>> REPLACE`;
+
+export const SELF_EDIT_CONTRACT = `SELF-EDIT — you are editing LOOM's OWN TypeScript kernel, not building an organ. This is the highest-blast-radius act in the system; the design is the safety.
+
+   THE TASK: produce the MINIMAL SEARCH/REPLACE edit against the REAL current file contents you are given (never a full file, never a rewrite). Exact format — the SEARCH lines must be copied verbatim from the current file:
+   <<<<<<< SEARCH
+   (lines copied exactly from the current file)
+   =======
+   (replacement lines)
+   >>>>>>> REPLACE
+
+   THE FIVE WALLS (one honest line): your edit is applied in an isolated git worktree and type-checked (tsc --noEmit) + tested (vitest) BEFORE it can touch the running app, then the owner must approve the diff — so keep it small, keep it correct, make it pass tsc and the file's tests.
+
+   THE WHITELIST: you may only edit src/** .ts/.tsx files. The safety machinery — kernelBuild.ts, the diff-review card, the recovery beacon, entry points (src/main.tsx, index.html) and configs (vite.config.ts, tsconfig*.json, package.json) — is PERMANENTLY OFF-LIMITS; a proposal targeting any of it is refused in Rust before isolation. Do not target it.
+
+   ON A REPAIR TURN: you are given the failing stage (tsc | vitest) and the captured output. Fix the edit to pass. Do NOT fight the tests — they are the spec; make your change conform to them.
+
+   WORKED EXAMPLE — "make the pulse minimum 15 seconds" (a small, safe constant change in an editable file):
+   ${SELF_EDIT_FEWSHOT}`;
+
+/**
+ * The system prompt for the self-edit builder. Distinct from organSystemPrompt:
+ * it carries the SELF_EDIT_CONTRACT (never the ORGAN_CONTRACT / POWERS) and is
+ * the ONLY place that block is injected. `repair` is true on a validation-failure
+ * repair turn — the caller still supplies the stage+output in the user message;
+ * this flag lets the contract read as a correction turn.
+ */
+export function selfEditSystemPrompt(opts?: { repair?: boolean }): string {
+  const base =
+    "You are the Loom, the build engine inside LOOM, a sovereign offline computer. " +
+    "Right now you are editing LOOM's own TypeScript kernel.";
+  const turn = opts?.repair
+    ? "\n\nThis is a REPAIR turn: your previous edit failed validation. You are given the failing stage and its output — fix the edit to pass, and do not fight the tests."
+    : "";
+  return `${base}\n\n${SELF_EDIT_CONTRACT}${turn}\n\nOutput ONLY SEARCH/REPLACE edit blocks. No prose before or after, no full file.`;
+}
+
 export function ctxFor(chars: number): number {
   const tokens = Math.ceil((chars * 2) / 3.3) + 3000;
   return Math.min(32768, Math.max(8192, Math.ceil(tokens / 2048) * 2048));
@@ -243,7 +295,9 @@ export const ORGAN_CONTRACT = `An ORGAN is a small self-contained tool inside LO
    TEST ISOLATION: every test starts with a FRESH EMPTY storage and a fresh render of el — tests never see another test's data. To test behavior on existing data: loom.storage.set(...) first, then create your own element and await organ.render(myEl, loom), then assert on myEl.
    SELECTORS: find interactive elements ONLY via their data-action attributes — el.querySelector('[data-action="add"]') — never by tag position, class, or text. Read state from loom.storage (source of truth), and prefer storage assertions over DOM-text assertions.
 
-Rules: complete files only, no placeholders or TODOs; small and focused; real functionality, never filler.`;
+Rules: complete files only, no placeholders or TODOs; small and focused; real functionality, never filler.
+
+NOTE — LOOM's own TypeScript kernel (src/**) is now self-editable WITHIN the five walls (isolation, tsc+vitest validation, owner diff-approval, commit, recovery boot); the safety machinery that enforces those walls is permanently off-limits. That path uses its own SELF-EDIT contract, not this one.`;
 
 export function organSystemPrompt(
   kind: "manifest" | "code" | "tests" | "edit" | "repair",
