@@ -118,6 +118,28 @@ describe("KernelDiff", () => {
     expect(screen.queryByTestId("kernel-diff-approve")).not.toBeInTheDocument();
   });
 
+  it("discards the worktree when apply throws after approve (no orphan)", async () => {
+    const api = mockApi({
+      approve: vi.fn(async () => {}),
+      apply: vi.fn(async () => {
+        throw new Error("apply failed late");
+      }),
+      discard: vi.fn(async () => {}),
+    });
+    render(<KernelDiff api={api} />);
+    act(() => dispatchReview(sampleProposal()));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+
+    // approve + apply were attempted; apply threw; the worktree must be discarded
+    expect(api.apply).toHaveBeenCalled();
+    expect(api.discard).toHaveBeenCalledWith("wt-good");
+    // the card closed honestly (no "changed" note, since apply never succeeded)
+    expect(screen.queryByTestId("kernel-diff-applied")).not.toBeInTheDocument();
+  });
+
   it("Discard cleans up the worktree and closes without applying", async () => {
     const api = mockApi({ discard: vi.fn(async () => {}) });
     render(<KernelDiff api={api} />);

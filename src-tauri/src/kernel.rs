@@ -41,9 +41,6 @@ const VITEST_TIMEOUT: Duration = Duration::from_secs(300);
 // of scope for editing anyway (whitelist is `src/**/*.ts(x)`), but the TS
 // safety machinery below MUST be carved out of that positive whitelist.
 const PROTECTED: &[&str] = &[
-    // The TS self-edit pipeline + walls:
-    "src/lib/loom/kernelbuild.ts",
-    "src/components/chrome/kerneldiff.tsx",
     // Entry points and config (also can't be src/**/*.ts(x), but named for clarity):
     "src/main.tsx",
     "index.html",
@@ -51,12 +48,21 @@ const PROTECTED: &[&str] = &[
     "package.json",
 ];
 
-/// Protected by PREFIX — the recovery beacon / recovery UI lives under a
-/// directory we defend wholesale so a renamed sibling can't slip through.
+/// Protected by STEM PREFIX — every file whose lowercased path *starts with*
+/// one of these is denied, so a `.ts`, a `.test.ts`, a `.order.test.ts`, a
+/// stem-sibling (`recoveryNotice.tsx` under the `.../recovery` stem), or a
+/// whole subdirectory are all caught. Over-matching here is safe by design:
+/// these stems are reserved for LOOM's own safety machinery, which it must
+/// never be able to edit (the self-protection invariant). The set covers the
+/// self-edit pipeline, the diff-review wall, the recovery beacon + notice, AND
+/// the ErrorBoundary that feeds the boot-health veto — edit any of these and a
+/// wall dissolves.
 const PROTECTED_PREFIXES: &[&str] = &[
-    // recovery beacon + recovery notice UI (Task 2 wires these):
-    "src/lib/loom/recovery",
-    "src/components/chrome/recovery",
+    "src/lib/loom/kernelbuild",       // draft/validate/apply pipeline (+ tests)
+    "src/lib/loom/recovery",          // boot-health beacon + veto (+ tests)
+    "src/components/chrome/kerneldiff", // the approval diff card (+ tests)
+    "src/components/chrome/recovery",  // recoveryNotice UI (+ tests)
+    "src/components/errorboundary",    // drives noteBootError → boot-health veto
 ];
 
 /// tsconfig*.json — matched by name pattern (tsconfig.json, tsconfig.node.json…).
@@ -111,7 +117,10 @@ pub fn is_editable(rel: &str) -> bool {
     if PROTECTED.contains(&lower.as_str()) {
         return false;
     }
-    if PROTECTED_PREFIXES.iter().any(|p| lower == *p || lower.starts_with(&format!("{p}/"))) {
+    // Bare stem match: `.../recovery` denies `recovery.ts`, `recovery.test.ts`,
+    // AND `recoveryNotice.tsx` — a directory-only (`{p}/`) rule would miss the
+    // sibling files, which is how the boot-health veto was almost left editable.
+    if PROTECTED_PREFIXES.iter().any(|p| lower.starts_with(p)) {
         return false;
     }
     if is_tsconfig(&lower) {
@@ -992,16 +1001,41 @@ mod tests {
 
     #[test]
     fn self_protection_denies_the_machinery() {
-        assert!(!is_editable("src/lib/loom/kernelBuild.ts"));
-        assert!(!is_editable("src/lib/loom/kernelbuild.ts")); // case-collision
-        assert!(!is_editable("src/components/chrome/KernelDiff.tsx"));
-        assert!(!is_editable("src/main.tsx"));
-        assert!(!is_editable("vite.config.ts"));
-        assert!(!is_editable("tsconfig.json"));
-        assert!(!is_editable("tsconfig.node.json"));
-        // recovery prefix
+        // EVERY real safety file — the .ts/.tsx AND its test siblings AND the
+        // exact on-disk casing — must be refused. This is the self-protection
+        // invariant: LOOM cannot edit the machinery that keeps its edits safe.
+        // A directory-only prefix rule previously left the recovery beacon (a
+        // FILE, not a dir) editable; this enumerates the whole set so that
+        // regression cannot recur silently.
+        let safety_files = [
+            "src/lib/loom/kernelBuild.ts",
+            "src/lib/loom/kernelBuild.test.ts",
+            "src/lib/loom/kernelBuild.order.test.ts",
+            "src/lib/loom/recovery.ts",
+            "src/lib/loom/recovery.test.ts",
+            "src/components/chrome/KernelDiff.tsx",
+            "src/components/chrome/KernelDiff.test.tsx",
+            "src/components/chrome/recoveryNotice.tsx",
+            "src/components/chrome/recoveryNotice.test.tsx",
+            "src/components/ErrorBoundary.tsx",
+            "src/components/ErrorBoundary.test.tsx",
+            "src/main.tsx",
+            "index.html",
+            "vite.config.ts",
+            "package.json",
+            "tsconfig.json",
+            "tsconfig.node.json",
+        ];
+        for f in safety_files {
+            assert!(!is_editable(f), "safety file must be protected: {f}");
+            assert!(!is_editable(&f.to_lowercase()), "case-collision must be protected: {f}");
+        }
+        // subdirectory form still caught
         assert!(!is_editable("src/lib/loom/recovery/beacon.ts"));
         assert!(!is_editable("src/components/chrome/recovery/Notice.tsx"));
+        // a normal kernel file remains editable (the whitelist still works)
+        assert!(is_editable("src/lib/orb/moods.ts"));
+        assert!(is_editable("src/components/WatchPanel.tsx"));
     }
 
     #[test]

@@ -115,7 +115,15 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
       setApplied(true);
       setTimeout(reset, 2400);
     } catch {
-      // A late apply failure (worktree vanished, etc.) — close honestly.
+      // A late apply failure (approve set the flags but apply threw). The live
+      // tree was NOT written (apply_inner runs after the gate), but the isolated
+      // worktree is still registered — discard it so no orphan survives, then
+      // close honestly.
+      try {
+        await discardKernelEdit(proposal.worktreeId, api.discard);
+      } catch {
+        // best-effort — the OS temp dir is reclaimed on process exit
+      }
       reset();
     }
   }
