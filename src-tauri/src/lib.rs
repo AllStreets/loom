@@ -18,6 +18,19 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // PRE-MAIN HEAL (Phase 22 / Marrow — defense-in-depth backstop for the
+    // recovery gap that Rust opens). This is the VERY FIRST statement of run(),
+    // BEFORE `tauri::Builder::default()` and before ANY fallible or lazy init a
+    // Rust self-edit could add. It reads the source-relative mirror
+    // `.loom-boot.json` and, if a prior Rust edit was applied but never
+    // confirmed a healthy boot (status `booting` on its second sighting), hard-
+    // resets the source to the last-good sha and marks it `healed` so the next
+    // recompile is from good source. Same-binary, so it cannot fix the CURRENT
+    // bad binary — it is the backstop when the pre-compile Node guard was
+    // skipped, and it marks state the guard heals on the next compile.
+    // Panic-free / best-effort: it can NEVER block boot.
+    kernel::preboot_heal();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // Register the `deck://` custom protocol to serve the bundled AUSPEX

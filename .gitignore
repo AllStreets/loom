@@ -26,5 +26,10 @@ dist-ssr
 # Tauri
 src-tauri/target/
 
+# Marrow (Phase 22): the source-relative boot mirror is transient recovery
+# state written by `kernel_apply` and read by the pre-compile/pre-main guards.
+# Never committed.
+.loom-boot.json
+
 # Test outputs
 *.wav
