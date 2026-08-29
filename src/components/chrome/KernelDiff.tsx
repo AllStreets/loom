@@ -7,8 +7,12 @@
  * unified diff and the exact file(s) it touches, then Approves or Discards.
  *
  * The walls, made structural here:
- *   - Approve → applyKernelEdit (the ONLY live-tree write) → close. HMR
- *     hot-reloads the changed kernel; a calm "changed — reloading" note lands.
+ *   - Approve → applyKernelEdit (the ONLY live-tree write) → close. For a TS
+ *     edit HMR hot-reloads and a calm "changed — reloading" note lands; for a
+ *     RUST-CORE edit (src-tauri/…​.rs) there is NO hot-reload — the note reads
+ *     "changed — restart LOOM to load the core," because tauri dev compiled the
+ *     binary once and does not watch src-tauri/. The card makes that weight
+ *     honest up front (a core banner + "restart to take effect").
  *   - Discard → discardKernelEdit (worktree removed) → close.
  * The card never proposes or validates; it only shows an already-validated
  * proposal and carries the owner's decision to apply or discard. No apply is
@@ -36,7 +40,21 @@ export type KernelReviewProposal = {
   targetPaths: string[];
   /** the owner's original request — becomes the `self:` commit message body */
   request: string;
+  /**
+   * True when this edit touches LOOM's Rust core (src-tauri/…​.rs). The core does
+   * NOT hot-reload: approving commits it, but it takes effect only after a
+   * RESTART. The card reads this to make the weight honest — "editing the core,"
+   * "restart to load" — instead of the TS "reloading." The pipeline sets it, but
+   * the card also derives it defensively from targetPaths so the framing can
+   * never be silently downgraded.
+   */
+  isCore?: boolean;
 };
+
+/** True when any target path is a Rust-core file (src-tauri/…​.rs). */
+function pathsTouchCore(paths: string[]): boolean {
+  return paths.some((p) => p.startsWith("src-tauri/") && p.endsWith(".rs"));
+}
 
 /**
  * Injectable kernel surface (defaults to the real wrappers). Tests pass mocks
@@ -141,6 +159,13 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
 
   const diffLines = proposal ? proposal.diff.replace(/\n$/, "").split("\n") : [];
 
+  // Is this the CORE? Trust the pipeline's flag, but never let it downgrade the
+  // framing below what the target paths themselves imply — a Rust-core path
+  // always reads as the heavier "restart to load," never the TS "reloading."
+  const isCore = proposal
+    ? proposal.isCore === true || pathsTouchCore(proposal.targetPaths)
+    : false;
+
   return (
     <AnimatePresence>
       {proposal && (
@@ -190,7 +215,7 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
                 marginBottom: 6,
               }}
             >
-              self-edit — the walls
+              {isCore ? "self-edit — the core" : "self-edit — the walls"}
             </div>
 
             {/* Header — BRAND voice, weighty. */}
@@ -203,8 +228,30 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
                 marginBottom: 10,
               }}
             >
-              LOOM WANTS TO CHANGE ITSELF
+              {isCore ? "LOOM WANTS TO CHANGE ITS CORE" : "LOOM WANTS TO CHANGE ITSELF"}
             </div>
+
+            {/* Core signifier — a Rust edit reaches the native binary and does
+                NOT hot-reload; approving it needs a restart to take effect. */}
+            {isCore && (
+              <div
+                data-testid="kernel-diff-core-banner"
+                style={{
+                  fontSize: 12.5,
+                  color: "var(--warn)",
+                  background: "rgba(251,191,36,0.08)",
+                  border: "1px solid rgba(251,191,36,0.28)",
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  marginBottom: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                this edits the RUST CORE — the native binary LOOM runs inside. it
+                does not hot-reload: approving commits it, but it takes effect only
+                after you RESTART LOOM.
+              </div>
+            )}
 
             {/* Target file(s) */}
             <div style={{ marginBottom: 12 }}>
@@ -230,8 +277,9 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
 
             {/* Reassurance line — the walls it already passed. */}
             <div style={{ color: "var(--t2)", fontSize: 12.5, marginBottom: 12, lineHeight: 1.5 }}>
-              this edit was type-checked and tested in isolation — the live tree
-              is untouched until you approve. approving commits it and reloads.
+              {isCore
+                ? "this edit was compiled and tested in isolation (cargo check + test) — the live tree is untouched until you approve. approving commits it; restart LOOM to load the core."
+                : "this edit was type-checked and tested in isolation — the live tree is untouched until you approve. approving commits it and reloads."}
             </div>
 
             {/* The diff — monospace, added/removed tinted via tokens. */}
@@ -269,13 +317,13 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
               })}
             </pre>
 
-            {/* Applied note — HMR will hot-reload. */}
+            {/* Applied note — TS hot-reloads; the CORE needs a restart to load. */}
             {applied && (
               <div
                 data-testid="kernel-diff-applied"
                 style={{ color: "var(--go)", fontSize: 13, marginTop: 12, fontWeight: 600 }}
               >
-                changed — reloading.
+                {isCore ? "changed — restart LOOM to load the core." : "changed — reloading."}
               </div>
             )}
 

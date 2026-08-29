@@ -790,6 +790,7 @@ export default function Companion() {
       diff: draft.diff,
       targetPaths: draft.targetPaths,
       request,
+      isCore: draft.isCore,
     };
     window.dispatchEvent(
       new CustomEvent("loom-kernel-review", { detail: { proposal } }),
@@ -797,7 +798,9 @@ export default function Companion() {
     appendItem({
       kind: "bubble",
       role: "assistant",
-      text: "I drafted a change to myself and proved it in isolation — review the diff above the fold.",
+      text: draft.isCore
+        ? "I drafted a change to my own core and proved it compiles and passes in isolation — review the diff above the fold. Note: the core doesn't hot-reload, so it'll need a restart to load."
+        : "I drafted a change to myself and proved it in isolation — review the diff above the fold.",
       id: nextId(),
     });
   }

@@ -155,6 +155,64 @@ describe("KernelDiff", () => {
     // discard removes the worktree without ever writing the live tree
   });
 
+  it("a TS edit frames as CHANGE ITSELF and the applied note reads 'reloading'", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "a", prevSha: "b" })),
+    });
+    render(<KernelDiff api={api} />);
+    act(() => dispatchReview(sampleProposal())); // targetPaths = a .ts file
+
+    expect(screen.getByText(/LOOM WANTS TO CHANGE ITSELF/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("kernel-diff-core-banner")).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    expect(screen.getByTestId("kernel-diff-applied")).toHaveTextContent(/changed — reloading/i);
+    expect(screen.getByTestId("kernel-diff-applied")).not.toHaveTextContent(/restart/i);
+  });
+
+  it("a RUST-CORE edit frames as the core + restart, and the applied note says restart to load", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "a", prevSha: "b" })),
+    });
+    render(<KernelDiff api={api} />);
+    act(() =>
+      dispatchReview(
+        sampleProposal({
+          worktreeId: "wt-rust",
+          targetPaths: ["src-tauri/src/fleet.rs"],
+          isCore: true,
+        }),
+      ),
+    );
+
+    // The weight is heavier and unmistakably about the core + a restart.
+    expect(screen.getByText(/LOOM WANTS TO CHANGE ITS CORE/i)).toBeInTheDocument();
+    const banner = screen.getByTestId("kernel-diff-core-banner");
+    expect(banner).toHaveTextContent(/RUST CORE/i);
+    expect(banner).toHaveTextContent(/does not hot-reload/i);
+    expect(banner).toHaveTextContent(/RESTART LOOM/i);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    expect(screen.getByTestId("kernel-diff-applied")).toHaveTextContent(
+      /changed — restart LOOM to load the core/i,
+    );
+  });
+
+  it("derives the core framing from a Rust target path even if isCore is unset", () => {
+    const api = mockApi();
+    render(<KernelDiff api={api} />);
+    // No isCore flag — the path alone must not let the framing downgrade.
+    act(() =>
+      dispatchReview(sampleProposal({ targetPaths: ["src-tauri/src/organs.rs"] })),
+    );
+    expect(screen.getByText(/LOOM WANTS TO CHANGE ITS CORE/i)).toBeInTheDocument();
+    expect(screen.getByTestId("kernel-diff-core-banner")).toBeInTheDocument();
+  });
+
   it("shows only one card at a time (a live review ignores further proposals)", () => {
     const api = mockApi();
     render(<KernelDiff api={api} />);

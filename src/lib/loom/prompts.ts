@@ -146,21 +146,65 @@ export const SELF_EDIT_CONTRACT = `SELF-EDIT — you are editing LOOM's OWN Type
    WORKED EXAMPLE — "make the pulse minimum 15 seconds" (a small, safe constant change in an editable file):
    ${SELF_EDIT_FEWSHOT}`;
 
+// ── RUST-core self-edit contract (Phase 22 — the builder reaches the marrow) ──
+//
+// Injected ONLY when the self-edit target is a `.rs` file under src-tauri/. It
+// teaches the two honest differences from a TypeScript edit: the validation is
+// `cargo check` + `cargo test` (the tests are the spec), and — critically — a
+// Rust edit does NOT hot-reload; it needs a RESTART to load. Plus the Rust
+// safety core that is permanently off-limits. Conditionally built like the
+// POWERS block so a TS self-edit never pays these tokens.
+
+/** The worked Rust self-edit example — a small, safe constant change to an
+ *  EDITABLE core file (src-tauri/src/fleet.rs, outside PROTECTED_RUST). Exported
+ *  so the prompt test can prove it parses+applies under edits.ts. */
+export const SELF_EDIT_RUST_FEWSHOT = `<<<<<<< SEARCH
+const TIMEOUT_MS: u64 = 45_000;
+=======
+const TIMEOUT_MS: u64 = 60_000;
+>>>>>>> REPLACE`;
+
+export const SELF_EDIT_RUST_CONTRACT = `RUST CORE — this target is a Rust source file (src-tauri/src/**.rs): you are editing LOOM's native core, the highest-blast-radius surface there is. Everything above still holds; three Rust-specific truths override the TypeScript framing:
+
+   VALIDATION IS CARGO: your edit is validated in isolation with \`cargo check\` AND then \`cargo test\` — it must COMPILE and it must PASS THE TESTS. The tests are the spec; write your change to satisfy them, never to fight them. On a repair turn you are given the failing stage (cargo-check | cargo-test) and cargo's own output — read it and fix the edit.
+
+   NO HOT-RELOAD — RESTART TO LOAD: unlike a TypeScript edit, a Rust edit does NOT live-reload. \`tauri dev\` compiled the running binary once at startup and does not watch src-tauri/. Once approved, your change is committed to source but takes effect only after LOOM is RESTARTED. Do not expect a live effect; do not add code that assumes it reloaded.
+
+   THE RUST SAFETY CORE IS OFF-LIMITS: these files are refused in Rust before isolation — do NOT target them: src-tauri/src/main.rs, lib.rs, kernel.rs, exec.rs, error.rs, timeline.rs, the pre-boot guard module, scripts/kernel-preboot.mjs, and Cargo.toml / Cargo.lock (a dependency edit is an arbitrary-code vector). Editable core files are things like fleet.rs, organs.rs, market.rs.
+
+   KEEP IT MINIMAL: one small, surgical SEARCH/REPLACE against the real current file — never a rewrite.
+
+   WORKED RUST EXAMPLE — "give the fleet a little more time" (a small, safe constant change in an editable core file, src-tauri/src/fleet.rs):
+   ${SELF_EDIT_RUST_FEWSHOT}`;
+
+/** True when a self-edit target is a Rust-core file (src-tauri/…​.rs). Mirrors
+ *  kernelBuild.isRustCorePath so the prompt injection matches the pipeline. */
+function isRustTarget(targetPath?: string): boolean {
+  return !!targetPath && targetPath.startsWith("src-tauri/") && targetPath.endsWith(".rs");
+}
+
 /**
  * The system prompt for the self-edit builder. Distinct from organSystemPrompt:
  * it carries the SELF_EDIT_CONTRACT (never the ORGAN_CONTRACT / POWERS) and is
  * the ONLY place that block is injected. `repair` is true on a validation-failure
  * repair turn — the caller still supplies the stage+output in the user message;
- * this flag lets the contract read as a correction turn.
+ * this flag lets the contract read as a correction turn. When `targetPath` names
+ * a Rust-core file, the RUST contract (cargo validation, restart-to-load, the
+ * off-limits core) is appended — conditionally, so a TS self-edit never pays it.
  */
-export function selfEditSystemPrompt(opts?: { repair?: boolean }): string {
-  const base =
-    "You are the Loom, the build engine inside LOOM, a sovereign offline computer. " +
-    "Right now you are editing LOOM's own TypeScript kernel.";
+export function selfEditSystemPrompt(opts?: { repair?: boolean; targetPath?: string }): string {
+  const rust = isRustTarget(opts?.targetPath);
+  const base = rust
+    ? "You are the Loom, the build engine inside LOOM, a sovereign offline computer. " +
+      "Right now you are editing LOOM's own Rust core."
+    : "You are the Loom, the build engine inside LOOM, a sovereign offline computer. " +
+      "Right now you are editing LOOM's own TypeScript kernel.";
+  // The RUST block rides just after the shared contract — only for a .rs target.
+  const rustBlock = rust ? `\n\n${SELF_EDIT_RUST_CONTRACT}` : "";
   const turn = opts?.repair
     ? "\n\nThis is a REPAIR turn: your previous edit failed validation. You are given the failing stage and its output — fix the edit to pass, and do not fight the tests."
     : "";
-  return `${base}\n\n${SELF_EDIT_CONTRACT}${turn}\n\nOutput ONLY SEARCH/REPLACE edit blocks. No prose before or after, no full file.`;
+  return `${base}\n\n${SELF_EDIT_CONTRACT}${rustBlock}${turn}\n\nOutput ONLY SEARCH/REPLACE edit blocks. No prose before or after, no full file.`;
 }
 
 export function ctxFor(chars: number): number {

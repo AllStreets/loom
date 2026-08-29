@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { ctxFor, ORGAN_CONTRACT, PERMISSIONS, POWERS_CONTRACT, POWERS_FEWSHOT, SELF_EDIT_CONTRACT, SELF_EDIT_FEWSHOT, organSystemPrompt, selfEditSystemPrompt, requestImpliesPowers } from "./prompts";
+import { ctxFor, ORGAN_CONTRACT, PERMISSIONS, POWERS_CONTRACT, POWERS_FEWSHOT, SELF_EDIT_CONTRACT, SELF_EDIT_FEWSHOT, SELF_EDIT_RUST_CONTRACT, SELF_EDIT_RUST_FEWSHOT, organSystemPrompt, selfEditSystemPrompt, requestImpliesPowers } from "./prompts";
 import { applyEditBlocks } from "./edits";
 import { manifestGuard, POWERS } from "./validate";
 import { buildUiKit } from "../organs/uikit";
@@ -389,6 +389,87 @@ describe("selfEditSystemPrompt", () => {
     expect(p).not.toContain("An ORGAN is a small self-contained tool");
     expect(p).not.toContain("POWERS — six gated capabilities");
     expect(p).not.toContain("loom.ui");
+  });
+});
+
+// ── RUST-core self-edit contract (Phase 22 — the builder reaches the marrow) ──
+
+const RUST_TARGET = "src-tauri/src/fleet.rs";
+const TS_TARGET = "src/lib/loom/moods.ts";
+
+describe("SELF_EDIT_RUST_CONTRACT", () => {
+  it("teaches cargo validation — check AND test, tests are the spec", () => {
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("cargo check");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("cargo test");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("COMPILE");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("PASS THE TESTS");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("cargo-check | cargo-test");
+  });
+
+  it("teaches the honest no-hot-reload / restart-to-load reality", () => {
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("NO HOT-RELOAD");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("RESTARTED");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("does not watch src-tauri/");
+  });
+
+  it("lists the PROTECTED_RUST safety core as off-limits", () => {
+    for (const f of ["main.rs", "lib.rs", "kernel.rs", "exec.rs", "error.rs", "timeline.rs"]) {
+      expect(SELF_EDIT_RUST_CONTRACT).toContain(f);
+    }
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("kernel-preboot.mjs");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("Cargo.toml");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("OFF-LIMITS");
+  });
+
+  it("keeps it minimal and carries a Rust worked example that PARSES + APPLIES", () => {
+    expect(SELF_EDIT_RUST_CONTRACT).toContain("KEEP IT MINIMAL");
+    expect(SELF_EDIT_RUST_CONTRACT).toContain(SELF_EDIT_RUST_FEWSHOT);
+    // The example edits a real editable core file's real constant.
+    const base = "const TIMEOUT_MS: u64 = 45_000;\n";
+    const applied = applyEditBlocks(base, SELF_EDIT_RUST_FEWSHOT);
+    expect(applied).not.toBeNull();
+    expect(applied).toContain("const TIMEOUT_MS: u64 = 60_000;");
+    expect(applied).not.toContain("45_000");
+  });
+});
+
+describe("selfEditSystemPrompt — conditional Rust injection", () => {
+  it("injects the RUST contract for a .rs target", () => {
+    const p = selfEditSystemPrompt({ targetPath: RUST_TARGET });
+    expect(p).toContain("RUST CORE — this target is a Rust source file");
+    expect(p).toContain("cargo test");
+    expect(p).toContain("NO HOT-RELOAD");
+    // Still carries the shared self-edit contract.
+    expect(p).toContain("THE FIVE WALLS");
+    expect(p).toContain("editing LOOM's own Rust core");
+  });
+
+  it("OMITS the RUST contract for a .ts target (lean TS prompt)", () => {
+    const p = selfEditSystemPrompt({ targetPath: TS_TARGET });
+    expect(p).not.toContain("RUST CORE — this target is a Rust source file");
+    expect(p).not.toContain("cargo test");
+    expect(p).toContain("editing LOOM's own TypeScript kernel");
+  });
+
+  it("OMITS the RUST contract when no target is given (back-compat)", () => {
+    const p = selfEditSystemPrompt();
+    expect(p).not.toContain("RUST CORE — this target is a Rust source file");
+  });
+
+  it("the RUST repair variant still frames a correction turn AND carries cargo guidance", () => {
+    const p = selfEditSystemPrompt({ repair: true, targetPath: RUST_TARGET });
+    expect(p).toContain("This is a REPAIR turn");
+    expect(p).toContain("cargo-check | cargo-test");
+  });
+});
+
+describe("RUST self-edit contract — absent from organ builds", () => {
+  it("no organ build kind leaks the RUST self-edit contract", () => {
+    for (const kind of ["manifest", "code", "tests", "repair", "edit"] as const) {
+      const prompt = organSystemPrompt(kind, { request: "alert me when btc drops 5%" });
+      expect(prompt, kind).not.toContain("RUST CORE — this target is a Rust source file");
+      expect(prompt, kind).not.toContain("NO HOT-RELOAD");
+    }
   });
 });
 

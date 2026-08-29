@@ -111,7 +111,11 @@ export const organDelete = (id: string) => safeInvoke<string>("organ_delete", { 
 export type KernelEdit = { path: string; search: string; replace: string };
 export type EditableMeta = { root: string; protected: string[] };
 export type KernelProposal = { worktreeId: string; diff: string };
-export type KernelValidation = { ok: boolean; stage: "tsc" | "vitest" | "ok"; output: string };
+export type KernelValidation = {
+  ok: boolean;
+  stage: "tsc" | "vitest" | "cargo-check" | "cargo-test" | "ok";
+  output: string;
+};
 export type KernelApplied = { sha: string; prevSha: string };
 export type KernelBootCheck = { rolledBackTo: string | null; rollbackFailed: boolean };
 
@@ -127,7 +131,11 @@ export const kernelRead = (path: string, sourceRepo?: string) =>
 export const kernelPropose = (edits: KernelEdit[], sourceRepo?: string) =>
   safeInvoke<KernelProposal>("kernel_propose", { edits, sourceRepo: sourceRepo ?? null });
 
-/** Validate: run tsc then targeted vitest in the worktree; first failure wins. */
+/**
+ * Validate in the worktree; first failure wins. TS edits → tsc then vitest;
+ * Rust edits → cargo check then cargo test (minutes, not seconds); a mixed edit
+ * set runs both. The stage names the first failing wall.
+ */
 export const kernelValidate = (worktreeId: string) =>
   safeInvoke<KernelValidation>("kernel_validate", { worktreeId });
 

@@ -80,6 +80,15 @@ export type KernelDraft =
       diff: string;
       targetPaths: string[];
       repairRounds: number;
+      /**
+       * True when the proposal touches LOOM's Rust core (any target under
+       * `src-tauri/`). The core does NOT hot-reload — applying it commits to
+       * source but the running binary is unchanged until a restart. The review
+       * card and companion read this to tell the owner "restart to load."
+       */
+      isCore: boolean;
+      /** Alias for isCore, read as the outcome signal: a restart is required. */
+      needsRestart: boolean;
       log: KernelBuildEvent[];
     }
   | {
@@ -91,6 +100,24 @@ export type KernelDraft =
 
 /** How many repair rounds before we give up and abort (mirrors organ builds). */
 const MAX_REPAIR_ROUNDS = 2;
+
+// ── Rust-core detection ───────────────────────────────────────────────────────
+//
+// LOOM's Rust core lives under `src-tauri/`. A `.rs` edit is fundamentally
+// unlike a `.ts` edit in ONE honest way: `tauri dev` does not watch
+// `src-tauri/**`, so the running native binary is compiled once at startup and a
+// committed Rust edit changes NOTHING live — it needs a RESTART to load (spec
+// §"No hot-reload for Rust"). We surface that difference all the way to the card.
+
+/** True when the path is a Rust source file under the core (`src-tauri/…​.rs`). */
+export function isRustCorePath(path: string): boolean {
+  return path.startsWith("src-tauri/") && path.endsWith(".rs");
+}
+
+/** True when ANY target touches the Rust core — the "restart to load" signal. */
+export function touchesCore(paths: string[]): boolean {
+  return paths.some(isRustCorePath);
+}
 
 // ── Parse SEARCH/REPLACE blocks → KernelEdit[] ────────────────────────────────
 //
@@ -143,6 +170,10 @@ export async function draftKernelEdit(
     deps.onEvent?.(e);
   }
 
+  // Whether this edit reaches the Rust core (src-tauri/…​.rs). Drives the slow
+  // "compiling the core…" progress state and the "restart to load" outcome.
+  const isCore = isRustCorePath(targetPath);
+
   try {
     // ── Read the REAL current file ────────────────────────────────────────────
     emit("read", `reading ${targetPath}...`);
@@ -152,8 +183,8 @@ export async function draftKernelEdit(
     // ── Draft the initial edit ────────────────────────────────────────────────
     // The rich SELF-EDIT contract (whitelist, five walls, SEARCH/REPLACE format,
     // worked example) is injected here and ONLY here — never into organ builds.
-    emit("draft", "drafting a self-edit...");
-    const draftSystem = selfEditSystemPrompt();
+    emit("draft", isCore ? "drafting a self-edit against the core…" : "drafting a self-edit...");
+    const draftSystem = selfEditSystemPrompt({ targetPath });
     const draftUser =
       `TARGET FILE: ${targetPath}\n\nCURRENT CONTENTS:\n${current}\n\n` +
       `SELF-EDIT REQUEST: ${request}\n\n` +
@@ -204,18 +235,26 @@ export async function draftKernelEdit(
       worktreeId = proposal.worktreeId;
       emit("propose", "ok — worktree isolated");
 
-      // Validate: tsc + vitest in the worktree.
-      emit("validate", "type-checking and testing in isolation...");
+      // Validate. For a Rust-core edit this runs `cargo check` then `cargo test`
+      // in the worktree — HONESTLY MINUTES (no shared target/). Emit a distinct
+      // progress line so the pipeline never appears hung while cargo compiles.
+      if (isCore) {
+        emit("validate", "compiling the core… (cargo check + test — this can take minutes)");
+      } else {
+        emit("validate", "type-checking and testing in isolation...");
+      }
       const validation = await deps.validate(worktreeId);
       lastValidation = validation;
       if (validation.ok) {
-        emit("validate", "passed — tsc + vitest green");
+        emit("validate", isCore ? "passed — cargo check + test green" : "passed — tsc + vitest green");
         return {
           ok: true,
           worktreeId,
           diff: proposal.diff,
           targetPaths: [targetPath],
           repairRounds: round,
+          isCore,
+          needsRestart: isCore,
           log,
         };
       }
@@ -247,7 +286,7 @@ export async function draftKernelEdit(
       const repairRaw = await deps.chat(
         "builder",
         [
-          { role: "system", content: selfEditSystemPrompt({ repair: true }) },
+          { role: "system", content: selfEditSystemPrompt({ repair: true, targetPath }) },
           { role: "user", content: repairUser },
         ],
         { temperature: 0.0 },
@@ -300,10 +339,11 @@ export async function resolveSelfEditTarget(
   deps: Pick<KernelBuildDeps, "chat" | "read">,
 ): Promise<string | null> {
   const system =
-    "You are the Loom, about to edit LOOM's own TypeScript kernel. Given a " +
-    "change request, name the ONE source file most likely to hold the code to " +
-    "change. Reply with ONLY the repo-relative path (e.g. src/lib/orb/moods.ts) " +
-    "and nothing else. It must be a src/ .ts or .tsx file.";
+    "You are the Loom, about to edit LOOM's own kernel. Given a change request, " +
+    "name the ONE source file most likely to hold the code to change. Reply with " +
+    "ONLY the repo-relative path and nothing else. It must be either a src/ " +
+    ".ts/.tsx file (the TypeScript body, e.g. src/lib/orb/moods.ts) or a " +
+    "src-tauri/src/ .rs file (the Rust core, e.g. src-tauri/src/fleet.rs).";
   const raw = await deps.chat(
     "builder",
     [
@@ -324,10 +364,17 @@ export async function resolveSelfEditTarget(
   }
 }
 
-/** Pull the first plausible src/ .ts(x) path out of a model reply. */
+/**
+ * Pull the first plausible kernel path out of a model reply: a `src/…​.ts(x)`
+ * TypeScript file OR a `src-tauri/…​.rs` Rust-core file. The Rust safety core is
+ * refused later in Rust (kernelRead throws for PROTECTED_RUST), so this only has
+ * to name a plausible editable path.
+ */
 export function extractPath(raw: string): string | null {
   const cleaned = extractCode(raw).trim();
-  const m = cleaned.match(/(?:^|[\s"'`(])((?:src\/)[\w./-]+\.tsx?)/);
+  const m = cleaned.match(
+    /(?:^|[\s"'`(])((?:src\/[\w./-]+\.tsx?)|(?:src-tauri\/[\w./-]+\.rs))/,
+  );
   return m ? m[1] : null;
 }
 
