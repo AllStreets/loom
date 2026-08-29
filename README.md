@@ -303,6 +303,23 @@ This first turn is deliberately bounded — the TypeScript kernel, running from 
 
 ---
 
+## Phase 22 — Marrow
+
+**Phase 22 — shipped.**
+
+Phase 21 gave LOOM its own body to edit. Phase 22 reaches the marrow: **LOOM edits its own Rust core — the native binary it lives inside — behind the same five walls, and with the recovery guarantee restored to full strength despite a hole that only the core can open.**
+
+Editing the core is not like editing the surface, and LOOM says so plainly. Two truths the machine states out loud rather than hiding:
+
+- **It doesn't hot-reload.** A TypeScript change reweaves live; the native binary cannot. So a core edit is validated the *right* way — `cargo check` **and** the full `cargo test` suite, run in the same isolated worktree, honestly taking minutes, not the seconds TypeScript takes — and when you approve it, the card tells you the truth: *changed — restart LOOM to load the core.* No pretend live-reload.
+- **The recovery hole is closed, not accepted.** Phase 21's recovery ran inside the Rust startup itself — fine when the binary can't change, but a core edit that compiles yet panics at boot would run *before* the recovery could. That would strand you, and this project doesn't strand you. So the rollback now lives in two places LOOM can never edit: a guard that runs *before the core is recompiled* on every start, and a check that runs before the first line of the core's own startup. A core edit that somehow passes every wall and still fails to boot heals itself on the next start — the source resets to the last good commit before the compiler ever sees it. Zero manual recovery.
+
+**The conscience grew to match.** With the Rust core now editable, its safety machinery — the validator, the isolation, the recovery guard, the entry point, the dependency manifests — moved from "not a file LOOM edits" to explicitly, permanently refused, enumerated and tested. LOOM can now change the marrow of itself; it still cannot touch the parts that keep it safe.
+
+Scope, honestly: this is dev-mode, where LOOM runs from source with the Rust toolchain present. Packaged-app self-rebuild — swapping a running signed binary — is a deliberate later horizon, not this one. And because validating a core edit means compiling and *running its tests*, that validation executes model-authored code on your machine in a worktree; the walls bound it, but the honest threat model is stated, not glossed.
+
+---
+
 ## How it weaves
 
 <img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
@@ -414,7 +431,8 @@ Built in phases, each a working, tested, reviewed milestone.
 | **19 · Vigor** | organs grow hands: six real powers (market · watch · timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
 | **20 · Initiative** | LOOM proposes organs unprompted — a local usage observer + a deterministic rules engine that only fires on earned evidence · a calm consented proposal card (weave it / not now / never) whose "weave it" flows into the normal build pipeline · rate-limited, silenceable, tombstoned | **shipped** |
 | **21 · Selfhood** | LOOM edits its own TypeScript kernel behind five walls — isolated-worktree validation (real tsc + vitest) · owner diff-approval · commit to source + hot-reload · recovery boot that rolls back a bad edit · a self-protection invariant (it cannot edit its own safety machinery) | **shipped** |
-| **later** | Rust-core self-edit + packaged self-rebuild (Phase 22) · EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
+| **22 · Marrow** | LOOM edits its own Rust core (dev-mode) — same five walls, `cargo check` + `cargo test` validation · honest "restart to load" (no hot-reload) · the recovery gap closed by a pre-compile guard + pre-`main` rollback so a bad core edit self-heals · self-protection extended over the whole Rust safety core + Cargo manifests | **shipped** |
+| **later** | Packaged self-rebuild (binary swap + toolchain distribution) · EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 
