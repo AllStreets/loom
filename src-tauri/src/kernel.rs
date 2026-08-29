@@ -33,13 +33,23 @@ use std::time::Duration;
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 const TSC_TIMEOUT: Duration = Duration::from_secs(300);
 const VITEST_TIMEOUT: Duration = Duration::from_secs(300);
+// cargo in a fresh worktree has no shared target/ — a cold `cargo check` then
+// `cargo test` compiles the whole crate from scratch. Honest: minutes, not
+// seconds. Generous ceilings so a genuine slow-but-progressing compile is not
+// mistaken for a hang, while still bounding a truly stuck build.
+const CARGO_CHECK_TIMEOUT: Duration = Duration::from_secs(600); // 10 min
+const CARGO_TEST_TIMEOUT: Duration = Duration::from_secs(900); // 15 min
 
 // ── The protected set (self-protection invariant, spec §self-protection) ──────
 //
 // Relative, forward-slash, lowercased-for-comparison paths that may NEVER be
-// edited by LOOM. Anything here is denied before isolation. Rust files are out
-// of scope for editing anyway (whitelist is `src/**/*.ts(x)`), but the TS
-// safety machinery below MUST be carved out of that positive whitelist.
+// edited by LOOM. Anything here is denied before isolation. The TS safety
+// machinery below MUST be carved out of the `src/**/*.ts(x)` whitelist; the
+// RUST safety machinery (PROTECTED_RUST, below) is carved out of the new
+// `src-tauri/src/**/*.rs` whitelist. Phase 22 moved Rust from implicit-deny
+// (it simply wasn't `src/**/*.ts`) to EXPLICIT protection — if any safety file
+// became editable, the recovery gap would reopen. The enumerated
+// `self_protection_denies_the_machinery` test is the guarantee.
 const PROTECTED: &[&str] = &[
     // Entry points and config (also can't be src/**/*.ts(x), but named for clarity):
     "src/main.tsx",
@@ -69,6 +79,51 @@ const PROTECTED_PREFIXES: &[&str] = &[
 fn is_tsconfig(rel_lower: &str) -> bool {
     let base = rel_lower.rsplit('/').next().unwrap_or(rel_lower);
     base.starts_with("tsconfig") && base.ends_with(".json")
+}
+
+// ── The Rust safety machinery (Phase 22 — Marrow) ─────────────────────────────
+//
+// Extending the whitelist to `src-tauri/src/**/*.rs` means the Rust core LOOM
+// lives inside becomes editable — SO every file that constructs the app, runs
+// before recovery, or implements a wall MUST be denied here, by EXACT
+// lowercased path. Anything constructing the Tauri Builder (main.rs / lib.rs),
+// the self-edit safety core (kernel.rs — which also holds `preboot_heal`, so no
+// separate preboot.rs exists to protect), the hardened spawn (exec.rs), the
+// typed-error and timeline machinery (error.rs / timeline.rs) — a self-edit to
+// any of these could disable a wall or the recovery gap.
+//
+// DOC RULE (new-Rust-module hazard): any new file that constructs the app, runs
+// before recovery, or implements a wall MUST be added to PROTECTED_RUST.
+const PROTECTED_RUST: &[&str] = &[
+    "src-tauri/src/main.rs",     // process entry — constructs everything
+    "src-tauri/src/lib.rs",      // run() — Builder + pre-main preboot_heal call
+    "src-tauri/src/kernel.rs",   // THIS module: the walls + preboot_heal live here
+    "src-tauri/src/exec.rs",     // hardened fixed-argv spawn (the validation wall)
+    "src-tauri/src/error.rs",    // the typed-error surface the walls speak in
+    "src-tauri/src/timeline.rs", // rollback discipline the recovery reuses
+];
+
+/// The guard script and Cargo manifests are protected by BASENAME anywhere in
+/// the tree: `scripts/kernel-preboot.mjs` is the pre-compile recovery guard
+/// (editing it reopens the gap), and `Cargo.toml`/`Cargo.lock` are an
+/// arbitrary-code vector (a dependency edit runs a build script of the model's
+/// choosing). All lowercased. Basename match — not path match — so no
+/// alternate spelling of the same file slips through.
+const PROTECTED_RUST_BASENAMES: &[&str] = &[
+    "kernel-preboot.mjs",
+    "cargo.toml",
+    "cargo.lock",
+];
+
+/// True if `rel_lower` (already normalized + lowercased) is a Rust-side safety
+/// file that LOOM must never edit — the enumerated core paths OR a protected
+/// basename anywhere. Checked BEFORE the positive Rust whitelist (deny wins).
+fn is_protected_rust(rel_lower: &str) -> bool {
+    if PROTECTED_RUST.contains(&rel_lower) {
+        return true;
+    }
+    let base = rel_lower.rsplit('/').next().unwrap_or(rel_lower);
+    PROTECTED_RUST_BASENAMES.contains(&base)
 }
 
 // ── Whitelist + normalization ─────────────────────────────────────────────────
@@ -103,9 +158,12 @@ fn normalize_rel(rel: &str) -> Result<String, LoomError> {
 
 /// The positive whitelist minus the protected carve-out. Pure, testable.
 ///
-/// Allow: normalized, `src/`-prefixed, ends `.ts` or `.tsx`.
-/// Deny: anything in PROTECTED / PROTECTED_PREFIXES / tsconfig*.json — compared
-///       case-insensitively so a case-collision (`src/Main.tsx`) can't bypass.
+/// Allow: normalized `src/**/*.ts(x)` OR `src-tauri/src/**/*.rs`.
+/// Deny: anything in PROTECTED / PROTECTED_PREFIXES / tsconfig*.json (the TS
+///       machinery) OR PROTECTED_RUST / PROTECTED_RUST_BASENAMES (the Rust
+///       machinery + guard script + Cargo manifests) — compared
+///       case-insensitively so a case-collision (`src/Main.tsx`,
+///       `src-tauri/src/Kernel.rs`, `CARGO.TOML`) can't bypass.
 pub fn is_editable(rel: &str) -> bool {
     let norm = match normalize_rel(rel) {
         Ok(n) => n,
@@ -113,7 +171,8 @@ pub fn is_editable(rel: &str) -> bool {
     };
     let lower = norm.to_lowercase();
 
-    // Protected carve-out FIRST (deny wins).
+    // ── Deny wins: every protected carve-out is checked BEFORE any allow. ──
+    // TS-side protected set.
     if PROTECTED.contains(&lower.as_str()) {
         return false;
     }
@@ -126,9 +185,24 @@ pub fn is_editable(rel: &str) -> bool {
     if is_tsconfig(&lower) {
         return false;
     }
+    // Rust-side protected set: the safety core + guard script + Cargo manifests.
+    // Checked before the Rust allow below, same deny-wins discipline as TS.
+    if is_protected_rust(&lower) {
+        return false;
+    }
 
-    // Positive whitelist: src/**/*.ts(x)
-    lower.starts_with("src/") && (lower.ends_with(".ts") || lower.ends_with(".tsx"))
+    // ── Positive whitelist ──
+    // TS body: src/**/*.ts(x)
+    if lower.starts_with("src/") && (lower.ends_with(".ts") || lower.ends_with(".tsx")) {
+        return true;
+    }
+    // Rust core: src-tauri/src/**/*.rs (Phase 22 — Marrow). Note the ONLY Rust
+    // whitelist is under `src-tauri/src/`: a non-src src-tauri file
+    // (`tauri.conf.json`, `build.rs`) is NOT `src-tauri/src/…` and stays denied.
+    if lower.starts_with("src-tauri/src/") && lower.ends_with(".rs") {
+        return true;
+    }
+    false
 }
 
 // ── Source-repo resolution ────────────────────────────────────────────────────
@@ -230,6 +304,19 @@ fn which(bin: &str) -> Option<PathBuf> {
 /// in which case `kernel_validate` fails honestly (can't prove → can't pass).
 fn npx_path() -> Option<PathBuf> {
     NPX_PATH.get_or_init(|| which("npx")).clone()
+}
+
+// cargo gets the SAME treatment as npx (Phase 22): resolve the absolute path
+// ONCE via the shared PATH-walk `which`, cache it, and use it as argv[0] so a
+// PATH hijacked between startup and a validate call cannot swap in a `cargo`
+// that lies. Same residual: a PATH already hijacked at process startup is
+// out of scope (the machine is already compromised).
+static CARGO_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// The absolute `cargo` path, resolved once and cached. `None` if unresolvable —
+/// in which case a Rust validate fails honestly (can't prove → can't pass).
+fn cargo_path() -> Option<PathBuf> {
+    CARGO_PATH.get_or_init(|| which("cargo")).clone()
 }
 
 // ── SEARCH/REPLACE (exact, unique) ─────────────────────────────────────────────
@@ -418,7 +505,7 @@ pub struct ProposeOut {
 #[derive(Serialize)]
 pub struct ValidateOut {
     pub ok: bool,
-    pub stage: String, // "tsc" | "vitest" | "ok"
+    pub stage: String, // "tsc" | "vitest" | "cargo-check" | "cargo-test" | "ok"
     pub output: String,
 }
 
@@ -449,7 +536,15 @@ fn protected_list() -> Vec<String> {
         v.push(format!("{p}/**"));
     }
     v.push("tsconfig*.json".to_string());
-    v.push("src-tauri/** (Rust core — out of scope)".to_string());
+    // Rust safety core (Phase 22): the enumerated PROTECTED_RUST paths + the
+    // guard script + Cargo manifests. The Rust whitelist is
+    // `src-tauri/src/**/*.rs`; everything below is carved out of it.
+    for p in PROTECTED_RUST {
+        v.push(p.to_string());
+    }
+    v.push("scripts/kernel-preboot.mjs".to_string());
+    v.push("Cargo.toml".to_string());
+    v.push("Cargo.lock".to_string());
     v
 }
 
@@ -635,6 +730,45 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
     // fully-passing result at the end sets validated = true (Finding 1/5).
     set_flags(&worktree_id, false, false);
 
+    // WALL 2 (validation): pick the toolchains from the edit's file kinds. TS
+    // edits → tsc + vitest (fast — run first). Rust edits → cargo check + cargo
+    // test (minutes — run second). A MIXED edit set runs BOTH (cheap TS first so
+    // a TS breakage fails fast before the slow cargo compile). Each stage's
+    // first failure returns {stage, output}; the live tree is never touched by
+    // validation regardless. Only a fully-passing result sets validated = true.
+    let touches_ts = prop
+        .edits
+        .iter()
+        .any(|(rel, _, _)| rel.ends_with(".ts") || rel.ends_with(".tsx"));
+    let touches_rust = prop.edits.iter().any(|(rel, _, _)| rel.ends_with(".rs"));
+
+    if touches_ts {
+        if let Some(fail) = validate_ts(&prop)? {
+            return Ok(fail);
+        }
+    }
+    if touches_rust {
+        if let Some(fail) = validate_rust(&prop)? {
+            return Ok(fail);
+        }
+    }
+
+    // Fully passing (every applicable toolchain) → mark validated. This is the
+    // ONLY place validated flips true, and apply refuses without it (Finding 1/5).
+    set_flags(&worktree_id, true, false);
+
+    Ok(ValidateOut {
+        ok: true,
+        stage: "ok".into(),
+        output: String::new(),
+    })
+}
+
+/// Run the TS validation toolchain (tsc --noEmit, then targeted vitest) in the
+/// worktree. Returns `Ok(None)` if both pass, `Ok(Some(fail))` with the failing
+/// stage+output on the first failure, or `Err` for an infrastructure fault
+/// (validator unresolvable, spawn failure, timeout).
+fn validate_ts(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
     // Resolve the validator's ABSOLUTE path once (Finding 8). If npx can't be
     // found we cannot prove the edit is safe → we must not pass.
     let npx = npx_path().ok_or_else(|| {
@@ -644,8 +778,8 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
         .to_str()
         .ok_or_else(|| LoomError::Parse("npx path is not valid UTF-8".into()))?;
 
-    // WALL 2 (validation): tsc first, then targeted vitest. Fixed argv; cwd is
-    // the worktree, asserted under itself. First failure returns stage+output.
+    // tsc first, then targeted vitest. Fixed argv; cwd is the worktree, asserted
+    // under itself. First failure returns stage+output.
     let tsc = run_checked(
         &[npx, "tsc", "--noEmit"],
         &prop.worktree,
@@ -653,16 +787,20 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
         TSC_TIMEOUT,
     )?;
     if tsc.code != 0 {
-        return Ok(ValidateOut {
+        return Ok(Some(ValidateOut {
             ok: false,
             stage: "tsc".into(),
             output: format!("{}\n{}", tsc.stdout, tsc.stderr).trim().to_string(),
-        });
+        }));
     }
 
-    // Targeted vitest: the edited files + their `.test` siblings that exist.
+    // Targeted vitest: the edited .ts(x) files + their `.test` siblings that
+    // exist. (Rust edits contribute no vitest targets.)
     let mut targets: Vec<String> = Vec::new();
     for (rel, _, _) in &prop.edits {
+        if !(rel.ends_with(".ts") || rel.ends_with(".tsx")) {
+            continue;
+        }
         targets.push(rel.clone());
         for sib in test_siblings(rel) {
             if prop.worktree.join(&sib).exists() {
@@ -679,24 +817,72 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
     }
     let vitest = run_checked(&argv, &prop.worktree, &prop.worktree, VITEST_TIMEOUT)?;
     if vitest.code != 0 {
-        return Ok(ValidateOut {
+        return Ok(Some(ValidateOut {
             ok: false,
             stage: "vitest".into(),
             output: format!("{}\n{}", vitest.stdout, vitest.stderr)
                 .trim()
                 .to_string(),
-        });
+        }));
+    }
+    Ok(None)
+}
+
+/// Run the Rust validation toolchain (`cargo check` then `cargo test`) in the
+/// worktree's `src-tauri/` dir. A `git worktree add` at HEAD contains the full
+/// repo, so `src-tauri/Cargo.toml` is present with no shared `target/` — the
+/// compile is cold (minutes). Returns `Ok(None)` if both pass, `Ok(Some(fail))`
+/// on the first failing stage, or `Err` for an infrastructure fault (cargo
+/// unresolvable, the worktree lacks src-tauri/, spawn failure, timeout).
+fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
+    // Resolve cargo's ABSOLUTE path once (mirror of the npx hardening). If cargo
+    // can't be found we cannot prove the edit compiles → we must not pass.
+    let cargo = cargo_path().ok_or_else(|| {
+        LoomError::NotFound("cargo not found on PATH — cannot validate Rust".into())
+    })?;
+    let cargo = cargo
+        .to_str()
+        .ok_or_else(|| LoomError::Parse("cargo path is not valid UTF-8".into()))?;
+
+    // cargo runs in the worktree's src-tauri/ (where Cargo.toml lives), asserted
+    // under the worktree by run_checked's containment check.
+    let cargo_cwd = prop.worktree.join("src-tauri");
+    if !cargo_cwd.join("Cargo.toml").exists() {
+        return Err(LoomError::NotFound(format!(
+            "worktree has no src-tauri/Cargo.toml: {}",
+            cargo_cwd.display()
+        )));
     }
 
-    // Fully passing (tsc AND vitest) → mark validated. This is the ONLY place
-    // validated flips true, and apply refuses without it (Finding 1/5).
-    set_flags(&worktree_id, true, false);
+    // cargo check first (cheaper than a full test build), then cargo test.
+    let check = run_checked(
+        &[cargo, "check"],
+        &cargo_cwd,
+        &prop.worktree,
+        CARGO_CHECK_TIMEOUT,
+    )?;
+    if check.code != 0 {
+        return Ok(Some(ValidateOut {
+            ok: false,
+            stage: "cargo-check".into(),
+            output: format!("{}\n{}", check.stdout, check.stderr).trim().to_string(),
+        }));
+    }
 
-    Ok(ValidateOut {
-        ok: true,
-        stage: "ok".into(),
-        output: String::new(),
-    })
+    let test = run_checked(
+        &[cargo, "test"],
+        &cargo_cwd,
+        &prop.worktree,
+        CARGO_TEST_TIMEOUT,
+    )?;
+    if test.code != 0 {
+        return Ok(Some(ValidateOut {
+            ok: false,
+            stage: "cargo-test".into(),
+            output: format!("{}\n{}", test.stdout, test.stderr).trim().to_string(),
+        }));
+    }
+    Ok(None)
 }
 
 /// Mutate the validated/approved flags of a registered proposal in place.
@@ -1213,6 +1399,51 @@ mod tests {
         // a normal kernel file remains editable (the whitelist still works)
         assert!(is_editable("src/lib/orb/moods.ts"));
         assert!(is_editable("src/components/WatchPanel.tsx"));
+
+        // ── Phase 22 (Marrow): the RUST safety machinery is EXPLICITLY refused ──
+        // Every safety file: the Rust core (constructs the app / runs before
+        // recovery / implements a wall), the guard script, and the Cargo
+        // manifests. Exact on-disk casing AND lowercased must both be denied.
+        let rust_safety_files = [
+            "src-tauri/src/main.rs",
+            "src-tauri/src/lib.rs",
+            "src-tauri/src/kernel.rs", // also holds preboot_heal (no separate preboot.rs)
+            "src-tauri/src/exec.rs",
+            "src-tauri/src/error.rs",
+            "src-tauri/src/timeline.rs",
+            "scripts/kernel-preboot.mjs", // the pre-compile recovery guard
+            "Cargo.toml",                 // dependency edit = arbitrary-code vector
+            "Cargo.lock",
+        ];
+        for f in rust_safety_files {
+            assert!(!is_editable(f), "rust safety file must be protected: {f}");
+            assert!(
+                !is_editable(&f.to_lowercase()),
+                "case-collision must be protected: {f}"
+            );
+            // Explicit uppercase spelling too (e.g. CARGO.TOML, KERNEL.RS).
+            assert!(
+                !is_editable(&f.to_uppercase()),
+                "uppercase-collision must be protected: {f}"
+            );
+        }
+        // Cargo manifests are protected by BASENAME anywhere, not just at root.
+        assert!(!is_editable("some/nested/Cargo.toml"));
+        assert!(!is_editable("vendor/crate/Cargo.lock"));
+        assert!(!is_editable("scripts/kernel-preboot.mjs"));
+
+        // A NORMAL Rust file under src-tauri/src IS editable — the Rust
+        // whitelist genuinely works (not blanket-denied).
+        assert!(is_editable("src-tauri/src/fleet.rs"));
+        assert!(is_editable("src-tauri/src/organs.rs"));
+        assert!(is_editable("src-tauri/src/market.rs"));
+
+        // But a non-.rs src-tauri file, or a src-tauri file OUTSIDE src/, is NOT
+        // editable — the Rust whitelist is exactly `src-tauri/src/**/*.rs`.
+        assert!(!is_editable("src-tauri/tauri.conf.json"));
+        assert!(!is_editable("src-tauri/build.rs")); // src-tauri/ but not src-tauri/src/
+        assert!(!is_editable("src-tauri/src/config.json")); // under src/ but not .rs
+        assert!(!is_editable("src-tauri/Cargo.toml")); // manifest (also basename-denied)
     }
 
     #[test]
@@ -1467,6 +1698,20 @@ mod tests {
                 assert!(p.exists(), "resolved npx must exist: {}", p.display());
             }
             None => eprintln!("SKIP npx_resolver_returns_absolute_path_or_skips: npx not on PATH"),
+        }
+    }
+
+    #[test]
+    fn cargo_resolver_returns_absolute_path_or_skips() {
+        // Same skip-guard as npx: cargo is resolved once to an absolute path via
+        // the shared PATH-walk. If cargo is absent (unlikely in a Rust test run,
+        // but honest) this asserts nothing.
+        match cargo_path() {
+            Some(p) => {
+                assert!(p.is_absolute(), "resolved cargo must be absolute: {}", p.display());
+                assert!(p.exists(), "resolved cargo must exist: {}", p.display());
+            }
+            None => eprintln!("SKIP cargo_resolver_returns_absolute_path_or_skips: cargo not on PATH"),
         }
     }
 
@@ -1797,6 +2042,80 @@ mod tests {
         fs::write(wt.join("bad.ts"), "export const s: number = \"nope\";\n").unwrap();
         let bad = run_tsc(wt).unwrap();
         assert_ne!(bad.code, 0, "type error must fail tsc: {}\n{}", bad.stdout, bad.stderr);
+    }
+
+    // ── SKIP-GUARDED real-cargo integration test (#[ignore]) ────────────────────
+    //
+    // Proves the Rust validation wall genuinely catches breakage: a passing `.rs`
+    // fixture yields `cargo check` code 0; a type-error `.rs` fixture yields
+    // non-zero — driven through the REAL cargo resolver (`cargo_path`) +
+    // `run_checked`, the exact path `validate_rust` uses. A tiny standalone crate
+    // is compiled (NOT the whole LOOM crate) so this proves the wall without a
+    // multi-minute cold build of the real tree.
+    //
+    // #[ignore]'d because even a minimal `cargo check` is slow relative to the
+    // unit suite (fetches nothing here — no deps — but still invokes rustc). Run
+    // manually with:  cargo test --manifest-path src-tauri/Cargo.toml -- --ignored real_cargo
+    #[test]
+    #[ignore = "invokes real cargo/rustc — slow; run manually with --ignored"]
+    fn real_cargo_catches_type_errors() {
+        let cargo = match cargo_path() {
+            Some(c) => c,
+            None => {
+                eprintln!("SKIP real_cargo_catches_type_errors: cargo not on PATH");
+                return;
+            }
+        };
+        let cargo = cargo.to_str().unwrap();
+
+        // Build a minimal standalone crate laid out like the worktree the
+        // validator sees: an allowed_root with a `src-tauri/` holding Cargo.toml
+        // + src/. We run cargo in `src-tauri/` with the root as allowed_root,
+        // exactly as validate_rust does.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let crate_dir = root.join("src-tauri");
+        fs::create_dir_all(crate_dir.join("src")).unwrap();
+        fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[package]\nname = \"marrow_fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"marrow_fixture\"\npath = \"src/main.rs\"\n",
+        )
+        .unwrap();
+
+        let run_check = |wt_root: &Path| -> Result<ExecOut, LoomError> {
+            run_checked(
+                &[cargo, "check"],
+                &wt_root.join("src-tauri"),
+                wt_root,
+                CARGO_CHECK_TIMEOUT,
+            )
+        };
+
+        // Passing fixture → cargo check code 0.
+        fs::write(
+            crate_dir.join("src/main.rs"),
+            "fn main() {\n    let n: i32 = 1;\n    println!(\"{n}\");\n}\n",
+        )
+        .unwrap();
+        let ok = run_check(&root).unwrap();
+        assert_eq!(
+            ok.code, 0,
+            "passing fixture must compile: {}\n{}",
+            ok.stdout, ok.stderr
+        );
+
+        // Type-error fixture → cargo check must fail. Load-bearing assertion.
+        fs::write(
+            crate_dir.join("src/main.rs"),
+            "fn main() {\n    let _n: i32 = \"not a number\";\n}\n",
+        )
+        .unwrap();
+        let bad = run_check(&root).unwrap();
+        assert_ne!(
+            bad.code, 0,
+            "type error must fail cargo check: {}\n{}",
+            bad.stdout, bad.stderr
+        );
     }
 
     /// Walk up from the crate dir to find `node_modules/.bin/tsc`.
