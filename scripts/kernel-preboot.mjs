@@ -17,12 +17,21 @@
  * is the SAME file the Rust pre-main hook (`preboot_heal`) reads — one source
  * of truth for both guards.
  *
- * State machine (mirror; see kernel.rs Sentinel):
- *   pending | applied | booting  → UNCONFIRMED (actionable)
- *   ok | healed | rollback-failed → terminal (no-op)
- * If UNCONFIRMED and prevSha present → `git reset --hard <prevSha>` on the
- * recorded source_root (or cwd), rewrite the mirror to `healed`, log a calm
- * line, exit 0.
+ * CORRECTED STATE MACHINE (round-1 review, Finding 3 — the guard was rolling
+ * back GOOD edits on the FIRST restart because it conflated "unconfirmed" with
+ * "must reset"). The guard runs PRE-COMPILE (beforeDevCommand) on EVERY
+ * `tauri dev`, so a freshly-`applied` edit it sees is one that has NOT yet been
+ * given a chance to boot. It must ARM that edit (let it boot once), and only
+ * heal on the FOLLOWING restart if the edit never confirmed.
+ *
+ *   0. sourceRoot GUARD (Finding 7): verify the mirror's sourceRoot canonically
+ *      equals cwd. If they differ, NO-OP — never roll back another repo.
+ *   1. status=="applied"  → write status="booting", armedBy="guard"; DO NOT
+ *      reset. (ARM — let the edit boot once.)
+ *   2. status=="booting"  → `git reset --hard <prevSha>` (fixed argv,
+ *      cwd=sourceRoot), write status="healed". (HEAL — a `booting` seen again at
+ *      pre-compile means the prior boot never confirmed.)
+ *   3. anything else (healed/ok/absent/corrupt/no prevSha) → no-op.
  *
  * CORRUPTION-TOLERANT BY CONTRACT: a bad / absent / unparseable mirror, a
  * missing prevSha, or a failed git reset is a NO-OP that STILL exits 0. This
@@ -32,15 +41,20 @@
  * Pure Node, no dependencies.
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const MIRROR = ".loom-boot.json";
 
-/** Statuses that mean "applied but never confirmed healthy" → actionable. */
-function isUnconfirmed(status) {
-  return status === "pending" || status === "applied" || status === "booting";
+/** Canonicalize a path for comparison; falls back to `resolve` if the path
+ *  does not exist on disk (realpath throws on a missing path). */
+function canon(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
 }
 
 /**
@@ -74,58 +88,92 @@ export function runGuard(cwd = process.cwd(), log = console.log) {
         ? sentinel.prev_sha
         : "";
 
-  // Confirmed / terminal → no-op.
-  if (!isUnconfirmed(status)) {
-    return { action: "noop", reason: "confirmed" };
-  }
-  // Unconfirmed but no last-good sha to return to → cannot heal; no-op.
-  if (!prevSha) {
-    return { action: "noop", reason: "no-prev-sha" };
-  }
-
-  // Roll back to the repo the edit was applied to — the mirror's own
-  // source_root — falling back to cwd for a hand-written mirror.
+  // The repo the edit was applied to (the mirror's own source_root), falling
+  // back to cwd for a hand-written mirror.
   const srcRoot =
     typeof sentinel.source_root === "string" && sentinel.source_root.trim()
       ? sentinel.source_root.trim()
       : cwd;
 
-  // Fixed argv, fixed cwd — no shell, no interpolation of untrusted strings
-  // into a command line. prevSha is a git object id we hand to git verbatim.
-  const reset = spawnSync("git", ["reset", "--hard", prevSha], {
-    cwd: srcRoot,
-    encoding: "utf8",
-  });
+  // STEP 0 (Finding 7) — sourceRoot GUARD. Before ANY state transition, verify
+  // the mirror belongs to THIS repo: its sourceRoot must canonically equal cwd.
+  // If they differ, a mirror from another checkout was found (a copied file, a
+  // shared temp dir); NEVER roll back another repo. No-op.
+  if (canon(srcRoot) !== canon(cwd)) {
+    return { action: "noop", reason: "foreign-root" };
+  }
 
-  if (reset.status !== 0) {
-    // Rollback failed (sha gc'd / not a repo / wrong root). Do NOT loop or
-    // block: mark rollback-failed so the next start is a no-op, exit 0.
+  // STEP 1 — status=="applied": ARM. The edit has not been given a chance to
+  // boot. Mark it booting/guard and let the build proceed — DO NOT reset. A
+  // GOOD edit boots, confirms via kernel_boot_ok (→ healed), and is never rolled
+  // back. This is the Finding-3 fix: no reset on the first restart.
+  if (status === "applied") {
     try {
       writeFileSync(
         mirrorPath,
-        JSON.stringify({ ...sentinel, status: "rollback-failed" }, null, 2),
+        JSON.stringify(
+          { ...sentinel, status: "booting", armedBy: "guard" },
+          null,
+          2,
+        ),
       );
     } catch {
-      /* best effort */
+      /* best effort — worst case the pre-main hook or next start re-arms */
     }
-    return { action: "rollback-failed", prevSha, srcRoot };
+    return { action: "armed", prevSha, srcRoot };
   }
 
-  // Healed: source is home to prevSha. Mark the mirror so neither guard nor
-  // the in-binary hook re-triggers, then let the build proceed from good source.
-  try {
-    writeFileSync(
-      mirrorPath,
-      JSON.stringify({ ...sentinel, status: "healed" }, null, 2),
+  // STEP 2 — status=="booting": HEAL. We armed this edit on a prior pre-compile
+  // and it is STILL booting (the boot never confirmed healthy — it panicked
+  // before kernel_boot_ok). Reset the source to prevSha so the recompile is from
+  // good source.
+  if (status === "booting") {
+    // Unconfirmed but no last-good sha to return to → cannot heal; no-op.
+    if (!prevSha) {
+      return { action: "noop", reason: "no-prev-sha" };
+    }
+    // Fixed argv, fixed cwd — no shell, no interpolation of untrusted strings
+    // into a command line. prevSha is a git object id we hand to git verbatim.
+    const reset = spawnSync("git", ["reset", "--hard", prevSha], {
+      cwd: srcRoot,
+      encoding: "utf8",
+    });
+
+    if (reset.status !== 0) {
+      // Rollback failed (sha gc'd / not a repo / wrong root). Do NOT loop or
+      // block: mark rollback-failed so the next start is a no-op, exit 0.
+      try {
+        writeFileSync(
+          mirrorPath,
+          JSON.stringify({ ...sentinel, status: "rollback-failed" }, null, 2),
+        );
+      } catch {
+        /* best effort */
+      }
+      return { action: "rollback-failed", prevSha, srcRoot };
+    }
+
+    // Healed: source is home to prevSha. Mark the mirror so neither guard nor
+    // the in-binary hook re-triggers, then let the build proceed from good
+    // source.
+    try {
+      writeFileSync(
+        mirrorPath,
+        JSON.stringify({ ...sentinel, status: "healed" }, null, 2),
+      );
+    } catch {
+      /* best effort — the git reset already landed */
+    }
+    log(
+      `[kernel] pre-compile heal: a Rust edit never confirmed a healthy boot — ` +
+        `source reset to ${prevSha.slice(0, 7)} before recompile (from good source).`,
     );
-  } catch {
-    /* best effort — the git reset already landed */
+    return { action: "healed", prevSha, srcRoot };
   }
-  log(
-    `[kernel] pre-compile heal: a Rust edit never confirmed a healthy boot — ` +
-      `source reset to ${prevSha.slice(0, 7)} before recompile (from good source).`,
-  );
-  return { action: "healed", prevSha, srcRoot };
+
+  // STEP 3 — anything else (healed/ok/rollback-failed/pending/unknown) → no-op.
+  // NEVER block the build.
+  return { action: "noop", reason: "confirmed" };
 }
 
 // Run when invoked directly (not when imported by the test). Always exit 0.

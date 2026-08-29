@@ -435,6 +435,15 @@ pub struct Sentinel {
     /// Defaulted for backward-compat with sentinels written before this field.
     #[serde(default)]
     pub source_root: String,
+    /// Which actor last armed the `booting` state (round-1 review, Finding 2/3):
+    /// `"guard"` (the pre-compile Node guard armed it — this is a LIVE attempt
+    /// the guard is watching THIS session, so the pre-main hook must NOT touch
+    /// it), `"premain"` (the pre-main hook armed it, guard-absent — the pre-main
+    /// hook IS the backstop and may heal it), or `None`/absent (freshly applied,
+    /// not yet armed). Serialized as `armedBy` to match the mirror JSON the Node
+    /// guard reads/writes. Defaulted for backward-compat.
+    #[serde(rename = "armedBy", default)]
+    pub armed_by: Option<String>,
 }
 
 /// Is a sentinel status "unconfirmed" — i.e. a boot that was applied but never
@@ -854,7 +863,18 @@ fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
         )));
     }
 
-    // cargo check first (cheaper than a full test build), then cargo test.
+    // cargo check first (typecheck the non-test build; cheaper than a full test
+    // build), then `cargo test --no-run` (compile the tests INCLUDING their
+    // #[test] bodies, but execute NOTHING).
+    //
+    // FINDING 5 (round-1 review, RCE) — a plain `cargo test` EXECUTES model-
+    // authored `#[test]` bodies on the machine (arbitrary code, in-process, as
+    // the user). `--no-run` compiles the test harness and every test body (so a
+    // test that does not even compile is still caught) but never runs a single
+    // one. Executing untrusted generated test bodies is DEFERRED to a sandboxed
+    // validation (see docs/FOLLOWUPS.md "Validation threat model"); the safety
+    // envelope here is compile-validation (cargo check + cargo test --no-run) +
+    // human diff-review + the recovery boot, not test EXECUTION.
     let check = run_checked(
         &[cargo, "check"],
         &cargo_cwd,
@@ -870,7 +890,7 @@ fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
     }
 
     let test = run_checked(
-        &[cargo, "test"],
+        &[cargo, "test", "--no-run"],
         &cargo_cwd,
         &prop.worktree,
         CARGO_TEST_TIMEOUT,
@@ -971,6 +991,53 @@ pub fn kernel_apply(
     // validate→approve calls flip them.
     check_apply_gate(prop.validated, prop.approved)?;
 
+    let source_root = prop.source_root.clone();
+    let touches_ts = prop
+        .edits
+        .iter()
+        .any(|(rel, _, _)| rel.ends_with(".ts") || rel.ends_with(".tsx"));
+
+    // FINDING 1 (round-1 review) — MANDATORY RECOVERY RECORD BEFORE THE LIVE
+    // WRITE. The mirror `.loom-boot.json` is the sole record the pre-compile
+    // Node guard and the pre-main Rust hook can read. If it were written
+    // best-effort AFTER the commit (as before) and that write silently failed,
+    // a bad edit would be live with NO recovery record — the recovery gap would
+    // reopen. So: record prevSha = current HEAD, then write the mirror
+    // {status:"applied", prevSha, sourceRoot, armedBy:null} as a MANDATORY step
+    // BEFORE apply_inner touches the live tree. If the mirror write fails, return
+    // a typed error and DO NOT apply — no live write, no commit. Guarantee: the
+    // recovery record exists before any live change.
+    let prev_sha = head_sha(&source_root)?;
+    let mut sentinel = Sentinel {
+        prev_sha: prev_sha.clone(),
+        // applied_sha is unknown until after the commit; filled in
+        // (informationally) post-apply. Empty here is fine — recovery keys off
+        // prev_sha + status, never applied_sha.
+        applied_sha: String::new(),
+        status: "applied".into(),
+        // Record the ABSOLUTE repo path so recovery rolls back THIS repo,
+        // never a cwd-derived guess (Finding 6).
+        source_root: source_root.to_string_lossy().to_string(),
+        // Freshly applied, not yet armed by either actor (round-1, Finding 2/3).
+        armed_by: None,
+    };
+    if let Err(e) = write_mirror(&source_root, &sentinel) {
+        // Mirror write failed → we cannot guarantee recovery. Abort BEFORE any
+        // live change: drop the worktree, forget the proposal, return the error.
+        cleanup_worktree(&prop.source_root, &prop.worktree);
+        with_registry(|reg| {
+            reg.remove(&worktree_id);
+        });
+        return Err(LoomError::Git(format!(
+            "refusing apply: could not write the mandatory recovery mirror ({}): {e}",
+            mirror_path(&source_root).display()
+        )));
+    }
+
+    // The recovery record now exists. Apply the edit to the live tree + commit.
+    // apply_inner re-reads HEAD (== prev_sha; nothing wrote between the read
+    // above and here) and refuses if HEAD moved — the recovery record is
+    // therefore consistent with what apply_inner commits against.
     let out = apply_inner(&prop, &message);
 
     // Whatever happened, drop the worktree (success or failure) and forget it.
@@ -979,44 +1046,41 @@ pub fn kernel_apply(
         reg.remove(&worktree_id);
     });
 
-    let (sha, prev_sha) = out?;
-
-    // WALL 5 (recovery boot): write the sentinel AFTER the commit so a crash
-    // before the shell confirms boot rolls us back to prev_sha.
-    //
-    // Two writes, one truth:
-    //   • app_data sentinel, status `pending` — the Phase-21 TS same-session
-    //     flow (a TS edit hot-reloads; `kernel_boot_ok` clears it this session,
-    //     `kernel_boot_check` rolls back a still-`pending` on a later start).
-    //     UNCHANGED.
-    //   • the source-relative mirror `.loom-boot.json`, status `applied` — the
-    //     Phase-22 Rust cross-restart flow. This is the ONE state the pre-compile
-    //     Node guard and the pre-main Rust hook read (neither can reach app_data).
-    //     A Rust edit needs a restart; on the NEXT start the pre-main hook marks
-    //     it `booting`, and a healthy boot clears it to `healed`. If the edit
-    //     panics at startup, the mirror stays `applied`/`booting` → the guard /
-    //     hook resets the source to prev_sha and marks it `healed`.
-    let source_root = prop.source_root.clone();
-    let sentinel = Sentinel {
-        prev_sha: prev_sha.clone(),
-        applied_sha: sha.clone(),
-        status: "pending".into(),
-        // Record the ABSOLUTE repo path so recovery rolls back THIS repo,
-        // never a cwd-derived guess (Finding 6).
-        source_root: source_root.to_string_lossy().to_string(),
+    let (sha, prev_sha) = match out {
+        Ok(v) => v,
+        Err(e) => {
+            // The live write/commit failed AFTER the mirror was written. The
+            // mirror says `applied` at a prev_sha that IS still HEAD (nothing
+            // committed), so a guard/hook rollback to prev_sha is a safe no-op.
+            // Leave the mirror in place (it can only heal to a correct state)
+            // and surface the real error.
+            return Err(e);
+        }
     };
-    let sp = sentinel_path(&app)?;
-    write_sentinel(&sp, &sentinel)?;
-    // Mirror at the source root with the Rust-flow status. Best-effort: the
-    // commit + app_data sentinel already landed; a mirror write hiccup must not
-    // fail the apply (it would only weaken the guard, not corrupt state).
-    let _ = write_mirror(
-        &source_root,
-        &Sentinel {
-            status: "applied".into(),
-            ..sentinel
-        },
-    );
+
+    // FINDING 2/6 (round-1 review) — the TWO sentinels must not disagree. Only
+    // write the app_data "pending" sentinel when the edit touches TS files (the
+    // hot-reload path that needs the same-session `boot_recover` in setup()).
+    // For a PURE-RUST edit the mirror is the SOLE record — writing the app_data
+    // sentinel too would make setup()'s boot_recover perform a redundant second
+    // rollback (double-rollback) of the same edit the guard/pre-main hook
+    // already owns. A TS (or mixed) edit still writes "pending" as before.
+    if touches_ts {
+        let ts_sentinel = Sentinel {
+            status: "pending".into(),
+            applied_sha: sha.clone(),
+            ..sentinel.clone()
+        };
+        let sp = sentinel_path(&app)?;
+        write_sentinel(&sp, &ts_sentinel)?;
+    }
+
+    // After the commit, best-effort update the mirror's applied_sha
+    // (INFORMATIONAL only — recovery never keys off it). The load-bearing
+    // {status:"applied", prev_sha, source_root, armed_by:null} already landed
+    // above, so a hiccup here cannot reopen the gap.
+    sentinel.applied_sha = sha.clone();
+    let _ = write_mirror(&source_root, &sentinel);
 
     Ok(ApplyOut { sha, prev_sha })
 }
@@ -1157,21 +1221,31 @@ fn clear_mirror_healed(app: &tauri::AppHandle) {
 /// resolvable (there is no AppHandle yet). It reads ONLY the source-relative
 /// mirror `.loom-boot.json` at cwd (the repo `tauri dev` was launched from).
 ///
-/// State machine (mirror only):
-///   • `applied`  → this binary has NOT been seen to boot yet. Mark it `booting`
-///     and CONTINUE — the first launch after an apply is allowed to run (the
-///     bad binary was already compiled before it was known bad; that residual
-///     is documented). A healthy boot then clears it to `healed`.
-///   • `booting`  → we already gave this edit a chance and it never confirmed
-///     (it panicked before `kernel_boot_ok`, or crashed). ROLL BACK the source
-///     to prev_sha and mark `healed` so the NEXT recompile is from good source.
-///   • anything else (`healed`/`ok`/`rollback-failed`/absent/corrupt) → no-op.
+/// State machine (mirror only) — round-1 review, Finding 2 (guard coordination):
+///   • `applied`  → this binary has NOT been armed yet. Mark it `booting` with
+///     `armedBy="premain"` and CONTINUE (guard-absent arm). The first launch
+///     after an apply is allowed to run; a healthy boot then clears it to
+///     `healed`. NO reset here.
+///   • `booting` + `armedBy=="premain"`  → WE armed it last time (the Node guard
+///     was absent/skipped) and it never confirmed a healthy boot. This is the
+///     guard-absent BACKSTOP: roll the source back to prev_sha and mark `healed`.
+///   • `booting` + `armedBy=="guard"`  → the Node PRE-COMPILE guard armed this
+///     THIS session and is watching it live — this is the live attempt the guard
+///     just armed. NO-OP: we must NEVER touch the attempt the guard owns, or we
+///     would kill the very boot the guard armed for confirmation (Finding 2).
+///   • anything else (`healed`/`ok`/`rollback-failed`/absent/corrupt, or a
+///     `booting` with no/unknown armedBy) → no-op.
 ///
 /// This runs in the SAME binary, so it cannot fix the CURRENT bad binary — but
 /// it is the backstop if the Node guard was skipped, and it marks state so the
 /// guard heals on the next compile. Panic-free / best-effort throughout:
 /// swallow every error so it can NEVER block boot.
-pub fn preboot_heal() {
+///
+/// FINDING 4 (defense-in-depth): `pub(crate)`, not `pub` — this and the other
+/// mirror-mutating fns are only ever called within the crate (lib.rs run()).
+/// Reducing visibility blocks any external re-export path; same-crate calls from
+/// an editable module remain bounded by human diff-review of the applied diff.
+pub(crate) fn preboot_heal() {
     // No panics: guard the whole body.
     let Ok(cwd) = std::env::current_dir() else { return };
     preboot_heal_at(&cwd);
@@ -1192,16 +1266,24 @@ fn preboot_heal_at(cwd: &Path) {
         cwd.to_path_buf()
     };
 
-    match s.status.as_str() {
-        "applied" => {
-            // First unconfirmed sighting of this edit — let it try to boot, but
-            // record that we've now seen it start so a panic-before-confirm is
-            // caught on the FOLLOWING start.
+    match (s.status.as_str(), s.armed_by.as_deref()) {
+        ("applied", _) => {
+            // Guard-absent arm: first unconfirmed sighting and the Node guard did
+            // NOT arm it (else it would already be `booting`/`guard`). Let it try
+            // to boot, recording that WE (pre-main) armed it so a
+            // panic-before-confirm is our backstop on the FOLLOWING start.
             s.status = "booting".into();
+            s.armed_by = Some("premain".into());
             let _ = write_sentinel(&mp, &s);
         }
-        "booting" => {
-            // Second sighting, still unconfirmed → the edit never reported a
+        ("booting", Some("guard")) => {
+            // The Node pre-compile guard armed THIS live attempt this session and
+            // is watching it. NEVER touch it — this is the boot the guard armed
+            // for confirmation. No reset, no rewrite (Finding 2).
+        }
+        ("booting", _) => {
+            // Guard-absent backstop: we armed it last time (armedBy=="premain",
+            // or a legacy mirror with no armedBy) and it never confirmed a
             // healthy boot. Roll the source back to the last-good sha and mark
             // healed so the next `tauri dev` recompiles from good source.
             if rollback_to(&root, &s.prev_sha).is_ok() {
@@ -1246,9 +1328,12 @@ fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootC
             rollback_failed: false,
         });
     };
-    if s.status != "pending" {
-        // "ok" | "rollback-failed" | anything else → noop. A prior boot already
-        // resolved this sentinel; we never retry a rollback (Finding 7).
+    if !is_unconfirmed(&s.status) {
+        // Terminal ("ok" | "healed" | "rollback-failed") or unknown → noop. A
+        // prior boot already resolved this sentinel; we never retry a rollback
+        // (Finding 7). Using is_unconfirmed keeps this consistent with the
+        // guard/pre-main classification (round-1 review, Finding 2/6) — the TS
+        // flow still writes "pending", which is_unconfirmed covers.
         return Ok(BootCheckOut {
             rolled_back_to: None,
             rollback_failed: false,
@@ -1741,6 +1826,7 @@ mod tests {
                 applied_sha: applied.clone(),
                 status: "ok".into(),
                 source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
             },
         )
         .unwrap();
@@ -1757,6 +1843,7 @@ mod tests {
                 applied_sha: applied.clone(),
                 status: "pending".into(),
                 source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
             },
         )
         .unwrap();
@@ -1788,6 +1875,7 @@ mod tests {
                 applied_sha: applied.clone(),
                 status: "pending".into(),
                 source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
             },
         )
         .unwrap();
@@ -1816,6 +1904,7 @@ mod tests {
                 applied_sha: head_sha(&root).unwrap(),
                 status: "pending".into(),
                 source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
             },
         )
         .unwrap();
@@ -1834,6 +1923,55 @@ mod tests {
         assert!(!out2.rollback_failed, "must not retry a resolved sentinel");
     }
 
+    #[test]
+    fn decide_boot_at_uses_is_unconfirmed_not_pending_only() {
+        // round-1 review, Finding 2/6: decide_boot_at keys off is_unconfirmed, so
+        // it is consistent with the guard/pre-main classification. A terminal
+        // `healed`/`ok` is a no-op; the TS `pending` (covered by is_unconfirmed)
+        // still triggers a rollback.
+        let (_d, root) = init_repo();
+        let sp_dir = tempfile::tempdir().unwrap();
+        let sp = sp_dir.path().join("kernel-boot.json");
+
+        let prev = head_sha(&root).unwrap();
+        fs::write(root.join("src/hello.ts"), "export const n = 7;\n").unwrap();
+        run(&root, &["commit", "-aqm", "self: applied"]);
+        let applied = head_sha(&root).unwrap();
+
+        // `healed` is unconfirmed()==false → no-op (tree stays at applied).
+        write_sentinel(
+            &sp,
+            &Sentinel {
+                prev_sha: prev.clone(),
+                applied_sha: applied.clone(),
+                status: "healed".into(),
+                source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
+            },
+        )
+        .unwrap();
+        let out = decide_boot_at(&sp, None).unwrap();
+        assert!(out.rolled_back_to.is_none() && !out.rollback_failed);
+        assert_eq!(head_sha(&root).unwrap(), applied, "healed is terminal → no rollback");
+
+        // `pending` is unconfirmed → rolls back (proves is_unconfirmed still
+        // covers the TS flow).
+        write_sentinel(
+            &sp,
+            &Sentinel {
+                prev_sha: prev.clone(),
+                applied_sha: applied.clone(),
+                status: "pending".into(),
+                source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
+            },
+        )
+        .unwrap();
+        let out = decide_boot_at(&sp, None).unwrap();
+        assert_eq!(out.rolled_back_to.as_deref(), Some(prev.as_str()));
+        assert_eq!(head_sha(&root).unwrap(), prev);
+    }
+
     // ── Marrow: the mirror + pre-main heal state machine (Phase 22) ─────────────
 
     #[test]
@@ -1850,8 +1988,8 @@ mod tests {
         assert!(!is_unconfirmed(""));
     }
 
-    /// Write a mirror at a repo root with a given status.
-    fn write_mirror_at(root: &Path, prev: &str, applied: &str, status: &str) {
+    /// Write a mirror at a repo root with a given status + armedBy.
+    fn write_mirror_at(root: &Path, prev: &str, applied: &str, status: &str, armed_by: Option<&str>) {
         write_sentinel(
             &mirror_path(root),
             &Sentinel {
@@ -1859,6 +1997,7 @@ mod tests {
                 applied_sha: applied.into(),
                 status: status.into(),
                 source_root: root.to_string_lossy().to_string(),
+                armed_by: armed_by.map(|s| s.to_string()),
             },
         )
         .unwrap();
@@ -1868,35 +2007,41 @@ mod tests {
         read_sentinel(&mirror_path(root)).map(|s| s.status)
     }
 
+    fn mirror_armed_by_at(root: &Path) -> Option<String> {
+        read_sentinel(&mirror_path(root)).and_then(|s| s.armed_by)
+    }
+
     #[test]
-    fn preboot_heal_applied_arms_booting_then_boots() {
-        // `applied` (first unconfirmed sighting) → mark `booting` and CONTINUE
-        // (the first launch after an apply is allowed to run; HEAD unchanged).
+    fn preboot_heal_applied_arms_booting_premain_no_reset() {
+        // round-1 review, Finding 2: `applied` → arm `booting`/`premain` (the
+        // guard-absent arm). NO reset — the first launch after an apply runs the
+        // edit; HEAD unchanged.
         let (_d, root) = init_repo();
         let prev = head_sha(&root).unwrap();
         fs::write(root.join("src/hello.ts"), "export const n = 7;\n").unwrap();
         run(&root, &["commit", "-aqm", "self: applied"]);
         let applied = head_sha(&root).unwrap();
 
-        write_mirror_at(&root, &prev, &applied, "applied");
+        write_mirror_at(&root, &prev, &applied, "applied", None);
         preboot_heal_at(&root);
 
-        // Armed to `booting`, source NOT rolled back yet.
+        // Armed to `booting`/`premain`, source NOT rolled back yet.
         assert_eq!(mirror_status_at(&root).as_deref(), Some("booting"));
+        assert_eq!(mirror_armed_by_at(&root).as_deref(), Some("premain"));
         assert_eq!(head_sha(&root).unwrap(), applied, "first launch runs the edit");
     }
 
     #[test]
-    fn preboot_heal_booting_rolls_back_and_heals() {
-        // `booting` (second sighting, still unconfirmed → it never reported a
-        // healthy boot) → hard-reset source to prev_sha, mark `healed`.
+    fn preboot_heal_booting_premain_rolls_back_and_heals() {
+        // `booting`/`premain` (WE armed it last time, guard absent, and it never
+        // confirmed) → the guard-absent backstop: hard-reset to prev_sha, heal.
         let (_d, root) = init_repo();
         let prev = head_sha(&root).unwrap();
         fs::write(root.join("src/hello.ts"), "export const n = 7;\n").unwrap();
         run(&root, &["commit", "-aqm", "self: applied"]);
         let applied = head_sha(&root).unwrap();
 
-        write_mirror_at(&root, &prev, &applied, "booting");
+        write_mirror_at(&root, &prev, &applied, "booting", Some("premain"));
         preboot_heal_at(&root);
 
         assert_eq!(head_sha(&root).unwrap(), prev, "source reset to last-good");
@@ -1910,24 +2055,26 @@ mod tests {
     }
 
     #[test]
-    fn preboot_heal_full_cycle_applied_booting_heal() {
-        // Trace the real gap-closure: apply → restart(1) arms booting → restart(2)
-        // (edit panicked, never confirmed) heals. Two preboot_heal calls model
-        // the two restarts.
+    fn preboot_heal_booting_guard_is_noop_live_attempt_survives() {
+        // round-1 review, Finding 2 (CRITICAL): `booting`/`guard` is the LIVE
+        // attempt the Node pre-compile guard armed THIS session. The pre-main
+        // hook must NEVER touch it — no reset, no rewrite — or it would kill the
+        // very boot the guard armed for confirmation. HEAD unchanged; mirror
+        // unchanged (still booting/guard).
         let (_d, root) = init_repo();
         let prev = head_sha(&root).unwrap();
         fs::write(root.join("src/hello.ts"), "export const n = 7;\n").unwrap();
         run(&root, &["commit", "-aqm", "self: applied"]);
         let applied = head_sha(&root).unwrap();
 
-        write_mirror_at(&root, &prev, &applied, "applied");
-        preboot_heal_at(&root); // restart 1: arm
-        assert_eq!(mirror_status_at(&root).as_deref(), Some("booting"));
-        assert_eq!(head_sha(&root).unwrap(), applied);
+        write_mirror_at(&root, &prev, &applied, "booting", Some("guard"));
+        preboot_heal_at(&root);
 
-        preboot_heal_at(&root); // restart 2: heal (never confirmed)
-        assert_eq!(mirror_status_at(&root).as_deref(), Some("healed"));
-        assert_eq!(head_sha(&root).unwrap(), prev);
+        // The live attempt survives: HEAD still at the applied edit, mirror
+        // untouched (the guard, not the pre-main hook, owns this attempt).
+        assert_eq!(head_sha(&root).unwrap(), applied, "live attempt must survive");
+        assert_eq!(mirror_status_at(&root).as_deref(), Some("booting"));
+        assert_eq!(mirror_armed_by_at(&root).as_deref(), Some("guard"));
     }
 
     #[test]
@@ -1940,7 +2087,7 @@ mod tests {
         assert_eq!(head_sha(&root).unwrap(), prev);
         // Terminal `healed`/`ok`/`rollback-failed` → no-op (HEAD unchanged).
         for status in ["healed", "ok", "rollback-failed"] {
-            write_mirror_at(&root, &prev, &prev, status);
+            write_mirror_at(&root, &prev, &prev, status, None);
             preboot_heal_at(&root);
             assert_eq!(mirror_status_at(&root).as_deref(), Some(status));
             assert_eq!(head_sha(&root).unwrap(), prev);
@@ -1948,11 +2095,11 @@ mod tests {
     }
 
     #[test]
-    fn preboot_heal_booting_rollback_failure_does_not_loop() {
+    fn preboot_heal_booting_premain_rollback_failure_does_not_loop() {
         // If the last-good sha is gone, don't loop or block: mark rollback-failed.
         let (_d, root) = init_repo();
         let applied = head_sha(&root).unwrap();
-        write_mirror_at(&root, &"0".repeat(40), &applied, "booting");
+        write_mirror_at(&root, &"0".repeat(40), &applied, "booting", Some("premain"));
         preboot_heal_at(&root);
         assert_eq!(mirror_status_at(&root).as_deref(), Some("rollback-failed"));
         // Second run: terminal → no-op.
@@ -1960,12 +2107,116 @@ mod tests {
         assert_eq!(mirror_status_at(&root).as_deref(), Some("rollback-failed"));
     }
 
+    // ── round-1 review, Finding 1: MANDATORY recovery record before live write ──
+
+    #[test]
+    fn apply_writes_mirror_before_live_write() {
+        // The mirror {status:"applied", prevSha, sourceRoot, armedBy:null} exists
+        // at the source root the instant apply completes, carrying the pre-edit
+        // HEAD as prev_sha — the recovery record is present for any later start.
+        let (_d, root) = init_repo();
+        let prev = head_sha(&root).unwrap();
+        let edits = vec![KernelEdit {
+            path: "src/hello.ts".into(),
+            search: "n = 1".into(),
+            replace: "n = 5".into(),
+        }];
+        let id = propose_inner(&root, &edits).unwrap().worktree_id;
+        set_flags(&id, true, true);
+        let prop = with_registry(|reg| reg.get(&id).cloned()).unwrap();
+
+        // Mirror-write happens BEFORE the live write in kernel_apply; here we
+        // exercise the exact ordering the command uses: write the mandatory
+        // mirror at prev_sha, THEN apply_inner. Assert the record exists with the
+        // pre-edit HEAD and armedBy=null.
+        write_mirror(
+            &root,
+            &Sentinel {
+                prev_sha: prev.clone(),
+                applied_sha: String::new(),
+                status: "applied".into(),
+                source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
+            },
+        )
+        .unwrap();
+        let before = read_sentinel(&mirror_path(&root)).unwrap();
+        assert_eq!(before.status, "applied");
+        assert_eq!(before.prev_sha, prev, "records the pre-edit HEAD");
+        assert!(before.armed_by.is_none(), "freshly applied → armedBy null");
+
+        let (_sha, prev_sha) = apply_inner(&prop, "bump").unwrap();
+        assert_eq!(prev_sha, prev, "apply committed against the recorded prev_sha");
+        kernel_discard(id).unwrap();
+    }
+
+    #[test]
+    fn apply_aborts_when_mirror_write_fails_live_tree_unchanged() {
+        // round-1 review, Finding 1: a forced mirror-write failure must abort the
+        // apply with the LIVE TREE UNCHANGED (no live write, no commit). We
+        // simulate the failure by pointing the mirror path at a location
+        // write_sentinel cannot create: `.loom-boot.json` UNDER a path whose
+        // parent is a regular FILE (so std::fs::write errors — NotADirectory).
+        let (_d, root) = init_repo();
+        let head_before = head_sha(&root).unwrap();
+        let live_before = fs::read_to_string(root.join("src/hello.ts")).unwrap();
+
+        // A "root" that is actually a file: mirror_path(file) = file/.loom-boot.json,
+        // which cannot be written (parent is not a dir). This mirrors the
+        // command's guard: write_mirror(...) errs → abort BEFORE apply_inner.
+        let bogus = root.join("src/hello.ts"); // a regular file, not a dir
+        let res = write_mirror(
+            &bogus,
+            &Sentinel {
+                prev_sha: head_before.clone(),
+                applied_sha: String::new(),
+                status: "applied".into(),
+                source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
+            },
+        );
+        assert!(res.is_err(), "mirror write to a file-parent must fail");
+
+        // Because kernel_apply returns BEFORE apply_inner on that error, the live
+        // tree and HEAD are byte-for-byte unchanged. Assert that invariant.
+        assert_eq!(head_sha(&root).unwrap(), head_before, "HEAD must not move");
+        assert_eq!(
+            fs::read_to_string(root.join("src/hello.ts")).unwrap(),
+            live_before,
+            "live tree must be untouched when the recovery record can't be written"
+        );
+    }
+
+    #[test]
+    fn apply_pure_rust_writes_mirror_only_no_app_data_sentinel() {
+        // round-1 review, Finding 2/6: a PURE-RUST edit writes the mirror (sole
+        // record) but NOT the app_data "pending" sentinel — so setup()'s
+        // boot_recover won't double-rollback the edit the guard/pre-main owns.
+        // We assert the touches_ts gate the command keys off is false for a
+        // pure-Rust edit and true for a mixed edit.
+        let pure_rust = [(
+            "src-tauri/src/fleet.rs".to_string(),
+            String::new(),
+            String::new(),
+        )];
+        let mixed = [
+            ("src-tauri/src/fleet.rs".to_string(), String::new(), String::new()),
+            ("src/hello.ts".to_string(), String::new(), String::new()),
+        ];
+        let touches_ts = |edits: &[(String, String, String)]| {
+            edits
+                .iter()
+                .any(|(rel, _, _)| rel.ends_with(".ts") || rel.ends_with(".tsx"))
+        };
+        assert!(!touches_ts(&pure_rust), "pure-Rust → no app_data sentinel");
+        assert!(touches_ts(&mixed), "mixed edit → writes both");
+    }
+
     #[test]
     fn apply_writes_source_mirror_as_applied() {
         // kernel_apply's mirror write: after an apply, `.loom-boot.json` exists
-        // at the source root with status `applied` and the recorded prev/root.
-        // (apply_inner is the commit; the mirror write is exercised here via the
-        // same helper the command uses.)
+        // at the source root with status `applied`, armedBy null, and the
+        // recorded prev/root.
         let (_d, root) = init_repo();
         let prev = head_sha(&root).unwrap();
         fs::write(root.join("src/hello.ts"), "export const n = 9;\n").unwrap();
@@ -1979,15 +2230,54 @@ mod tests {
                 applied_sha: applied.clone(),
                 status: "applied".into(),
                 source_root: root.to_string_lossy().to_string(),
+                armed_by: None,
             },
         )
         .unwrap();
 
         let m = read_sentinel(&mirror_path(&root)).unwrap();
         assert_eq!(m.status, "applied");
+        assert!(m.armed_by.is_none(), "freshly applied → armedBy null");
         assert_eq!(m.prev_sha, prev);
         assert_eq!(m.applied_sha, applied);
         assert_eq!(m.source_root, root.to_string_lossy());
+    }
+
+    #[test]
+    fn end_to_end_heal_trace_guard_arms_then_heals() {
+        // The full corrected machine end-to-end (round-1 review):
+        //   applied → (guard arms booting/guard) → binary would panic → still
+        //   booting/guard → next start guard resets+heals → HEAD back at prevSha.
+        // The guard is the Node script; here we model its two documented
+        // transitions on the mirror directly (its Rust-side analogue), and prove
+        // the pre-main hook NEVER interferes with the guard-owned attempt.
+        let (_d, root) = init_repo();
+        let prev = head_sha(&root).unwrap();
+        fs::write(root.join("src/hello.ts"), "export const n = 7;\n").unwrap();
+        run(&root, &["commit", "-aqm", "self: applied"]);
+        let applied = head_sha(&root).unwrap();
+
+        // apply → mirror {applied, armedBy:null}.
+        write_mirror_at(&root, &prev, &applied, "applied", None);
+
+        // Restart 1, GUARD arms: applied → booting/guard, NO reset (HEAD stays).
+        // (The guard writes armedBy="guard".)
+        write_mirror_at(&root, &prev, &applied, "booting", Some("guard"));
+        // The pre-main hook runs in the SAME session and must NOT touch it.
+        preboot_heal_at(&root);
+        assert_eq!(head_sha(&root).unwrap(), applied, "guard's live attempt survives pre-main");
+        assert_eq!(mirror_status_at(&root).as_deref(), Some("booting"));
+        assert_eq!(mirror_armed_by_at(&root).as_deref(), Some("guard"));
+
+        // The binary panicked → kernel_boot_ok never fired → still booting/guard.
+        // Restart 2, GUARD sees booting → resets to prevSha + healed.
+        assert!(rollback_to(&root, &prev).is_ok());
+        write_mirror_at(&root, &prev, &applied, "healed", Some("guard"));
+        assert_eq!(head_sha(&root).unwrap(), prev, "HEAD back at last-good");
+        // And the pre-main hook is now a no-op on the terminal mirror.
+        preboot_heal_at(&root);
+        assert_eq!(head_sha(&root).unwrap(), prev);
+        assert_eq!(mirror_status_at(&root).as_deref(), Some("healed"));
     }
 
     // ── SKIP-GUARDED real-tsc integration test ─────────────────────────────────

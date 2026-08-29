@@ -54,16 +54,38 @@ describe("kernel-preboot guard", () => {
     );
   }
 
-  it("resets HEAD to prevSha and marks healed for a pending edit", () => {
+  it("ARMS (not resets) an `applied` edit on the first restart — Finding 3", () => {
+    // round-1 review, Finding 3 (CRITICAL): a freshly-applied GOOD edit seen at
+    // pre-compile must be ARMED (allowed to boot once), NOT rolled back.
     const prev = head(dir);
-    // Apply a "bad" edit as a second commit → HEAD moves.
+    writeFileSync(join(dir, "core.rs"), "// v2 (good edit)\n");
+    git(dir, ["commit", "-aqm", "self: good edit"]);
+    const applied = head(dir);
+    expect(applied).not.toBe(prev);
+
+    writeMirror("applied", prev, { appliedSha: applied });
+
+    const res = runGuard(dir, () => {});
+    expect(res.action).toBe("armed");
+    // HEAD UNCHANGED — the good edit survives its first restart.
+    expect(head(dir)).toBe(applied);
+    expect(readFileSync(join(dir, "core.rs"), "utf8")).toContain("// v2");
+
+    const mirror = JSON.parse(readFileSync(join(dir, ".loom-boot.json"), "utf8"));
+    expect(mirror.status).toBe("booting");
+    expect(mirror.armedBy).toBe("guard");
+  });
+
+  it("HEALS a `booting` edit that never confirmed — second restart", () => {
+    // The armed edit panicked → it is STILL booting on the NEXT pre-compile →
+    // reset to prevSha + healed.
+    const prev = head(dir);
     writeFileSync(join(dir, "core.rs"), "// v2 (panics)\n");
     git(dir, ["commit", "-aqm", "self: bad edit"]);
     const applied = head(dir);
     expect(applied).not.toBe(prev);
 
-    // A booting (Rust-flow, second sighting unconfirmed) mirror → heal.
-    writeMirror("booting", prev, { appliedSha: applied });
+    writeMirror("booting", prev, { appliedSha: applied, armedBy: "guard" });
 
     const res = runGuard(dir, () => {});
     expect(res.action).toBe("healed");
@@ -74,15 +96,43 @@ describe("kernel-preboot guard", () => {
     expect(mirror.status).toBe("healed");
   });
 
-  it("heals an `applied` status too (unconfirmed)", () => {
+  it("full trace: applied → arm → still booting → heal (two restarts)", () => {
+    // The end-to-end gap closure. Restart 1 arms the (bad) edit; the binary
+    // panics so it never confirms; restart 2 heals.
     const prev = head(dir);
-    writeFileSync(join(dir, "core.rs"), "// v2\n");
-    git(dir, ["commit", "-aqm", "self: bad"]);
-    writeMirror("applied", prev);
+    writeFileSync(join(dir, "core.rs"), "// v2 (panics)\n");
+    git(dir, ["commit", "-aqm", "self: bad edit"]);
+    const applied = head(dir);
+    writeMirror("applied", prev, { appliedSha: applied });
 
-    const res = runGuard(dir, () => {});
-    expect(res.action).toBe("healed");
+    // Restart 1: arm — HEAD stays at applied.
+    const r1 = runGuard(dir, () => {});
+    expect(r1.action).toBe("armed");
+    expect(head(dir)).toBe(applied);
+    let m = JSON.parse(readFileSync(join(dir, ".loom-boot.json"), "utf8"));
+    expect(m.status).toBe("booting");
+
+    // Restart 2: still booting (never confirmed) → heal.
+    const r2 = runGuard(dir, () => {});
+    expect(r2.action).toBe("healed");
     expect(head(dir)).toBe(prev);
+    m = JSON.parse(readFileSync(join(dir, ".loom-boot.json"), "utf8"));
+    expect(m.status).toBe("healed");
+  });
+
+  it("no-ops when the mirror's sourceRoot != cwd — Finding 7", () => {
+    // A mirror belonging to ANOTHER repo (source_root differs from cwd) must
+    // NEVER trigger a reset here — don't roll back another checkout.
+    const before = head(dir);
+    writeMirror("booting", before, {
+      appliedSha: "deadbeef",
+      source_root: "/some/other/repo/root",
+      armedBy: "guard",
+    });
+    const res = runGuard(dir, () => {});
+    expect(res.action).toBe("noop");
+    expect(res.reason).toBe("foreign-root");
+    expect(head(dir)).toBe(before);
   });
 
   it("no-ops when the mirror is absent", () => {
