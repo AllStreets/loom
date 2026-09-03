@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "node scripts/kernel-preboot.mjs && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "node scripts/genome-bundle.mjs && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -33,6 +33,9 @@
     ],
     "macOS": {
       "infoPlist": "Info.plist"
+    },
+    "resources": {
+      "genome": "genome"
     }
   }
 }
