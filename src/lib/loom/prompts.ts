@@ -163,6 +163,18 @@ export const SELF_EDIT_RUST_CONTRACT = `RUST CORE — this target is a Rust sour
    WORKED RUST EXAMPLE — "give the fleet a little more time" (a small, safe constant change in an editable core file, src-tauri/src/fleet.rs):
    ${SELF_EDIT_RUST_FEWSHOT}`;
 
+// ── PACKAGED self-edit contract (Phase 23 — rebirth) ─────────────────────────
+//
+// Injected ONLY when LOOM runs as a built app (mode === "packaged"). A packaged
+// LOOM has no `tauri dev` to hot-reload TypeScript and no compiler watching the
+// core: an approved edit lands in the genome, and becomes the running app only
+// after a reweave — a rebuild the owner approves, minutes long. The paragraph
+// teaches that hinge and asks for a bounded edit. It does not repeat the
+// protected set; the lists above already carry it. Dev mode never pays these
+// tokens and its prompt is byte-identical to before this block existed.
+
+export const SELF_EDIT_PACKAGED_CONTRACT = `PACKAGED — LOOM is running as a built app, not under \`tauri dev\`. Here an approved edit lands in the genome but does not yet run: a core edit becomes real only after a reweave — LOOM rebuilding itself from source and becoming the new generation — and the owner approves that reweave separately from approving your diff. A reweave takes minutes, not seconds, so keep the edit bounded to one region of one file: one thing changed, nothing rewritten, no edit that only pays off across several turns. The protected set named above is never editable, in any mode; do not propose an edit to it.`;
+
 /** True when a self-edit target is a Rust-core file (src-tauri/…​.rs). Mirrors
  *  kernelBuild.isRustCorePath so the prompt injection matches the pipeline. */
 function isRustTarget(targetPath?: string): boolean {
@@ -177,9 +189,12 @@ function isRustTarget(targetPath?: string): boolean {
  * this flag lets the contract read as a correction turn. When `targetPath` names
  * a Rust-core file, the RUST contract (cargo validation, restart-to-load, the
  * off-limits core) is appended — conditionally, so a TS self-edit never pays it.
+ * When `mode` is "packaged" (default "dev"), the PACKAGED contract is appended
+ * after it: a core edit is real only after a reweave the owner approves.
  */
-export function selfEditSystemPrompt(opts?: { repair?: boolean; targetPath?: string }): string {
+export function selfEditSystemPrompt(opts?: { repair?: boolean; targetPath?: string; mode?: "dev" | "packaged" }): string {
   const rust = isRustTarget(opts?.targetPath);
+  const packaged = opts?.mode === "packaged";
   const base = rust
     ? "You are the Loom, the build engine inside LOOM, a sovereign offline computer. " +
       "Right now you are editing LOOM's own Rust core."
@@ -187,10 +202,12 @@ export function selfEditSystemPrompt(opts?: { repair?: boolean; targetPath?: str
       "Right now you are editing LOOM's own TypeScript kernel.";
   // The RUST block rides just after the shared contract — only for a .rs target.
   const rustBlock = rust ? `\n\n${SELF_EDIT_RUST_CONTRACT}` : "";
+  // The PACKAGED block rides after the Rust block — only when LOOM is a built app.
+  const packagedBlock = packaged ? `\n\n${SELF_EDIT_PACKAGED_CONTRACT}` : "";
   const turn = opts?.repair
     ? "\n\nThis is a REPAIR turn: your previous edit failed validation. You are given the failing stage and its output — fix the edit to pass, and do not fight the tests."
     : "";
-  return `${base}\n\n${SELF_EDIT_CONTRACT}${rustBlock}${turn}\n\nOutput ONLY SEARCH/REPLACE edit blocks. No prose before or after, no full file.`;
+  return `${base}\n\n${SELF_EDIT_CONTRACT}${rustBlock}${packagedBlock}${turn}\n\nOutput ONLY SEARCH/REPLACE edit blocks. No prose before or after, no full file.`;
 }
 
 export function ctxFor(chars: number): number {

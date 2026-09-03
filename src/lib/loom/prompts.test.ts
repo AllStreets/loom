@@ -464,3 +464,60 @@ describe("SELF_EDIT vs organ builds — conditional injection", () => {
     expect(ORGAN_CONTRACT).toContain("permanently off-limits");
   });
 });
+
+// ── Packaged contract (Phase 23 — a core edit is real only after a reweave) ──
+
+describe("selfEditSystemPrompt — packaged mode", () => {
+  it("packaged mode teaches the reweave contract", () => {
+    const p = selfEditSystemPrompt({ mode: "packaged", targetPath: RUST_TARGET });
+    expect(p).toContain("reweave");
+    expect(p).toContain("minutes");
+    // The owner's approval is the hinge; the edit stays bounded to one region.
+    expect(p).toContain("approve");
+    expect(p).toContain("one region");
+    // The protected set is taught once — the packaged paragraph points at the
+    // lists above instead of duplicating them.
+    expect(p.split("OFF-LIMITS").length - 1).toBe(2); // TS whitelist + Rust core, no third list
+    // Still carries the shared contract and the Rust block.
+    expect(p).toContain("THE FIVE WALLS");
+    expect(p).toContain("RUST CORE — this target is a Rust source file");
+  });
+
+  it("packaged mode teaches the contract for a TS target too", () => {
+    const p = selfEditSystemPrompt({ mode: "packaged", targetPath: TS_TARGET });
+    expect(p).toContain("reweave");
+    expect(p).toContain("minutes");
+  });
+
+  it("dev mode does not mention reweave", () => {
+    for (const opts of [
+      undefined,
+      { mode: "dev" as const },
+      { targetPath: RUST_TARGET },
+      { mode: "dev" as const, targetPath: RUST_TARGET },
+      { repair: true, targetPath: TS_TARGET },
+    ]) {
+      const p = selfEditSystemPrompt(opts);
+      expect(p, JSON.stringify(opts)).not.toContain("reweave");
+    }
+  });
+
+  it("dev mode output is byte-identical to the pre-packaged snapshot", async () => {
+    // sha256 of each dev variant, taken against prompts.ts BEFORE the packaged
+    // paragraph existed. Any drift here means dev-mode prompts changed.
+    const { createHash } = await import("node:crypto");
+    const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+    const snapshot: Record<string, [Parameters<typeof selfEditSystemPrompt>[0], string]> = {
+      plain: [undefined, "6aef94b95b9c8f47466453214ccee30ebef15cf56dd83e3d07bdac0a2dfc53fb"],
+      repair: [{ repair: true }, "0847d7dd2b160368f0733741c0d4ff0da875779fd0e49b44257d299ea6dd111d"],
+      rust: [{ targetPath: RUST_TARGET }, "4473eea1df0491312cbdcf1fee88567d7afb6913cb955b267b760449a951c0e5"],
+      rustRepair: [{ repair: true, targetPath: RUST_TARGET }, "f462497c7f8b395c2e6ff88bded57163c820f5c7e45d769479d4ac340cbd1132"],
+      ts: [{ targetPath: "src/lib/foo.ts" }, "6aef94b95b9c8f47466453214ccee30ebef15cf56dd83e3d07bdac0a2dfc53fb"],
+    };
+    for (const [name, [opts, expected]] of Object.entries(snapshot)) {
+      expect(sha(selfEditSystemPrompt(opts)), name).toBe(expected);
+      // Explicit "dev" must equal the default.
+      expect(sha(selfEditSystemPrompt({ ...(opts ?? {}), mode: "dev" })), `${name} explicit dev`).toBe(expected);
+    }
+  });
+});
