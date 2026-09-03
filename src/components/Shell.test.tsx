@@ -305,33 +305,19 @@ describe("Shell Task 4 beauty pass", () => {
   });
 });
 
-describe("Shell segmented deck control", () => {
-  it("deck controls form one segmented tablist group", async () => {
+describe("Shell — no Cockpit chrome (Rebirth)", () => {
+  it("renders no deck controls and no watch panel", async () => {
     render(<Shell />);
-    const group = screen.getByTestId("deck-controls");
-    expect(group.getAttribute("role")).toBe("tablist");
-    // VOID + GLOBE + WATCH segments live inside the one group
-    expect(within(group).getByTestId("deck-void-btn")).toBeInTheDocument();
-    expect(within(group).getByTestId("deck-globe-btn")).toBeInTheDocument();
-    expect(within(group).getByTestId("watch-toggle-btn")).toBeInTheDocument();
-  });
-
-  it("the default (void) segment is aria-selected", async () => {
-    render(<Shell />);
-    expect(screen.getByTestId("deck-void-btn")).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByTestId("watch-toggle-btn")).toHaveAttribute("aria-selected", "false");
-  });
-
-  it("toggling WATCH flips its selected state and opens the panel", async () => {
-    render(<Shell />);
+    await screen.findByTestId("loom-shell");
+    expect(screen.queryByTestId("deck-controls")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("watch-toggle-btn")).not.toBeInTheDocument();
     expect(screen.queryByTestId("watch-panel")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("deck-layer")).not.toBeInTheDocument();
+  });
 
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("watch-toggle-btn"));
-    });
-
-    expect(screen.getByTestId("watch-toggle-btn")).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByTestId("watch-panel")).toBeInTheDocument();
+  it("keeps the shuttle chip and fleet HUD in the top bar", async () => {
+    render(<Shell />);
+    expect(screen.getByTestId("shuttle-hint-chip")).toBeInTheDocument();
   });
 });
 

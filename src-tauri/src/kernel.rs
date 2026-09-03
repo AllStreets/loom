@@ -1483,7 +1483,7 @@ mod tests {
         assert!(!is_editable("src/components/chrome/recovery/Notice.tsx"));
         // a normal kernel file remains editable (the whitelist still works)
         assert!(is_editable("src/lib/orb/moods.ts"));
-        assert!(is_editable("src/components/WatchPanel.tsx"));
+        assert!(is_editable("src/components/Shuttle.tsx"));
 
         // ── Phase 22 (Marrow): the RUST safety machinery is EXPLICITLY refused ──
         // Every safety file: the Rust core (constructs the app / runs before

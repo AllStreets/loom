@@ -2,9 +2,9 @@
  * Tapestry.tsx — LOOM's autobiography, woven.
  *
  * Replaces the constellation. Not decoration: the band renders LOOM's actual
- * life — its git history (warp), its organs alive and deleted, its decks, its
- * build experiences with visible knots for repaired weaves, tinted by what the
- * watch has learned. Every LOOM weaves a different cloth.
+ * life — its git history (warp), its organs alive and deleted, its build
+ * experiences with visible knots for repaired weaves. Every LOOM weaves a
+ * different cloth.
  *
  * CLOTH, NOT GRID: the render is the glyph's over-under technique
  * (public/brand/loom-glyph.svg) at band scale. Warps bow gently instead of
@@ -15,13 +15,12 @@
  * lib/tapestry/geometry.ts; this component only renders its output.
  *
  * POSITIONING: fixed horizontal band, z 8 — the slot the constellation held:
- * above the deck layers (z 2) and ambient field (z 1), below chrome/orb-band
- * (z 10). Vertically centered on the orb's equator (see BAND_TOP). Lives
+ * above the ambient field (z 1), below chrome/orb-band (z 10). Vertically centered on the orb's equator (see BAND_TOP). Lives
  * OUTSIDE the orb-band's screen blend so threads and labels render in normal
  * blend mode.
  *
- * DATA: gathered once at mount, re-gathered on `loom-fleet-activity`,
- * `organs-changed` and `loom-deck` events. NO polling interval.
+ * DATA: gathered once at mount, re-gathered on `loom-fleet-activity` and
+ * `organs-changed` events. NO polling interval.
  *
  * MOTION: slow shimmer only — a CSS opacity breathing over several seconds on
  * weft threads. prefers-reduced-motion: fully static (class never applied, and
@@ -31,8 +30,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { timelineLog, organList } from "../lib/core";
 import { listExperience } from "../lib/loom/experience";
-import { computeWeights, topWeights } from "../lib/watch/learned";
-import { getSignals } from "../lib/watch/store";
 import { getSetting } from "../lib/voice/settings";
 import {
   weaveModel,
@@ -61,7 +58,7 @@ import {
  * 180px band = top 74.
  */
 const BAND_TOP = 74;
-/** z 8 — above decks (z 2), below chrome and the orb band (z 10). */
+/** z 8 — above the ambient field (z 1), below chrome and the orb band (z 10). */
 const BAND_Z = 8;
 
 /** Faint placeholder warp for the empty state — a loom strung but unwoven. */
@@ -129,20 +126,7 @@ async function gatherInputs(): Promise<WeaveInputs> {
     repairRounds: r.repairRounds,
   }));
 
-  let learnedTop: WeaveInputs["learnedTop"] = [];
-  try {
-    const tw = topWeights(computeWeights(getSignals()), 6);
-    learnedTop = [...tw.positive, ...tw.negative].map((e) => ({ key: e.key, weight: e.weight }));
-  } catch {
-    // learning store unreadable — weave untinted
-  }
-
-  // Decks used = the deck currently docked (honest: LOOM has no deck-usage
-  // history store; the current berth is what we truthfully know).
-  const deck = getSetting("cockpit.deck");
-  const decksUsed = deck !== "void" ? [deck] : [];
-
-  return { commits, organs, deletedOrganIds, experiences, learnedTop, decksUsed, now: Date.now() };
+  return { commits, organs, deletedOrganIds, experiences, now: Date.now() };
 }
 
 // ── Thread click routing ──────────────────────────────────────────────────────
@@ -220,12 +204,10 @@ export default function Tapestry() {
     }
     window.addEventListener("loom-fleet-activity", onLifeEvent);
     window.addEventListener("organs-changed", onLifeEvent);
-    window.addEventListener("loom-deck", onLifeEvent);
     return () => {
       cancelGather();
       window.removeEventListener("loom-fleet-activity", onLifeEvent);
       window.removeEventListener("organs-changed", onLifeEvent);
-      window.removeEventListener("loom-deck", onLifeEvent);
     };
   }, [visible, refresh]);
 
@@ -351,7 +333,7 @@ export default function Tapestry() {
             );
           })}
 
-          {/* ── weft: organs, scars, decks, builds — undulating through the
+          {/* ── weft: organs, scars, builds — undulating through the
               warp. The faint accent glow is token-derived (color-mix over
               var(--accent)) so mood/theme reach the cloth. ── */}
           <g
@@ -363,10 +345,7 @@ export default function Tapestry() {
             {renderedWeft.map((t, j) => {
               const row = rows[j];
               const isScar = t.kind === "scar";
-              // Learned tint: what the watch has learned lifts this region's glow.
-              const opacity = isScar
-                ? Math.min(t.opacity, SCAR_MAX_OPACITY)
-                : Math.min(1, t.opacity * (1 + 0.5 * t.intensity));
+              const opacity = isScar ? Math.min(t.opacity, SCAR_MAX_OPACITY) : t.opacity;
               return (
                 <g key={t.id}>
                   <path

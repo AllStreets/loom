@@ -24,8 +24,6 @@ function makeInputs(overrides: Partial<WeaveInputs> = {}): WeaveInputs {
     organs: [],
     deletedOrganIds: [],
     experiences: [],
-    learnedTop: [],
-    decksUsed: [],
     now: NOW,
     ...overrides,
   };
@@ -147,13 +145,6 @@ describe("weaveModel — weft (organs, scars, decks, builds)", () => {
     expect(scar.knots).toEqual([]);
   });
 
-  it("decks used weave threads with deck labels", () => {
-    const model = weaveModel(makeInputs({ decksUsed: ["globe"] }));
-    const deck = model.weft.find((t) => t.kind === "deck")!;
-    expect(deck.label).toBe("deck · globe");
-    expect(deck.action).toBeNull();
-  });
-
   it("a clean build pass weaves a smooth thread — no knots", () => {
     const model = weaveModel(
       makeInputs({
@@ -214,7 +205,6 @@ describe("weaveModel — weft (organs, scars, decks, builds)", () => {
       makeInputs({
         organs: [{ id: "a" }, { id: "b" }, { id: "c" }],
         deletedOrganIds: ["d"],
-        decksUsed: ["globe", "terminal"],
         experiences: [{ ts: NOW, organId: "a", ok: true, repairRounds: 1 }],
       })
     );
@@ -224,32 +214,6 @@ describe("weaveModel — weft (organs, scars, decks, builds)", () => {
       expect(y).toBeLessThan(1);
     }
     expect(new Set(ys).size).toBe(ys.length);
-  });
-});
-
-describe("weaveModel — learned tint", () => {
-  it("intensity is 0 everywhere when nothing has been learned", () => {
-    const model = weaveModel(makeInputs({ organs: [{ id: "a" }, { id: "b" }] }));
-    for (const t of model.weft) expect(t.intensity).toBe(0);
-  });
-
-  it("learned weights tint weft intensity into [0,1]", () => {
-    const model = weaveModel(
-      makeInputs({
-        organs: [{ id: "a" }, { id: "b" }, { id: "c" }],
-        learnedTop: [
-          { key: "finance", weight: 0.4 },
-          { key: "quakes", weight: -0.2 },
-        ],
-      })
-    );
-    let anyPositive = false;
-    for (const t of model.weft) {
-      expect(t.intensity).toBeGreaterThanOrEqual(0);
-      expect(t.intensity).toBeLessThanOrEqual(1);
-      if (t.intensity > 0) anyPositive = true;
-    }
-    expect(anyPositive).toBe(true);
   });
 });
 
@@ -263,7 +227,6 @@ describe("weaveModel — perf cap and determinism", () => {
         })),
         organs: Array.from({ length: 50 }, (_, i) => ({ id: `organ-${i}` })),
         deletedOrganIds: Array.from({ length: 30 }, (_, i) => `dead-${i}`),
-        decksUsed: ["globe", "terminal", "ember"],
         experiences: Array.from({ length: 200 }, (_, i) => ({
           ts: NOW - i * DAY,
           organId: `organ-${i % 50}`,
@@ -315,9 +278,7 @@ describe("weaveModel — perf cap and determinism", () => {
       commits: [{ sha: "abc1234def", message: "a commit" }],
       organs: [{ id: "water-tracker" }],
       deletedOrganIds: ["old"],
-      decksUsed: ["globe"],
       experiences: [{ ts: NOW - 2 * DAY, organId: "water-tracker", ok: true, repairRounds: 1 }],
-      learnedTop: [{ key: "finance", weight: 0.3 }],
     });
     const a = weaveModel(inputs);
     const b = weaveModel(makeInputs({ ...inputs }));

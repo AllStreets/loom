@@ -13,9 +13,6 @@ import { installSeeds } from "../organs/seeds/install";
 import { useVoice, makeSpacePttHandlers } from "../lib/voice/useVoice";
 import { audioLevel } from "../lib/orb/audioLevel";
 import { getSetting, setSetting, migrateSettings } from '../lib/voice/settings';
-import DeckLayer from './decks/DeckLayer';
-import type { DeckId } from './decks/DeckLayer';
-import { startWatch, stopWatch } from '../lib/watch/runtime';
 import Tapestry from './Tapestry';
 import LoomGlyph from './chrome/LoomGlyph';
 import Notices from './chrome/Notices';
@@ -24,7 +21,6 @@ import KernelDiff from './chrome/KernelDiff';
 import RecoveryNotice from './chrome/recoveryNotice';
 import { runBootCheck, markBootOk } from '../lib/loom/recovery';
 import { mountInitiative } from '../lib/initiative/runtime';
-import WatchPanel from './WatchPanel';
 import Shuttle from './Shuttle';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -42,90 +38,6 @@ const IGNITION_KEY = "loom.ignited";
 
 type IgnitionPhase = "igniting" | "done";
 
-// ── Segmented top-bar control button ────────────────────────────────────────────
-// A single segment of the deck/watch pill: mono label, selected = accent text +
-// soft accent underline; hover = background step-up. Reduced-motion safe (CSS).
-function SegBtn({
-  testid,
-  label,
-  selected,
-  onClick,
-  badge,
-}: {
-  testid: string;
-  label: string;
-  selected: boolean;
-  onClick: () => void;
-  badge?: string;
-}) {
-  return (
-    <button
-      data-testid={testid}
-      role="tab"
-      aria-selected={selected}
-      onClick={onClick}
-      className={`loom-seg-btn${selected ? " is-selected" : ""}`}
-      style={{
-        position: "relative",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 5,
-        height: "100%",
-        padding: "0 11px",
-        fontFamily: "var(--f-mono)",
-        fontSize: 10,
-        letterSpacing: ".1em",
-        lineHeight: 1,
-        color: selected ? "var(--accent)" : "var(--t3)",
-        background: selected ? "rgba(34,211,238,.10)" : "transparent",
-        border: "none",
-        borderRadius: 999,
-        cursor: "pointer",
-      }}
-    >
-      <span>{label}</span>
-      {badge !== undefined && (
-        <span
-          data-testid="watch-badge"
-          style={{
-            minWidth: 15,
-            height: 15,
-            borderRadius: 999,
-            background: "var(--accent, #22d3ee)",
-            color: "#060b18",
-            fontFamily: "var(--f-mono)",
-            fontSize: 9,
-            fontWeight: 700,
-            fontVariantNumeric: "tabular-nums",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "0 3px",
-            pointerEvents: "none",
-          }}
-        >
-          {badge}
-        </span>
-      )}
-      {selected && (
-        <span
-          aria-hidden
-          style={{
-            position: "absolute",
-            left: 11,
-            right: 11,
-            bottom: 3,
-            height: 1.5,
-            borderRadius: 999,
-            background: "var(--accent, #22d3ee)",
-            boxShadow: "0 0 6px rgba(34,211,238,.6)",
-          }}
-        />
-      )}
-    </button>
-  );
-}
-
 export default function Shell() {
   const [mood, setMood] = useState<OrbMood>("idle");
   const [roles, setRoles] = useState<RoleStatus[]>([]);
@@ -135,22 +47,11 @@ export default function Shell() {
 
   // Boot migration MUST precede the useState initializers below — they read
   // settings synchronously on first render, before any effect fires, and the
-  // retired keys (and a stored retired deck id) must already be gone.
+  // retired keys must already be gone.
   // Idempotent: only localStorage.removeItem calls, safe on every render.
   migrateSettings();
 
-  // Harden against a stored deck id that no longer exists (defense-in-depth
-  // behind the migration) — an unknown id boots as the void, never a blank deck.
-  const [deck, setDeck] = useState<DeckId>(() => {
-    const stored = getSetting('cockpit.deck');
-    return (['void', 'globe', 'terminal', 'ember'] as const).includes(stored as DeckId)
-      ? (stored as DeckId)
-      : 'void';
-  });
-  const [interactMode, setInteractMode] = useState(() => getSetting('cockpit.interact') === 'on');
-  const [watchOpen, setWatchOpen] = useState(() => getSetting('cockpit.watchOpen') === 'on');
   const [chatMin, setChatMin] = useState(() => getSetting('cockpit.chatMin') === 'on');
-  const [watchUnseen, setWatchUnseen] = useState(0);
 
   // ----- Ignition sequence state -----
   const alreadyIgnited = typeof localStorage !== "undefined"
@@ -202,13 +103,10 @@ export default function Shell() {
     };
   }, []);
 
-  // ----- Boot migration + watch runtime — start with shell, stop on unmount -----
+  // ----- Boot migration — idempotent: deletes stored values for retired
+  // settings keys (e.g. cockpit.constellation, the Cockpit's deck keys). -----
   useEffect(() => {
-    // Idempotent: deletes stored values for retired settings keys
-    // (e.g. cockpit.constellation — the tapestry replaced the constellation).
     migrateSettings();
-    startWatch();
-    return () => stopWatch();
   }, []);
 
   // ----- Initiative runtime — the passive observer + the rules engine.
@@ -219,17 +117,6 @@ export default function Shell() {
     const unmount = mountInitiative();
     return unmount;
   }, []);
-
-  // ----- loom-salience — increment unseen badge when panel is closed -----
-  useEffect(() => {
-    function onSalience() {
-      if (!watchOpen) {
-        setWatchUnseen((n) => n + 1);
-      }
-    }
-    window.addEventListener("loom-salience", onSalience);
-    return () => window.removeEventListener("loom-salience", onSalience);
-  }, [watchOpen]);
 
   // ----- seed install (originally in App) -----
   useEffect(() => {
@@ -254,26 +141,11 @@ export default function Shell() {
     return () => window.removeEventListener("loom-mood", onMood);
   }, []);
 
-  // ----- loom-deck event listener -----
-  useEffect(() => {
-    function onDeck(ev: Event) {
-      const detail = (ev as CustomEvent<{ deck: DeckId }>).detail;
-      if (!detail?.deck) return;
-      setDeck(detail.deck);
-      setSetting('cockpit.deck', detail.deck);
-    }
-    window.addEventListener('loom-deck', onDeck);
-    return () => window.removeEventListener('loom-deck', onDeck);
-  }, []);
-
-  // ----- loom-settings-changed: live-update interact -----
+  // ----- loom-settings-changed: live-update the chat fold -----
   useEffect(() => {
     function onSettingsChanged(ev: Event) {
       const detail = (ev as CustomEvent<{ key: string; value: string }>).detail;
       if (!detail) return;
-      if (detail.key === 'cockpit.interact') {
-        setInteractMode(detail.value === 'on');
-      }
       if (detail.key === 'cockpit.chatMin') {
         setChatMin(detail.value === 'on');
       }
@@ -339,9 +211,8 @@ export default function Shell() {
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // Spotlight repaints on every mouse move — invisible over a deck and a
-    // flicker source for the deck iframe. Void-only.
-    if (reducedMotion || deck !== "void") return;
+    // Spotlight repaints on every mouse move.
+    if (reducedMotion) return;
 
     const shell = shellRef.current;
     if (!shell) return;
@@ -363,7 +234,7 @@ export default function Shell() {
         rafRef.current = null;
       }
     };
-  }, [reducedMotion, deck]);
+  }, [reducedMotion]);
 
   // ----- Listening ring rAF loop -----
   useEffect(() => {
@@ -509,7 +380,7 @@ export default function Shell() {
         opacity: staggerVisible ? 1 : 0,
         // Once visible, the transform must be REMOVED (undefined), not left as
         // translateY(0): any transform on these containers turns them into the
-        // containing block for position:fixed descendants (WatchPanel, dock),
+        // containing block for position:fixed descendants (the dock),
         // silently re-anchoring viewport chrome.
         transform: staggerVisible ? undefined : "translateY(10px)",
         transition: "opacity 0.5s ease, transform 0.5s cubic-bezier(0.34,1.56,0.64,1)",
@@ -553,10 +424,7 @@ export default function Shell() {
       `}</style>
 
       {/* Ambient particle field — behind everything, zIndex:1 */}
-      <Field dim={deck !== 'void'} paused={deck !== 'void'} />
-
-      {/* Deck layer — between ambient Field (z1) and orb-band (z10) */}
-      <DeckLayer deck={deck} interactMode={interactMode} />
+      <Field />
 
       {/* Ambient mood glow — behind everything */}
       <div
@@ -607,11 +475,6 @@ export default function Shell() {
             padding: "16px 24px",
             position: "relative",
             zIndex: 10,
-            // Over a deck the bar needs its own ground — AUSPEX's toolbar sits
-            // directly beneath and double-chrome is unreadable without it.
-            background: deck !== "void"
-              ? "linear-gradient(to bottom, var(--bg) 55%, rgba(6,11,24,0.85) 80%, transparent)"
-              : undefined,
             borderBottom: reducedMotion ? undefined : `1px solid ${moodColor}20`,
             transition: reducedMotion ? undefined : "border-color 1.2s ease",
             ...staggerStyle,
@@ -642,7 +505,7 @@ export default function Shell() {
             </div>
           </div>
 
-          {/* Right cluster — fleet HUD + one segmented deck control, same height, baseline row */}
+          {/* Right cluster — shuttle chip + fleet HUD, same height, baseline row */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flexShrink: 1 }}>
             {/* Shuttle affordance — the ⌘K hint chip (same glass language as its neighbors) */}
             <button
@@ -688,75 +551,6 @@ export default function Shell() {
               <FleetHUD roles={roles} />
             </div>
 
-            {/* Segmented deck control — VOID | GLOBE | INTERACT | WATCH */}
-            <div
-              data-testid="deck-controls"
-              role="tablist"
-              style={{
-                display: "flex",
-                alignItems: "stretch",
-                height: 30,
-                flexShrink: 0,
-                background: "var(--glass)",
-                border: "1px solid var(--glass-border)",
-                borderRadius: 999,
-                padding: 3,
-                gap: 2,
-                backdropFilter: "blur(var(--blur))",
-                WebkitBackdropFilter: "blur(var(--blur))",
-              }}
-            >
-              <SegBtn
-                testid="deck-void-btn"
-                label="VOID"
-                selected={deck === "void"}
-                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "void" } }))}
-              />
-              <SegBtn
-                testid="deck-globe-btn"
-                label="GLOBE"
-                selected={deck === "globe"}
-                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "globe" } }))}
-              />
-              <SegBtn
-                testid="deck-terminal-btn"
-                label="TERMINAL"
-                selected={deck === "terminal"}
-                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "terminal" } }))}
-              />
-              <SegBtn
-                testid="deck-ember-btn"
-                label="EMBER"
-                selected={deck === "ember"}
-                onClick={() => window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "ember" } }))}
-              />
-              {deck === "globe" && (
-                <SegBtn
-                  testid="deck-interact-btn"
-                  label={interactMode ? "INTERACTING" : "INTERACT"}
-                  selected={interactMode}
-                  onClick={() => {
-                    const next = !interactMode;
-                    setInteractMode(next);
-                    setSetting('cockpit.interact', next ? 'on' : 'off');
-                  }}
-                />
-              )}
-              <SegBtn
-                testid="watch-toggle-btn"
-                label="WATCH"
-                selected={watchOpen}
-                onClick={() => {
-                  setWatchOpen((p) => {
-                    const next = !p;
-                    setSetting('cockpit.watchOpen', next ? 'on' : 'off');
-                    return next;
-                  });
-                  setWatchUnseen(0);
-                }}
-                badge={!watchOpen && watchUnseen > 0 ? (watchUnseen > 9 ? "9+" : String(watchUnseen)) : undefined}
-              />
-            </div>
           </div>
         </header>
       </ErrorBoundary>
@@ -776,11 +570,8 @@ export default function Shell() {
           // Composites the orb canvas's black clear as pure light over the page
           // backdrop (see OrbGL.tsx) — must live at band level: orb-hero's transform
           // and this band's z-index isolate any deeper blend from the backdrop.
-          // Screen blend ONLY over the void: over a deck iframe the blend forces a
-          // cross-document backdrop readback every orb frame (= whole-iframe
-          // flicker). Deck mode uses a truly transparent GL context instead.
-          mixBlendMode: deck === "void" ? "screen" : undefined,
-          // Empty flanks pass clicks to the deck; the orb hero re-enables its own.
+          mixBlendMode: "screen",
+          // Empty flanks pass clicks through; the orb hero re-enables its own.
           pointerEvents: "none",
         }}
       >
@@ -806,7 +597,7 @@ export default function Shell() {
               : "drop-shadow(0 0 0px transparent)",
           }}
         >
-          <Orb mood={mood} size={180} transparent={deck !== "void"} />
+          <Orb mood={mood} size={180} />
           {voice.state === "listening" && (
             <div
               data-testid="listening-ring"
@@ -860,8 +651,7 @@ export default function Shell() {
           position: "relative",
           zIndex: 10,
           // The zone shell spans the full width but must NOT swallow clicks in its
-          // empty flanks — decks below (z2) receive them. Real content re-enables
-          // pointer events on the column below.
+          // empty flanks. Real content re-enables pointer events on the column below.
           pointerEvents: "none",
           ...(!reducedMotion && !alreadyIgnited
             ? {
@@ -874,8 +664,7 @@ export default function Shell() {
             : {}),
         }}
       >
-        {/* Main column — over a deck the console drops to the bottom edge so the
-            world stays visible; in the void it keeps its centered position */}
+        {/* Main column */}
         <div
           style={{
             width: "100%",
@@ -884,7 +673,6 @@ export default function Shell() {
             flexDirection: "column",
             gap: 16,
             pointerEvents: "auto",
-            marginTop: deck !== "void" ? "auto" : undefined,
           }}
         >
           {/* Companion panel — while minimized it is HIDDEN, never unmounted:
@@ -893,7 +681,6 @@ export default function Shell() {
           <PanelTag
             {...(motionProps as object)}
             data-testid="companion-panel"
-            data-deck-active={deck !== 'void' ? 'true' : undefined}
             className="loom-chat-panel"
             style={{
               position: "relative",
@@ -903,11 +690,6 @@ export default function Shell() {
               WebkitBackdropFilter: "blur(var(--blur))",
               border: "1px solid var(--glass-border)",
               borderRadius: 14,
-              ...(deck !== 'void' ? {
-                maxHeight: '33vh',
-                overflowY: 'auto' as const,
-                background: 'rgba(6,11,24,0.7)',
-              } : {}),
             }}
           >
             <Companion />
@@ -919,11 +701,11 @@ export default function Shell() {
             style={{ width: "100%", maxWidth: 1100, position: "relative", zIndex: 10 }}
           />
 
-          {/* Timeline collapsible footer — hidden when AUSPEX globe is active (it has its own timeline bar) */}
+          {/* Timeline collapsible footer */}
           <details
             data-testid="timeline-details"
             className="glass"
-            style={{ padding: "12px 16px", cursor: "pointer", display: deck !== 'void' ? 'none' : undefined }}
+            style={{ padding: "12px 16px", cursor: "pointer" }}
           >
             <summary
               style={{
@@ -996,8 +778,8 @@ export default function Shell() {
       </ErrorBoundary>
 
       {/* ── Tapestry: LOOM's history woven — horizontal band behind the orb
-          (z 8: above deck layers z 2, below chrome/orb-band z 10; OUTSIDE the
-          orb-band screen-blend so threads stay legible) ── */}
+          (z 8: above the ambient field z 1, below chrome/orb-band z 10; OUTSIDE
+          the orb-band screen-blend so threads stay legible) ── */}
       <ErrorBoundary zone="tapestry">
         <Tapestry />
       </ErrorBoundary>
@@ -1013,11 +795,6 @@ export default function Shell() {
           idea; weave it flows through the normal loom-utterance build seam. ── */}
       <ErrorBoundary zone="proposal">
         <Proposal />
-      </ErrorBoundary>
-
-      {/* ── Watch panel: collapsible salience feed (z 900, right side) ── */}
-      <ErrorBoundary zone="watch-panel">
-        <WatchPanel open={watchOpen} onClose={() => { setWatchOpen(false); setWatchUnseen(0); }} />
       </ErrorBoundary>
 
       {/* ── The Shuttle: Cmd+K palette (z 3000 — above every panel; executes

@@ -996,11 +996,11 @@ describe("Desktop", () => {
 
 const POWERED_MANIFEST = {
   id: "btc",
-  name: "BTC Watch",
-  description: "Watches BTC for you",
+  name: "Stand Up",
+  description: "Nudges you to stand",
   version: 1,
   permissions: ["storage"],
-  powers: ["market", "notify", "pulse"],
+  powers: ["voice", "notify", "pulse"],
 };
 
 const UNAPPROVED_POWERED_ORGAN = {
@@ -1012,7 +1012,7 @@ const UNAPPROVED_POWERED_ORGAN = {
 const APPROVED_POWERED_ORGAN = {
   id: "btc",
   manifest: JSON.stringify(POWERED_MANIFEST),
-  granted: JSON.stringify(["storage", "market", "notify", "pulse"]),
+  granted: JSON.stringify(["storage", "voice", "notify", "pulse"]),
 };
 
 describe("permission card powers", () => {
@@ -1026,12 +1026,12 @@ describe("permission card powers", () => {
     render(<Desktop />);
 
     await waitFor(() => {
-      expect(screen.getByText("BTC Watch")).toBeInTheDocument();
+      expect(screen.getByText("Stand Up")).toBeInTheDocument();
     });
 
     // Plain-language powers, not raw tokens
     expect(screen.getByTestId("powers-section")).toBeInTheDocument();
-    expect(screen.getByText("read market data")).toBeInTheDocument();
+    expect(screen.getByText("speak aloud")).toBeInTheDocument();
     expect(screen.getByText("notify you")).toBeInTheDocument();
     expect(screen.getByText("run on a schedule (up to every 30s)")).toBeInTheDocument();
 
@@ -1042,7 +1042,7 @@ describe("permission card powers", () => {
         "organ_grant",
         expect.objectContaining({
           id: "btc",
-          grantedJson: JSON.stringify(["storage", "market", "notify", "pulse"]),
+          grantedJson: JSON.stringify(["storage", "voice", "notify", "pulse"]),
         }),
       );
     });
@@ -1087,11 +1087,11 @@ describe("POWERS row and revocation", () => {
 
     const row = screen.getByTestId("powers-row-btc");
     expect(row).toHaveTextContent("POWERS");
-    expect(row).toHaveTextContent("read market data");
+    expect(row).toHaveTextContent("speak aloud");
     expect(row).toHaveTextContent("notify you");
     expect(row).toHaveTextContent("run on a schedule (up to every 30s)");
     // All granted
-    expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("GRANTED");
+    expect(screen.getByTestId("power-toggle-btc-voice")).toHaveTextContent("GRANTED");
   });
 
   it("revoking a power clears the token live and persists via organ_grant", async () => {
@@ -1103,9 +1103,9 @@ describe("POWERS row and revocation", () => {
     });
 
     await userEvent.click(screen.getByTestId("powers-toggle-btc"));
-    await userEvent.click(screen.getByTestId("power-toggle-btc-market"));
+    await userEvent.click(screen.getByTestId("power-toggle-btc-voice"));
 
-    expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("REVOKED");
+    expect(screen.getByTestId("power-toggle-btc-voice")).toHaveTextContent("REVOKED");
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith(
         "organ_grant",
@@ -1117,8 +1117,8 @@ describe("POWERS row and revocation", () => {
     });
 
     // Toggle back re-grants
-    await userEvent.click(screen.getByTestId("power-toggle-btc-market"));
-    expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("GRANTED");
+    await userEvent.click(screen.getByTestId("power-toggle-btc-voice"));
+    expect(screen.getByTestId("power-toggle-btc-voice")).toHaveTextContent("GRANTED");
   });
 
   it("a legacy manifest with notify under permissions shows notify in the POWERS row", async () => {
@@ -1181,7 +1181,7 @@ describe("THROTTLED chip", () => {
 
     act(() => {
       window.dispatchEvent(new CustomEvent("loom-throttled", {
-        detail: { id: "btc", power: "market", retryMs: 40 },
+        detail: { id: "btc", power: "voice", retryMs: 40 },
       }));
     });
     expect(screen.getByTestId("throttle-chip-btc")).toBeInTheDocument();
@@ -1206,7 +1206,7 @@ describe("THROTTLED chip", () => {
     });
     act(() => {
       window.dispatchEvent(new CustomEvent("loom-throttled", {
-        detail: { id: "other", power: "market", retryMs: 1000 },
+        detail: { id: "other", power: "voice", retryMs: 1000 },
       }));
     });
     expect(screen.queryByTestId("throttle-chip-btc")).not.toBeInTheDocument();
@@ -1219,7 +1219,7 @@ describe("revoked powers and the approval card", () => {
       if (cmd === "organ_list") return [{
         id: "btc",
         manifest: JSON.stringify(POWERED_MANIFEST),
-        granted: JSON.stringify(["storage", "notify", "pulse"]), // market revoked
+        granted: JSON.stringify(["storage", "notify", "pulse"]), // voice revoked
       }];
       if (cmd === "organ_read")
         return "export default { id: 'btc', render(el){ el.textContent = 'btc-content'; } }";
@@ -1231,11 +1231,11 @@ describe("revoked powers and the approval card", () => {
     await waitFor(() => {
       expect(screen.getByTestId("title-bar-btc")).toBeInTheDocument();
     });
-    expect(screen.queryByText("Watches BTC for you")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nudges you to stand")).not.toBeInTheDocument();
 
     // And the POWERS row reflects the revocation
     await userEvent.click(screen.getByTestId("powers-toggle-btc"));
-    expect(screen.getByTestId("power-toggle-btc-market")).toHaveTextContent("REVOKED");
+    expect(screen.getByTestId("power-toggle-btc-voice")).toHaveTextContent("REVOKED");
     expect(screen.getByTestId("power-toggle-btc-notify")).toHaveTextContent("GRANTED");
   });
 });

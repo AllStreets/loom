@@ -6,8 +6,7 @@
  *   git history. Newest brightest, newest furthest right (weaving advances).
  * - weft (horizontal, colored): organs (alive = accent, deleted = faint scar),
  *   decks used, and build experiences (clean pass = smooth thread, repaired
- *   build = visible knots — honesty in cloth). Learned weights tint per-thread
- *   intensity so what the watch has learned shifts the weave's glow.
+ *   build = visible knots — honesty in cloth).
  *
  * PURE + DETERMINISTIC: no Math.random, no Date.now. Age arrives via
  * `inputs.now`; jitter is seeded from ids/shas (fnv-1a), so the same life
@@ -34,19 +33,12 @@ export interface WeaveExperience {
   repairRounds: number;
 }
 
-export interface WeaveLearned {
-  key: string;
-  weight: number;
-}
-
 export interface WeaveInputs {
   /** Newest first — timelineLog order. */
   commits: WeaveCommit[];
   organs: WeaveOrgan[];
   deletedOrganIds: string[];
   experiences: WeaveExperience[];
-  learnedTop: WeaveLearned[];
-  decksUsed: string[];
   /** Current epoch ms — passed in so this module never calls Date.now(). */
   now: number;
 }
@@ -69,7 +61,7 @@ export interface WarpThread {
   action: ThreadAction;
 }
 
-export type WeftKind = "organ" | "scar" | "deck" | "build";
+export type WeftKind = "organ" | "scar" | "build";
 
 export interface WeftThread {
   id: string;
@@ -82,8 +74,6 @@ export interface WeftThread {
   kind: WeftKind;
   /** x positions (0..1) of visible knots — repaired/failed builds only. */
   knots: number[];
-  /** Learned tint 0..1 — scales the thread's glow in its region. */
-  intensity: number;
 }
 
 export interface WeaveModel {
@@ -189,19 +179,6 @@ export function weaveModel(inputs: WeaveInputs): WeaveModel {
     });
   }
 
-  // Decks used — the worlds this LOOM has docked.
-  for (const deck of inputs.decksUsed) {
-    candidates.push({
-      id: `deck-${deck}`,
-      opacity: 0.4,
-      colorToken: "--go",
-      label: `deck · ${deck}`,
-      action: null,
-      kind: "deck",
-      knots: [],
-    });
-  }
-
   // Build experiences — newest first so the freshest passes survive the cap.
   // Clean pass = smooth thread; repaired = visible knots; failed = warn-toned.
   const builds = [...inputs.experiences].sort((a, b) => b.ts - a.ts);
@@ -229,18 +206,10 @@ export function weaveModel(inputs: WeaveInputs): WeaveModel {
 
   // ---- y layout: even slots + small id-seeded jitter (no exact collisions) ----
   const m = capped.length;
-  // ---- learned tint: each thread maps deterministically onto a learned region ----
-  const maxW = inputs.learnedTop.reduce((mx, e) => Math.max(mx, Math.abs(e.weight)), 0);
-
   const weft: WeftThread[] = capped.map((c, i) => {
     const slot = (i + 1) / (m + 1);
     const jitter = (hash01(c.id) - 0.5) * (0.6 / (m + 1));
-    let intensity = 0;
-    if (maxW > 0) {
-      const region = inputs.learnedTop[Math.floor(hash01(c.id) * inputs.learnedTop.length)];
-      intensity = Math.abs(region.weight) / maxW;
-    }
-    return { ...c, y: slot + jitter, intensity };
+    return { ...c, y: slot + jitter };
   });
 
   return { warp, weft };
