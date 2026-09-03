@@ -118,6 +118,7 @@ const PROTECTED_RUST: &[&str] = &[
     // tauri.conf.json) or would be inside it (loomhome.rs) — either way they
     // are NAMED here so the protection is explicit and enumerable, not an
     // accident of the whitelist's shape.
+    "src-tauri/src/platform.rs", // the swap plan + execution — replaces the running body's file
     "src-tauri/src/generations.rs", // the ledger — decides which bodies survive on disk
     "src-tauri/src/loomhome.rs", // identity + every path the reweave reads/writes
     "src-tauri/src/threads.rs",  // tool discovery + the threading ceremony (spawns tools)
@@ -522,6 +523,18 @@ fn read_sentinel(path: &Path) -> Option<Sentinel> {
 fn write_sentinel(path: &Path, s: &Sentinel) -> Result<(), LoomError> {
     let json = serde_json::to_string_pretty(s).map_err(|e| LoomError::Parse(e.to_string()))?;
     std::fs::write(path, json).map_err(|e| LoomError::Git(e.to_string()))
+}
+
+/// Write a sentinel at an explicit path (Phase 23 / Rebirth). The swap
+/// (platform.rs) and the warden (warden.rs) write `applied`/`healed` at
+/// `Home::sentinel_json()` without an AppHandle — the same file
+/// `sentinel_path` resolves for the running app. Thin wrapper over the
+/// private writer so the sentinel's shape has exactly one author.
+pub fn write_sentinel_at(path: &Path, s: &Sentinel) -> Result<(), LoomError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| LoomError::Git(e.to_string()))?;
+    }
+    write_sentinel(path, s)
 }
 
 // ── Return shapes ─────────────────────────────────────────────────────────────
@@ -1563,6 +1576,7 @@ mod tests {
         // constructs the app, declares a dependency, or names the paths the
         // reweave reads and writes — refused in every casing.
         let rebirth_safety_files = [
+            "src-tauri/src/platform.rs", // the swap — replaces the running body's file
             "src-tauri/src/generations.rs", // the ledger — which bodies survive
             "src-tauri/src/loomhome.rs", // identity + every loomhome path
             "src-tauri/src/threads.rs",  // tool discovery + threading (spawns tools)
@@ -1585,7 +1599,7 @@ mod tests {
         // Every one of them is NAMED in a protected set (explicit, enumerable —
         // the `kernel_editable` meta lists it for the model), not just
         // implicitly outside the whitelist.
-        for f in ["src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/src/threads.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
+        for f in ["src-tauri/src/platform.rs", "src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/src/threads.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
             assert!(PROTECTED_RUST.contains(&f), "{f} must be in PROTECTED_RUST");
         }
         for f in ["package.json", "package-lock.json", "vite.config.ts", "scripts/genome-bundle.mjs"] {
