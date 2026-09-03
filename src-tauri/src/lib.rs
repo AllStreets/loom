@@ -8,6 +8,7 @@ mod kernel;
 mod voice;
 mod generations;
 mod loomhome;
+mod threads;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,7 +37,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![fleet::fleet_status, fleet::fleet_chat, timeline::timeline_init, timeline::timeline_commit, timeline::timeline_log, timeline::timeline_rollback, organs::organ_write, organs::organ_list, organs::organ_read, organs::organ_grant, organs::organ_delete, voice::voice_status, voice::voice_setup, voice::stt_transcribe, voice::tts_speak, kernel::kernel_editable, kernel::kernel_read, kernel::kernel_propose, kernel::kernel_validate, kernel::kernel_approve, kernel::kernel_apply, kernel::kernel_discard, kernel::kernel_rollback, kernel::kernel_boot_ok, kernel::kernel_boot_check, loomhome::kernel_identity, generations::generations_list])
+        .invoke_handler(tauri::generate_handler![fleet::fleet_status, fleet::fleet_chat, timeline::timeline_init, timeline::timeline_commit, timeline::timeline_log, timeline::timeline_rollback, organs::organ_write, organs::organ_list, organs::organ_read, organs::organ_grant, organs::organ_delete, voice::voice_status, voice::voice_setup, voice::stt_transcribe, voice::tts_speak, kernel::kernel_editable, kernel::kernel_read, kernel::kernel_propose, kernel::kernel_validate, kernel::kernel_approve, kernel::kernel_apply, kernel::kernel_discard, kernel::kernel_rollback, kernel::kernel_boot_ok, kernel::kernel_boot_check, loomhome::kernel_identity, generations::generations_list, threads::thread_status])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

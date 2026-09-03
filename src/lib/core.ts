@@ -219,3 +219,40 @@ export type Generation = {
 
 /** Every kept generation, newest first. Read by Settings → LOOM and the Shuttle. */
 export const generationsList = () => safeInvoke<Generation[]>("generations_list");
+// ── Threading (Phase 23 — Rebirth) ─────────────────────────────────────────────
+
+/** One tool from the threads table: where it is, which version answered, and
+ *  the exact install line if it is missing. `version` is `"present"` for a
+ *  tool with no `--version` (codesign). */
+export type Tool = {
+  name: string;
+  path: string | null;
+  version: string | null;
+  requiredFor: string;
+  install: string;
+};
+
+export type ThreadSteps = {
+  seed: boolean;
+  deps: boolean;
+  vendor: boolean;
+  warm: boolean;
+  register: boolean;
+};
+
+/**
+ * What the threading card reads. `missing` = not found now; `drifted` = a
+ * recorded tool whose path is gone or whose version changed; `needsNetwork`
+ * = deps or vendor have not completed (the only steps that touch the net).
+ */
+export type ThreadStatus = {
+  threaded: boolean;
+  tools: Tool[];
+  missing: string[];
+  drifted: string[];
+  steps: ThreadSteps;
+  needsNetwork: boolean;
+};
+
+/** Discover the machine's tools now and compare with `threads.json`. */
+export const threadStatus = () => safeInvoke<ThreadStatus>("thread_status");

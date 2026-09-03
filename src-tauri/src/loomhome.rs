@@ -145,6 +145,71 @@ impl Home {
     }
 }
 
+// ── Seed ──────────────────────────────────────────────────────────────────────
+
+/// How long a clone of the bundled genome may take. The bundle is local
+/// (~20 MB); this is a wall against a wedged git, not a budget.
+const SEED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Threading step 1 (spec §Threading): clone the bundled genome into
+/// `source/` and check out the sha this binary was woven from, on a local
+/// `main` so later commits land somewhere named. A no-op if `source/.git`
+/// already exists — the ceremony is resumable, and the source is never
+/// re-cloned over an existing work tree.
+///
+/// Every spawn is a fixed argv through `exec::run_checked` with
+/// `allowed_root = home.root`; no shell, no network (the bundle is a file).
+pub fn seed_source(home: &Home, bundle: &Path, sha: &str) -> Result<(), LoomError> {
+    let source = home.source();
+    if source.join(".git").exists() {
+        return Ok(());
+    }
+    if !bundle.is_file() {
+        return Err(LoomError::NotFound(
+            "the genome bundle is missing — this LOOM was built without its history".into(),
+        ));
+    }
+    std::fs::create_dir_all(&home.root).map_err(|e| LoomError::Git(e.to_string()))?;
+    let bundle_s = bundle.to_string_lossy().into_owned();
+    let source_s = source.to_string_lossy().into_owned();
+    // argv[0] is the git the threads table found (recorded path first, then
+    // the fixed candidate dirs, then PATH) — an absolute path, not a PATH
+    // lookup at spawn time.
+    let git = crate::threads::tool_path(home, "git").ok_or_else(|| {
+        LoomError::NotFound("git is missing — install it with `xcode-select --install`".into())
+    })?;
+    let git = git.to_string_lossy().into_owned();
+
+    let out = crate::exec::run_checked(
+        &[&git, "clone", "--quiet", &bundle_s, &source_s],
+        &home.root,
+        &home.root,
+        SEED_TIMEOUT,
+    )?;
+    if out.code != 0 {
+        return Err(LoomError::Git(format!("seed: clone failed: {}", out.stderr)));
+    }
+    let out = crate::exec::run_checked(
+        &[&git, "checkout", "--quiet", "--detach", sha],
+        &source,
+        &home.root,
+        SEED_TIMEOUT,
+    )?;
+    if out.code != 0 {
+        return Err(LoomError::Git(format!("seed: checkout {sha} failed: {}", out.stderr)));
+    }
+    let out = crate::exec::run_checked(
+        &[&git, "checkout", "--quiet", "-B", "main"],
+        &source,
+        &home.root,
+        SEED_TIMEOUT,
+    )?;
+    if out.code != 0 {
+        return Err(LoomError::Git(format!("seed: branch main failed: {}", out.stderr)));
+    }
+    Ok(())
+}
+
 // ── Identity ──────────────────────────────────────────────────────────────────
 
 /// What `kernel_identity` reports: which mode, which genome, which generation,
@@ -293,5 +358,73 @@ mod tests {
             s == "unknown" || (s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())),
             "got {s}"
         );
+    }
+
+    // ── seed_source ──────────────────────────────────────────────────────────
+
+    fn git(args: &[&str], cwd: &Path) -> String {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn seed_clones_bundle_and_checks_out_sha() {
+        let d = tempfile::tempdir().unwrap();
+        // A real repo with two commits, bundled with --all.
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&["init", "-q", "-b", "trunk"], &repo);
+        std::fs::write(repo.join("a.txt"), "one").unwrap();
+        git(&["add", "."], &repo);
+        git(&["commit", "-q", "-m", "one"], &repo);
+        let first = git(&["rev-parse", "HEAD"], &repo);
+        std::fs::write(repo.join("a.txt"), "two").unwrap();
+        git(&["commit", "-q", "-am", "two"], &repo);
+        let second = git(&["rev-parse", "HEAD"], &repo);
+        let bundle = d.path().join("genome.bundle");
+        git(&["bundle", "create", bundle.to_str().unwrap(), "--all"], &repo);
+
+        let root = d.path().join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        let home = Home::at(root);
+
+        // Seed at the FIRST sha (the binary's genome), not the bundle's tip.
+        seed_source(&home, &bundle, &first).unwrap();
+        assert!(home.source().join(".git").exists());
+        assert_eq!(git(&["rev-parse", "HEAD"], &home.source()), first);
+        assert_eq!(git(&["rev-parse", "--abbrev-ref", "HEAD"], &home.source()), "main");
+        assert_eq!(std::fs::read_to_string(home.source().join("a.txt")).unwrap(), "one");
+        assert_ne!(first, second);
+
+        // Idempotent: a second seed at a different sha is a no-op.
+        seed_source(&home, &bundle, &second).unwrap();
+        assert_eq!(git(&["rev-parse", "HEAD"], &home.source()), first);
+    }
+
+    #[test]
+    fn seed_without_a_bundle_is_not_found() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().to_path_buf());
+        let res = seed_source(&home, &d.path().join("absent.bundle"), "abc");
+        match res {
+            Err(LoomError::NotFound(m)) => {
+                assert!(m.contains("genome bundle is missing"), "msg was {m}")
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+        assert!(!home.source().exists(), "nothing is created when the bundle is absent");
     }
 }

@@ -59,6 +59,9 @@ const PROTECTED: &[&str] = &[
     // Phase 23 (Rebirth): a dependency edit is an arbitrary-code vector — the
     // lockfile decides what `npm ci` runs during threading.
     "package-lock.json",
+    // Phase 23 (Rebirth): the script that bundles the genome into the build —
+    // it decides what history the next binary carries.
+    "scripts/genome-bundle.mjs",
 ];
 
 /// Protected by STEM PREFIX — every file whose lowercased path *starts with*
@@ -79,6 +82,9 @@ const PROTECTED_PREFIXES: &[&str] = &[
     // Phase 23 (Rebirth): Tauri capability grants — what the webview may ask
     // of the shell. Widening them is widening the walls.
     "src-tauri/capabilities/",
+    // Phase 23 (Rebirth): the bundled genome (genome.bundle + genome.json) —
+    // gitignored build output, but a path LOOM must never write.
+    "src-tauri/genome/",
 ];
 
 /// tsconfig*.json — matched by name pattern (tsconfig.json, tsconfig.node.json…).
@@ -114,6 +120,7 @@ const PROTECTED_RUST: &[&str] = &[
     // accident of the whitelist's shape.
     "src-tauri/src/generations.rs", // the ledger — decides which bodies survive on disk
     "src-tauri/src/loomhome.rs", // identity + every path the reweave reads/writes
+    "src-tauri/src/threads.rs",  // tool discovery + the threading ceremony (spawns tools)
     "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA — a generation's own name
     "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
 ];
@@ -331,7 +338,13 @@ static CARGO_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 /// The absolute `cargo` path, resolved once and cached. `None` if unresolvable —
 /// in which case a Rust validate fails honestly (can't prove → can't pass).
 fn cargo_path() -> Option<PathBuf> {
-    CARGO_PATH.get_or_init(|| which("cargo")).clone()
+    // Phase 23: the threads table's fixed candidate order (`~/.cargo/bin`
+    // first) is consulted before the PATH walk, so a cargo that PATH cannot
+    // see (a packaged app launched from Finder) is still found. Task 6 wires
+    // the recorded `threads.json` path for packaged mode.
+    CARGO_PATH
+        .get_or_init(|| crate::threads::locate_now("cargo").or_else(|| which("cargo")))
+        .clone()
 }
 
 // ── SEARCH/REPLACE (exact, unique) ─────────────────────────────────────────────
@@ -1552,10 +1565,14 @@ mod tests {
         let rebirth_safety_files = [
             "src-tauri/src/generations.rs", // the ledger — which bodies survive
             "src-tauri/src/loomhome.rs", // identity + every loomhome path
+            "src-tauri/src/threads.rs",  // tool discovery + threading (spawns tools)
             "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA into the binary
             "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
             "src-tauri/capabilities/default.json",
             "src-tauri/capabilities/nested/extra.json",
+            "src-tauri/genome/genome.bundle", // the bundled genome
+            "src-tauri/genome/genome.json",
+            "scripts/genome-bundle.mjs", // writes the bundle at build time
             "package.json",      // dependency declaration
             "package-lock.json", // dependency lock
             "vite.config.ts",    // constructs the frontend build
@@ -1568,15 +1585,19 @@ mod tests {
         // Every one of them is NAMED in a protected set (explicit, enumerable —
         // the `kernel_editable` meta lists it for the model), not just
         // implicitly outside the whitelist.
-        for f in ["src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
+        for f in ["src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/src/threads.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
             assert!(PROTECTED_RUST.contains(&f), "{f} must be in PROTECTED_RUST");
         }
-        for f in ["package.json", "package-lock.json", "vite.config.ts"] {
+        for f in ["package.json", "package-lock.json", "vite.config.ts", "scripts/genome-bundle.mjs"] {
             assert!(PROTECTED.contains(&f), "{f} must be in PROTECTED");
         }
         assert!(
             PROTECTED_PREFIXES.contains(&"src-tauri/capabilities/"),
             "capabilities/ must be a protected prefix"
+        );
+        assert!(
+            PROTECTED_PREFIXES.contains(&"src-tauri/genome/"),
+            "genome/ must be a protected prefix"
         );
     }
 

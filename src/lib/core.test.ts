@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity, generationsList } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity, generationsList, threadStatus } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -262,3 +262,26 @@ describe("ShellUnavailableError: browser-mode rejection", () => {
   });
 });
 
+
+// ── Threading wrappers (Phase 23) ───────────────────────────────────────────────
+
+describe("threading wrappers", () => {
+  it("threadStatus invokes thread_status with no args and returns the camelCase status", async () => {
+    invoke.mockResolvedValue({
+      threaded: false,
+      tools: [{ name: "cmake", path: null, version: null, requiredFor: "native deps (whisper.cpp)", install: "brew install cmake" }],
+      missing: ["cmake"],
+      drifted: [],
+      steps: { seed: true, deps: false, vendor: false, warm: false, register: false },
+      needsNetwork: true,
+    });
+    const s = await threadStatus();
+    expect(invoke).toHaveBeenCalledWith("thread_status");
+    expect(s.threaded).toBe(false);
+    expect(s.missing).toEqual(["cmake"]);
+    expect(s.tools[0].install).toBe("brew install cmake");
+    expect(s.tools[0].requiredFor).toContain("native deps");
+    expect(s.steps.seed).toBe(true);
+    expect(s.needsNetwork).toBe(true);
+  });
+});
