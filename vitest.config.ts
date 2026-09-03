@@ -7,6 +7,8 @@ export default defineConfig({
     exclude: [
       ...(process.env.SELFTEST ? [] : ["src/selftest/**"]),
       "**/node_modules/**",
+      // Agent worktrees live under .claude/ — never part of this tree's suite.
+      "**/.claude/**",
     ],
     server: {
       deps: {
