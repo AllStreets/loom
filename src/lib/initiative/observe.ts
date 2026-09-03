@@ -10,15 +10,14 @@
  * ledger). `mountObserver` is a thin wire that subscribes to the EXISTING
  * event bus and folds — no feature components are edited.
  *
- * Watch-open observation: the WATCH toggle in Shell writes
- * `setSetting('cockpit.watchOpen', 'on')`, which dispatches
- * `loom-settings-changed`. We listen for that transition to "on" — an honest
- * existing signal, no new dispatch added anywhere.
+ * Evidence sources (Rebirth): utterances through the `loom-utterance` seam and
+ * the local clock (morning sessions). Nothing else — the Cockpit's deck / watch
+ * / floor counters are gone; a legacy ledger that still carries them loads
+ * cleanly with those fields ignored.
  */
 
 const STORE_KEY = "loom.usage.v1";
 const MAX_COMMANDS = 40; // commands map ≤ 40 keys
-const MAX_FLOOR_PRODUCTS = 40; // floorOpens map guard (same discipline)
 const MAX_BYTES = 32 * 1024; // 32KB total guard — usage is small by design
 
 // The 5am–11am local "morning" window (hours, inclusive-exclusive on the end).
@@ -28,11 +27,7 @@ const MORNING_END_HOUR = 11;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface UsageLedger {
-  decks: Record<string, { count: number; lastTs: number }>;
   commands: Record<string, number>; // utterance intent kinds
-  watchOpens: number;
-  terminalOpens: number;
-  floorOpens: Record<string, number>; // per crypto product
   morningActivity: number; // distinct calendar days active 5am–11am local
   lastMorningDay: string; // "YYYY-M-D" of the last counted morning (dedupe key)
   firstSeenTs: number;
@@ -41,11 +36,7 @@ export interface UsageLedger {
 
 /** The events the observer folds. Discriminated on `type`. */
 export type UsageEvent =
-  | { type: "deck"; deck: string }
   | { type: "utterance"; text: string }
-  | { type: "watch-open" }
-  | { type: "terminal-open" }
-  | { type: "floor-open"; product: string }
   // Pre-classified intent bump — used by the utterance classifier internally
   // and available for direct injection (kind bucket, +weight).
   | { type: "intent"; kind: string; weight: number };
@@ -54,11 +45,7 @@ export type UsageEvent =
 
 export function emptyLedger(now: number): UsageLedger {
   return {
-    decks: {},
     commands: {},
-    watchOpens: 0,
-    terminalOpens: 0,
-    floorOpens: {},
     morningActivity: 0,
     lastMorningDay: "",
     firstSeenTs: now,
@@ -82,10 +69,6 @@ export function classifyIntent(text: string): string | null {
   if (/\b(alert\w*|notif\w*|warn\w*|ping|tell me when|let me know)\b/.test(t)) return "alert";
   // build / make / create an organ
   if (/\b(build|make|create|weave|generate)\b/.test(t)) return "build";
-  // watch / news / headlines / feed
-  if (/\b(watch|news|headlines?|feeds?)\b/.test(t)) return "watch";
-  // price / market / crypto / ticker
-  if (/\b(price\w*|market\w*|crypto|bitcoin|btc|eth|stock\w*|ticker\w*)\b/.test(t)) return "market";
   return "other";
 }
 
@@ -128,20 +111,11 @@ export function foldUsage(ledger: UsageLedger, event: UsageEvent, now: number): 
   // Shallow-clone the containers we might touch (keeps the input frozen).
   const next: UsageLedger = {
     ...ledger,
-    decks: { ...ledger.decks },
     commands: { ...ledger.commands },
-    floorOpens: { ...ledger.floorOpens },
     updatedAt: now,
   };
 
   switch (event.type) {
-    case "deck": {
-      const prev = next.decks[event.deck] ?? { count: 0, lastTs: 0 };
-      next.decks[event.deck] = { count: prev.count + 1, lastTs: now };
-      // A terminal deck visit is also a terminal-open.
-      if (event.deck === "terminal") next.terminalOpens = next.terminalOpens + 1;
-      break;
-    }
     case "utterance": {
       const kind = classifyIntent(event.text);
       if (kind) next.commands[kind] = (next.commands[kind] ?? 0) + 1;
@@ -151,15 +125,6 @@ export function foldUsage(ledger: UsageLedger, event: UsageEvent, now: number): 
       next.commands[event.kind] = (next.commands[event.kind] ?? 0) + event.weight;
       break;
     }
-    case "watch-open":
-      next.watchOpens = next.watchOpens + 1;
-      break;
-    case "terminal-open":
-      next.terminalOpens = next.terminalOpens + 1;
-      break;
-    case "floor-open":
-      next.floorOpens[event.product] = (next.floorOpens[event.product] ?? 0) + 1;
-      break;
   }
 
   // Morning-session detection — once per local calendar day.
@@ -173,7 +138,6 @@ export function foldUsage(ledger: UsageLedger, event: UsageEvent, now: number): 
 
   // Caps.
   next.commands = capCountMap(next.commands, MAX_COMMANDS);
-  next.floorOpens = capCountMap(next.floorOpens, MAX_FLOOR_PRODUCTS);
 
   return next;
 }
@@ -188,12 +152,9 @@ export function loadUsage(): UsageLedger {
     if (!raw) return fresh;
     const p = JSON.parse(raw) as Partial<UsageLedger>;
     if (!p || typeof p !== "object") return fresh;
+    // Legacy (pre-Rebirth) ledgers carry decks/watchOpens/floorOpens — ignored.
     return {
-      decks: isPlainObject(p.decks) ? (p.decks as UsageLedger["decks"]) : {},
       commands: isPlainObject(p.commands) ? (p.commands as Record<string, number>) : {},
-      watchOpens: numOr(p.watchOpens, 0),
-      terminalOpens: numOr(p.terminalOpens, 0),
-      floorOpens: isPlainObject(p.floorOpens) ? (p.floorOpens as Record<string, number>) : {},
       morningActivity: numOr(p.morningActivity, 0),
       lastMorningDay: typeof p.lastMorningDay === "string" ? p.lastMorningDay : "",
       firstSeenTs: numOr(p.firstSeenTs, fresh.firstSeenTs),
@@ -210,17 +171,12 @@ export function saveUsage(ledger: UsageLedger): void {
     const capped: UsageLedger = {
       ...ledger,
       commands: capCountMap(ledger.commands, MAX_COMMANDS),
-      floorOpens: capCountMap(ledger.floorOpens, MAX_FLOOR_PRODUCTS),
     };
     let serialised = JSON.stringify(capped);
     if (serialised.length > MAX_BYTES) {
-      // Shed the least-load-bearing detail first: decks, then commands.
-      capped.decks = {};
+      // Shed the only detail there is: the commands map.
+      capped.commands = {};
       serialised = JSON.stringify(capped);
-      if (serialised.length > MAX_BYTES) {
-        capped.commands = {};
-        serialised = JSON.stringify(capped);
-      }
     }
     localStorage.setItem(STORE_KEY, serialised);
   } catch {
@@ -250,40 +206,14 @@ export function mountObserver(): () => void {
     saveUsage(next);
   };
 
-  const onDeck = (ev: Event) => {
-    const deck = (ev as CustomEvent<{ deck?: string }>).detail?.deck;
-    if (typeof deck === "string" && deck) fold({ type: "deck", deck });
-  };
-
   const onUtterance = (ev: Event) => {
     const text = (ev as CustomEvent<{ text?: string }>).detail?.text;
     if (typeof text === "string" && text.trim()) fold({ type: "utterance", text });
   };
 
-  const onSettings = (ev: Event) => {
-    const detail = (ev as CustomEvent<{ key?: string; value?: string }>).detail;
-    // Watch-open has no dedicated event; the WATCH toggle flips this setting.
-    if (detail?.key === "cockpit.watchOpen" && detail.value === "on") {
-      fold({ type: "watch-open" });
-    }
-  };
-
-  const onFloorOpen = (ev: Event) => {
-    // TerminalDeck's openFloor dispatches this when the crypto floor overlay
-    // opens — the sole evidence source for the price-alert archetype.
-    const product = (ev as CustomEvent<{ product?: string }>).detail?.product;
-    if (typeof product === "string" && product) fold({ type: "floor-open", product });
-  };
-
-  window.addEventListener("loom-deck", onDeck);
   window.addEventListener("loom-utterance", onUtterance);
-  window.addEventListener("loom-settings-changed", onSettings);
-  window.addEventListener("loom-floor-open", onFloorOpen);
 
   return () => {
-    window.removeEventListener("loom-deck", onDeck);
     window.removeEventListener("loom-utterance", onUtterance);
-    window.removeEventListener("loom-settings-changed", onSettings);
-    window.removeEventListener("loom-floor-open", onFloorOpen);
   };
 }

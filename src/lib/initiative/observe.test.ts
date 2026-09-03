@@ -21,42 +21,26 @@ describe("emptyLedger", () => {
     const l = emptyLedger(now);
     expect(l.firstSeenTs).toBe(now);
     expect(l.updatedAt).toBe(now);
-    expect(l.decks).toEqual({});
     expect(l.commands).toEqual({});
-    expect(l.watchOpens).toBe(0);
-    expect(l.terminalOpens).toBe(0);
-    expect(l.floorOpens).toEqual({});
     expect(l.morningActivity).toBe(0);
     expect(l.lastMorningDay).toBe("");
   });
 });
 
-// ── foldUsage — deck visit ───────────────────────────────────────────────────
+// ── foldUsage — purity ───────────────────────────────────────────────────────
 
-describe("foldUsage — deck", () => {
-  it("counts a deck visit and records lastTs", () => {
-    const now = 1_700_000_000_000;
-    const l0 = emptyLedger(now);
-    const l1 = foldUsage(l0, { type: "deck", deck: "terminal" }, now + 10);
-    expect(l1.decks.terminal.count).toBe(1);
-    expect(l1.decks.terminal.lastTs).toBe(now + 10);
-    expect(l1.updatedAt).toBe(now + 10);
-  });
-
-  it("accumulates repeat deck visits", () => {
-    let l = emptyLedger(0);
-    l = foldUsage(l, { type: "deck", deck: "globe" }, 1);
-    l = foldUsage(l, { type: "deck", deck: "globe" }, 2);
-    l = foldUsage(l, { type: "deck", deck: "globe" }, 3);
-    expect(l.decks.globe.count).toBe(3);
-    expect(l.decks.globe.lastTs).toBe(3);
-  });
-
+describe("foldUsage — purity", () => {
   it("is pure — does not mutate the input ledger", () => {
     const l0 = emptyLedger(0);
     const snapshot = JSON.stringify(l0);
-    foldUsage(l0, { type: "deck", deck: "ember" }, 5);
+    foldUsage(l0, { type: "utterance", text: "build me a thing" }, 5);
     expect(JSON.stringify(l0)).toBe(snapshot);
+  });
+
+  it("records updatedAt from the fold time", () => {
+    const l1 = foldUsage(emptyLedger(0), { type: "intent", kind: "build", weight: 1 }, 10);
+    expect(l1.updatedAt).toBe(10);
+    expect(l1.commands.build).toBe(1);
   });
 });
 
@@ -101,29 +85,16 @@ describe("foldUsage — utterance", () => {
   });
 });
 
-// ── foldUsage — watch / terminal / floor ─────────────────────────────────────
+// ── foldUsage — retired buckets ──────────────────────────────────────────────
 
-describe("foldUsage — surfaces", () => {
-  it("watch-open increments watchOpens", () => {
+describe("foldUsage — retired Cockpit buckets never appear", () => {
+  it("news and market phrasings land in 'other', not a retired bucket", () => {
     let l = emptyLedger(0);
-    l = foldUsage(l, { type: "watch-open" }, 1);
-    l = foldUsage(l, { type: "watch-open" }, 2);
-    expect(l.watchOpens).toBe(2);
-  });
-
-  it("terminal-open increments terminalOpens", () => {
-    let l = emptyLedger(0);
-    l = foldUsage(l, { type: "terminal-open" }, 1);
-    expect(l.terminalOpens).toBe(1);
-  });
-
-  it("floor-open increments per-product", () => {
-    let l = emptyLedger(0);
-    l = foldUsage(l, { type: "floor-open", product: "BTC-USD" }, 1);
-    l = foldUsage(l, { type: "floor-open", product: "BTC-USD" }, 2);
-    l = foldUsage(l, { type: "floor-open", product: "ETH-USD" }, 3);
-    expect(l.floorOpens["BTC-USD"]).toBe(2);
-    expect(l.floorOpens["ETH-USD"]).toBe(1);
+    l = foldUsage(l, { type: "utterance", text: "what's in the news" }, 1);
+    l = foldUsage(l, { type: "utterance", text: "show me the price of bitcoin" }, 2);
+    expect(l.commands.other).toBe(2);
+    expect(l.commands.watch).toBeUndefined();
+    expect(l.commands.market).toBeUndefined();
   });
 });
 
@@ -190,35 +161,46 @@ describe("foldUsage — caps", () => {
 describe("loadUsage / saveUsage", () => {
   it("round-trips a ledger through localStorage", () => {
     let l = emptyLedger(100);
-    l = foldUsage(l, { type: "watch-open" }, 200);
-    l = foldUsage(l, { type: "floor-open", product: "BTC-USD" }, 300);
+    l = foldUsage(l, { type: "utterance", text: "build me a thing" }, 200);
+    l = foldUsage(l, { type: "intent", kind: "alert", weight: 2 }, 300);
     saveUsage(l);
     const back = loadUsage();
-    expect(back.watchOpens).toBe(1);
-    expect(back.floorOpens["BTC-USD"]).toBe(1);
+    expect(back.commands.build).toBe(1);
+    expect(back.commands.alert).toBe(2);
     expect(back.firstSeenTs).toBe(100);
   });
 
   it("loadUsage on empty storage returns a fresh ledger", () => {
     const l = loadUsage();
-    expect(l.watchOpens).toBe(0);
-    expect(l.decks).toEqual({});
+    expect(l.morningActivity).toBe(0);
+    expect(l.commands).toEqual({});
   });
 
   it("loadUsage tolerates corrupt JSON — returns a fresh ledger", () => {
     localStorage.setItem("loom.usage.v1", "{not json");
     const l = loadUsage();
-    expect(l.watchOpens).toBe(0);
+    expect(l.morningActivity).toBe(0);
     expect(l.commands).toEqual({});
   });
 
   it("loadUsage tolerates a partial object — fills missing fields", () => {
-    localStorage.setItem("loom.usage.v1", JSON.stringify({ watchOpens: 3 }));
+    localStorage.setItem("loom.usage.v1", JSON.stringify({ morningActivity: 3 }));
     const l = loadUsage();
-    expect(l.watchOpens).toBe(3);
-    expect(l.decks).toEqual({});
-    expect(l.floorOpens).toEqual({});
+    expect(l.morningActivity).toBe(3);
+    expect(l.commands).toEqual({});
     expect(typeof l.firstSeenTs).toBe("number");
+  });
+
+  it("loadUsage drops legacy Cockpit fields from a pre-Rebirth ledger", () => {
+    localStorage.setItem(
+      "loom.usage.v1",
+      JSON.stringify({ decks: { globe: { count: 4, lastTs: 1 } }, watchOpens: 9, floorOpens: { "BTC-USD": 3 }, commands: { build: 2 } })
+    );
+    const l = loadUsage() as unknown as Record<string, unknown>;
+    expect(l.decks).toBeUndefined();
+    expect(l.watchOpens).toBeUndefined();
+    expect(l.floorOpens).toBeUndefined();
+    expect((l.commands as Record<string, number>).build).toBe(2);
   });
 
   it("saveUsage never throws when storage is unavailable", () => {
@@ -233,15 +215,6 @@ describe("loadUsage / saveUsage", () => {
 // ── mountObserver ─────────────────────────────────────────────────────────
 
 describe("mountObserver", () => {
-  it("folds a loom-deck event into the persisted ledger", () => {
-    const unmount = mountObserver();
-    window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "terminal" } }));
-    const l = loadUsage();
-    expect(l.decks.terminal.count).toBe(1);
-    expect(l.terminalOpens).toBe(1);
-    unmount();
-  });
-
   it("folds a loom-utterance event into the persisted ledger", () => {
     const unmount = mountObserver();
     window.dispatchEvent(
@@ -252,73 +225,32 @@ describe("mountObserver", () => {
     unmount();
   });
 
-  it("folds a loom-floor-open event into the persisted ledger (per product)", () => {
-    const unmount = mountObserver();
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "ETH-USD" } }));
-    const l = loadUsage();
-    expect(l.floorOpens["BTC-USD"]).toBe(2);
-    expect(l.floorOpens["ETH-USD"]).toBe(1);
-    unmount();
-  });
-
-  it("ignores a floor-open with no product", () => {
-    const unmount = mountObserver();
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: {} }));
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: null }));
-    expect(loadUsage().floorOpens).toEqual({});
-    unmount();
-  });
-
-  it("a terminal deck visit folds a terminal-open (deck→terminal path)", () => {
+  it("ignores the retired Cockpit events entirely", () => {
     const unmount = mountObserver();
     window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "terminal" } }));
-    expect(loadUsage().terminalOpens).toBe(1);
-    unmount();
-  });
-
-  it("floor-open listener is removed on unmount", () => {
-    const unmount = mountObserver();
-    unmount();
     window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
-    expect(loadUsage().floorOpens).toEqual({});
-  });
-
-  it("folds a watch-open (cockpit.watchOpen → on) settings change", () => {
-    const unmount = mountObserver();
     window.dispatchEvent(
-      new CustomEvent("loom-settings-changed", {
-        detail: { key: "cockpit.watchOpen", value: "on" },
-      })
+      new CustomEvent("loom-settings-changed", { detail: { key: "cockpit.watchOpen", value: "on" } })
     );
-    const l = loadUsage();
-    expect(l.watchOpens).toBe(1);
-    unmount();
-  });
-
-  it("does NOT fold a watch settings change to 'off'", () => {
-    const unmount = mountObserver();
-    window.dispatchEvent(
-      new CustomEvent("loom-settings-changed", {
-        detail: { key: "cockpit.watchOpen", value: "off" },
-      })
-    );
-    expect(loadUsage().watchOpens).toBe(0);
+    const l = loadUsage() as unknown as Record<string, unknown>;
+    expect(l.decks).toBeUndefined();
+    expect(l.floorOpens).toBeUndefined();
+    expect(l.watchOpens).toBeUndefined();
+    expect(loadUsage().commands).toEqual({});
     unmount();
   });
 
   it("unmount removes all listeners — later events are ignored", () => {
     const unmount = mountObserver();
     unmount();
-    window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "globe" } }));
-    expect(loadUsage().decks).toEqual({});
+    window.dispatchEvent(new CustomEvent("loom-utterance", { detail: { text: "build me a thing" } }));
+    expect(loadUsage().commands).toEqual({});
   });
 
   it("ignores malformed event details without throwing", () => {
     const unmount = mountObserver();
     expect(() => {
-      window.dispatchEvent(new CustomEvent("loom-deck", { detail: null }));
+      window.dispatchEvent(new CustomEvent("loom-utterance", { detail: null }));
       window.dispatchEvent(new CustomEvent("loom-utterance", { detail: {} }));
     }).not.toThrow();
     unmount();
@@ -326,14 +258,14 @@ describe("mountObserver", () => {
 
   it("mountObserver folds a fresh ledger only once per call (idempotent listeners)", () => {
     const u1 = mountObserver();
-    window.dispatchEvent(new CustomEvent("loom-deck", { detail: { deck: "void" } }));
-    expect(loadUsage().decks.void.count).toBe(1);
+    window.dispatchEvent(new CustomEvent("loom-utterance", { detail: { text: "build me a thing" } }));
+    expect(loadUsage().commands.build).toBe(1);
     u1();
   });
 });
 
 // Type-level exercises (compile guards)
-const _e: UsageEvent = { type: "watch-open" };
+const _e: UsageEvent = { type: "intent", kind: "build", weight: 1 };
 const _l: UsageLedger = emptyLedger(0);
 void _e;
 void _l;
