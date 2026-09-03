@@ -1,0 +1,66 @@
+<style>
+  .wm-wrap { display:flex; flex-direction:column; gap:18px; margin-top:10px; }
+  .wm { position:relative; overflow:hidden; cursor:pointer; border-radius:16px;
+        padding:30px 34px; background:rgba(255,255,255,0.018);
+        border:1px solid rgba(255,255,255,0.07); transition:all .25s ease; }
+  .wm:hover { border-color:rgba(255,255,255,0.22); transform:translateY(-2px);
+        background:rgba(255,255,255,0.03); }
+  .wm .glow { position:absolute; inset:0; opacity:.5; pointer-events:none; }
+  .wm-row { position:relative; display:flex; align-items:baseline; gap:18px; flex-wrap:wrap; }
+  .wm-name { font-size:3.1rem; font-weight:800; letter-spacing:.14em; line-height:1;
+        font-family:'Syne','Space Grotesk',system-ui,sans-serif; }
+  .wm-say { position:relative; font-size:1.02rem; opacity:.82; margin-top:12px; max-width:680px; }
+  .wm-tag { position:relative; font-size:.72rem; letter-spacing:.28em; text-transform:uppercase;
+        opacity:.6; margin-top:6px; }
+  .wm-cyan .wm-name{ color:#7fe9ff; text-shadow:0 0 26px rgba(0,212,255,.55); }
+  .wm-cyan .glow{ background:radial-gradient(120% 140% at 8% 50%, rgba(0,212,255,.16), transparent 55%); }
+  .wm-violet .wm-name{ color:#c9b8ff; text-shadow:0 0 26px rgba(123,97,255,.6); }
+  .wm-violet .glow{ background:radial-gradient(120% 140% at 8% 50%, rgba(123,97,255,.2), transparent 55%); }
+  .wm-amber .wm-name{ color:#ffd089; text-shadow:0 0 30px rgba(255,159,10,.6); }
+  .wm-amber .glow{ background:radial-gradient(120% 140% at 8% 50%, rgba(255,159,10,.18), transparent 55%); }
+  .wm-ice .wm-name{ color:#eaf3ff; text-shadow:0 0 30px rgba(120,180,255,.7); }
+  .wm-ice .glow{ background:radial-gradient(120% 140% at 8% 50%, rgba(120,170,255,.16), transparent 55%); }
+</style>
+
+<h2 style="text-align:center">Name the Planetary Commons</h2>
+<p class="subtitle" style="text-align:center;max-width:640px;margin:0 auto">
+  A watching instrument that helps the world. The name should hold both halves: <em>awareness</em>
+  and <em>care</em> — never surveillance. Click the one that feels like it could be on the lips of
+  millions. Your own ideas welcome too.
+</p>
+
+<div class="wm-wrap">
+  <div class="wm wm-cyan" data-choice="vigil" onclick="toggleSelect(this)">
+    <div class="glow"></div>
+    <div class="wm-row"><span class="wm-name">VIGIL</span></div>
+    <div class="wm-say">A watch kept out of care. To "keep vigil" is to stay awake over someone so harm doesn't reach them unseen — exactly what this does for the planet.</div>
+    <div class="wm-tag">Watchful · Humane · Real word everyone knows</div>
+  </div>
+
+  <div class="wm wm-violet" data-choice="auspex" onclick="toggleSelect(this)">
+    <div class="glow"></div>
+    <div class="wm-row"><span class="wm-name">AUSPEX</span></div>
+    <div class="wm-say">The ancient watcher who read the world's signs to forewarn the city. Literally an early-warning system, two thousand years old. Sits beside Aegis, Cortex, Specter in your lineage.</div>
+    <div class="wm-tag">Mythic · Unique · Ownable · "Reads the omens"</div>
+  </div>
+
+  <div class="wm wm-amber" data-choice="beacon" onclick="toggleSelect(this)">
+    <div class="glow"></div>
+    <div class="wm-row"><span class="wm-name">BEACON</span></div>
+    <div class="wm-say">A light raised so everyone can see the danger — and the way through. Warm, hopeful, instantly understood in every language. The most "for the world" of the four.</div>
+    <div class="wm-tag">Hopeful · Accessible · Warning + guidance</div>
+  </div>
+
+  <div class="wm wm-ice" data-choice="polaris" onclick="toggleSelect(this)">
+    <div class="glow"></div>
+    <div class="wm-row"><span class="wm-name">POLARIS</span></div>
+    <div class="wm-say">The one fixed star the whole world navigates by. A shared point of truth and orientation when everything else is moving. Elevated, calm, planetary.</div>
+    <div class="wm-tag">Shared · Orienting · A commons everyone looks to</div>
+  </div>
+</div>
+
+<p class="subtitle" style="text-align:center;margin-top:18px">
+  Runners-up if none land: <strong>Argus</strong> (the hundred-eyed all-seer — but leans surveillance),
+  <strong>Pangaea</strong> (one world), <strong>Concordia</strong> (harmony of all), <strong>Aether</strong> (the living medium of the heavens).
+  Tell me which moves you — or throw a word of your own.
+</p>

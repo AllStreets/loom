@@ -31,10 +31,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "../public/decks/auspex": "decks/auspex",
-      "../public/decks/ember": "decks/ember"
-    },
     "macOS": {
       "infoPlist": "Info.plist"
     }

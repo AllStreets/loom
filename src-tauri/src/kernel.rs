@@ -1521,7 +1521,7 @@ mod tests {
         // whitelist genuinely works (not blanket-denied).
         assert!(is_editable("src-tauri/src/fleet.rs"));
         assert!(is_editable("src-tauri/src/organs.rs"));
-        assert!(is_editable("src-tauri/src/market.rs"));
+        assert!(is_editable("src-tauri/src/voice.rs"));
 
         // But a non-.rs src-tauri file, or a src-tauri file OUTSIDE src/, is NOT
         // editable — the Rust whitelist is exactly `src-tauri/src/**/*.rs`.

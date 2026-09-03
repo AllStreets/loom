@@ -1,0 +1,101 @@
+<style>
+  .ax-layers { display:flex; flex-direction:column; gap:14px; margin:18px 0 6px; }
+  .ax-layer { border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:16px 18px;
+       background:rgba(255,255,255,.015); position:relative; }
+  .ax-layer h4 { margin:0 0 10px; font-size:.74rem; letter-spacing:.26em; text-transform:uppercase; opacity:.7; }
+  .ax-pills { display:flex; flex-wrap:wrap; gap:8px; }
+  .ax-pill { font-size:.86rem; padding:6px 12px; border-radius:999px;
+       border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.02); }
+  .ax-pill.hot { border-color:rgba(255,45,85,.5); color:#ffb3c2; box-shadow:0 0 18px rgba(255,45,85,.18); }
+  .ax-pill.dim { opacity:.45; }
+  .ax-globe h4 { color:#7fe9ff; }
+  .ax-reason h4 { color:#c9b8ff; }
+  .ax-sense h4 { color:#ffd089; }
+  .ax-slice { margin-top:6px; border:1px dashed rgba(0,212,255,.45); border-radius:14px;
+       padding:14px 18px; background:radial-gradient(120% 160% at 12% 0%, rgba(0,212,255,.08), transparent 60%); }
+  .ax-slice b { color:#7fe9ff; letter-spacing:.04em; }
+  .ax-phases { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0; }
+  .ax-phase { border:1px solid rgba(255,255,255,.08); border-radius:12px; padding:12px;
+       background:rgba(255,255,255,.015); }
+  .ax-phase .n { font-size:.7rem; letter-spacing:.2em; opacity:.55; }
+  .ax-phase h5 { margin:4px 0 6px; font-size:.95rem; }
+  .ax-phase p { margin:0; font-size:.8rem; opacity:.72; line-height:1.4; }
+  .ax-phase.live { border-color:rgba(0,212,255,.5); box-shadow:0 0 20px rgba(0,212,255,.12); }
+  @media (max-width:680px){ .ax-phases{ grid-template-columns:repeat(2,1fr);} }
+</style>
+
+<h2 style="text-align:center">One sense, perfect — then many</h2>
+<p class="subtitle" style="text-align:center;max-width:660px;margin:0 auto">
+  AUSPEX is three layers. The trap is building all of it shallow. The path to "worthy of the world"
+  is a single <em>vertical slice</em> — one domain carried all the way from sensing to the living globe,
+  flawless and honest — then repeated.
+</p>
+
+<div class="ax-layers">
+  <div class="ax-layer ax-globe">
+    <h4>Layer 3 · The Living Globe — the public face</h4>
+    <div class="ax-pills">
+      <span class="ax-pill">a planet with a pulse</span>
+      <span class="ax-pill">severity = light</span>
+      <span class="ax-pill">connection = arcs</span>
+      <span class="ax-pill">uncertainty shown honestly</span>
+      <span class="ax-pill">readable on a cheap phone</span>
+    </div>
+  </div>
+  <div class="ax-layer ax-reason">
+    <h4>Layer 2 · The Reasoning — sense into understanding</h4>
+    <div class="ax-pills">
+      <span class="ax-pill">geolocate</span>
+      <span class="ax-pill">severity + confidence score</span>
+      <span class="ax-pill">explain in plain language</span>
+      <span class="ax-pill">always cite sources</span>
+      <span class="ax-pill dim">connect across domains (later)</span>
+    </div>
+  </div>
+  <div class="ax-layer ax-sense">
+    <h4>Layer 1 · The Senses — autonomous pipelines over public signals</h4>
+    <div class="ax-pills">
+      <span class="ax-pill hot">Disasters</span>
+      <span class="ax-pill dim">Conflict</span>
+      <span class="ax-pill dim">Supply chains</span>
+      <span class="ax-pill dim">Climate</span>
+      <span class="ax-pill dim">Public health</span>
+      <span class="ax-pill dim">Human events</span>
+    </div>
+  </div>
+</div>
+
+<div class="ax-slice">
+  <b>THE FIRST VERTICAL SLICE (v1)</b> — <strong>Disasters</strong>, carried top to bottom:
+  USGS earthquakes + GDACS global hazards → geolocate, score severity &amp; confidence, explain each
+  event in one honest paragraph with sources → rendered on the living globe. Narrow in domain,
+  <em>complete</em> in depth. Visceral, life-relevant, and built on clean free public data.
+</div>
+
+<div class="ax-phases">
+  <div class="ax-phase live"><div class="n">PHASE 1</div><h5>Disasters, end to end</h5><p>The full slice. One sense, flawless and honest, on the globe.</p></div>
+  <div class="ax-phase"><div class="n">PHASE 2</div><h5>More senses</h5><p>Fire, conflict, supply, climate, health — reuse the slice.</p></div>
+  <div class="ax-phase"><div class="n">PHASE 3</div><h5>Connection</h5><p>Draw the link between events across domains — in light.</p></div>
+  <div class="ax-phase"><div class="n">PHASE 4</div><h5>Worthy &amp; open</h5><p>Scale, speed, accessibility, then give it to the world.</p></div>
+</div>
+
+<h3 style="text-align:center;margin-top:8px">Does v1 lead with Disasters — or a different first sense?</h3>
+<div class="options">
+  <div class="option" data-choice="disasters" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content"><h3>Disasters first &nbsp;<span style="opacity:.6;font-weight:400">(recommended)</span></h3>
+    <p>USGS quakes + GDACS. Cleanest free data, most visceral, clearest life-saving value. Proves the whole instrument fast.</p></div>
+  </div>
+  <div class="option" data-choice="conflict" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content"><h3>Conflict &amp; unrest first</h3><p>Highest stakes, but messier data and licensing (ACLED/GDELT). Heavier to do honestly.</p></div>
+  </div>
+  <div class="option" data-choice="supply" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content"><h3>Supply chains first</h3><p>Leans on your Flexport lineage (AIS/ports). Strong, but less universally felt than disasters.</p></div>
+  </div>
+  <div class="option" data-choice="breadth" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content"><h3>Breadth over depth</h3><p>All domains, shallow. Faster to look impressive — but won't hit the "worthy of the world" bar. I'd advise against it.</p></div>
+  </div>
+</div>

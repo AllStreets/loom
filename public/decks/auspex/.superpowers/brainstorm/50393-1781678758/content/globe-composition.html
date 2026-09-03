@@ -1,0 +1,180 @@
+<style>
+  .ax-stage { position:relative; width:100%; max-width:860px; margin:8px auto 0; aspect-ratio:800/560;
+       border-radius:18px; overflow:hidden; background:#03060d;
+       border:1px solid rgba(255,255,255,.07); }
+  .ax-stage svg { position:absolute; inset:0; width:100%; height:100%; display:block; }
+  .ax-hud { position:absolute; left:18px; top:16px; display:flex; align-items:center; gap:8px;
+       font-size:.72rem; letter-spacing:.26em; color:#9fd9ff; }
+  .ax-hud .dot { width:7px; height:7px; border-radius:50%; background:#00d4ff; box-shadow:0 0 10px #00d4ff;
+       animation:axpulse 2.4s ease-in-out infinite; }
+  @keyframes axpulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+  .ax-toggle { position:absolute; right:18px; top:14px; display:flex; gap:0;
+       border:1px solid rgba(255,255,255,.14); border-radius:999px; overflow:hidden;
+       background:rgba(0,0,0,.35); backdrop-filter:blur(8px); }
+  .ax-toggle button { font:inherit; font-size:.72rem; letter-spacing:.18em; padding:7px 16px;
+       background:transparent; color:#8aa0c0; border:none; cursor:pointer; transition:all .2s; }
+  .ax-toggle button.on { background:rgba(0,212,255,.16); color:#dff4ff; box-shadow:inset 0 0 16px rgba(0,212,255,.18); }
+  .ax-card { position:absolute; left:18px; bottom:18px; width:300px; max-width:62%;
+       border:1px solid rgba(255,255,255,.1); border-radius:14px; padding:14px 16px;
+       background:rgba(8,14,24,.62); backdrop-filter:blur(14px); }
+  .ax-card .row1 { display:flex; align-items:center; gap:9px; }
+  .ax-sev { width:9px; height:9px; border-radius:50%; background:#ff2d55; box-shadow:0 0 12px #ff2d55; flex:0 0 auto; }
+  .ax-card h4 { margin:0; font-size:1.02rem; color:#fff; }
+  .ax-conf { margin-left:auto; font-size:.62rem; letter-spacing:.14em; color:#9be8c0;
+       border:1px solid rgba(48,209,88,.4); border-radius:999px; padding:3px 8px; }
+  .ax-meta { margin:7px 0 0; font-size:.74rem; color:#8aa0c0; letter-spacing:.02em; }
+  .ax-brief { margin:9px 0 0; font-size:.82rem; color:#cfe0f5; line-height:1.5; }
+  .ax-src { margin-top:10px; font-size:.7rem; letter-spacing:.1em; color:#7fc8ff; }
+  @media (max-width:560px){ .ax-card{width:auto; right:18px; max-width:none;} }
+</style>
+
+<h2 style="text-align:center">AUSPEX — the living Earth (composition)</h2>
+<p class="subtitle" style="text-align:center;max-width:640px;margin:0 auto">
+  NASA day / night marble as the base. Holographic overlays kept sparse — one orbital ring, the
+  active events, one honest card. Use the toggle (top-right). This is the <em>feel</em>; the real
+  globe is full 3D at 60fps.
+</p>
+
+<div class="ax-stage" id="axStage">
+  <svg viewBox="0 0 800 560" preserveAspectRatio="xMidYMid slice">
+    <defs>
+      <radialGradient id="atmo" cx="50%" cy="50%" r="50%">
+        <stop offset="74%" stop-color="rgba(40,120,220,0)"/>
+        <stop offset="90%" stop-color="rgba(60,150,255,.35)"/>
+        <stop offset="100%" stop-color="rgba(60,150,255,0)"/>
+      </radialGradient>
+      <radialGradient id="nightFill" cx="40%" cy="36%" r="72%">
+        <stop offset="0%" stop-color="#13284a"/>
+        <stop offset="55%" stop-color="#0a1830"/>
+        <stop offset="100%" stop-color="#040a16"/>
+      </radialGradient>
+      <radialGradient id="dayFill" cx="40%" cy="34%" r="74%">
+        <stop offset="0%" stop-color="#2f6fb0"/>
+        <stop offset="55%" stop-color="#16467e"/>
+        <stop offset="100%" stop-color="#08213f"/>
+      </radialGradient>
+      <radialGradient id="terminator" cx="32%" cy="30%" r="80%">
+        <stop offset="55%" stop-color="rgba(255,255,255,.08)"/>
+        <stop offset="100%" stop-color="rgba(0,0,0,.45)"/>
+      </radialGradient>
+      <filter id="soft"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+
+    <g id="ax-stars"></g>
+
+    <!-- outer atmosphere glow -->
+    <circle cx="400" cy="285" r="210" fill="url(#atmo)"/>
+
+    <!-- NIGHT globe -->
+    <g id="g-night">
+      <circle cx="400" cy="285" r="182" fill="url(#nightFill)"/>
+      <g fill="#16365f" opacity=".85">
+        <path d="M300 175 q70 -26 120 8 q34 40 -8 78 q-78 26 -126 -22 q-26 -44 14 -64z"/>
+        <path d="M430 280 q66 -10 86 44 q12 60 -50 92 q-66 12 -86 -44 q-12 -66 50 -92z"/>
+        <path d="M270 330 q44 4 50 50 q-4 46 -52 50 q-40 -4 -40 -50 q4 -42 42 -50z"/>
+      </g>
+      <!-- city lights -->
+      <g fill="#ffcf87">
+        <circle cx="356" cy="206" r="1.5"/><circle cx="372" cy="214" r="1.2"/><circle cx="388" cy="200" r="1.3"/>
+        <circle cx="402" cy="222" r="1"/><circle cx="344" cy="226" r="1.1"/><circle cx="430" cy="300" r="1.3"/>
+        <circle cx="300" cy="350" r="1"/><circle cx="470" cy="330" r="1.1"/><circle cx="410" cy="250" r="1"/>
+        <circle cx="362" cy="240" r="1.2"/>
+      </g>
+      <circle cx="400" cy="285" r="182" fill="none" stroke="rgba(70,160,255,.45)" stroke-width="2"/>
+    </g>
+
+    <!-- DAY globe (hidden by default) -->
+    <g id="g-day" style="display:none">
+      <circle cx="400" cy="285" r="182" fill="url(#dayFill)"/>
+      <g fill="#3f7a47" opacity=".92">
+        <path d="M300 175 q70 -26 120 8 q34 40 -8 78 q-78 26 -126 -22 q-26 -44 14 -64z"/>
+        <path d="M430 280 q66 -10 86 44 q12 60 -50 92 q-66 12 -86 -44 q-12 -66 50 -92z"/>
+        <path d="M270 330 q44 4 50 50 q-4 46 -52 50 q-40 -4 -40 -50 q4 -42 42 -50z"/>
+      </g>
+      <g fill="#cfe6ef" opacity=".9">
+        <ellipse cx="400" cy="130" rx="120" ry="20"/>
+        <ellipse cx="400" cy="442" rx="90" ry="16"/>
+      </g>
+      <circle cx="400" cy="285" r="182" fill="url(#terminator)"/>
+      <circle cx="400" cy="285" r="182" fill="none" stroke="rgba(120,180,255,.35)" stroke-width="2"/>
+    </g>
+
+    <!-- HOLOGRAPHIC OVERLAYS (sparse) -->
+    <g opacity=".9">
+      <!-- thin orbital ring -->
+      <ellipse cx="400" cy="285" rx="220" ry="64" fill="none" stroke="rgba(0,212,255,.22)" stroke-width="1"/>
+      <!-- equator hairline -->
+      <ellipse cx="400" cy="285" rx="182" ry="40" fill="none" stroke="rgba(0,212,255,.16)" stroke-width="1"/>
+
+      <!-- primary event: quake ring -->
+      <circle cx="332" cy="250" r="7" fill="none" stroke="#ff2d55" stroke-width="2.4" filter="url(#soft)"/>
+      <circle cx="332" cy="250" r="18" fill="none" stroke="#ff2d55" stroke-width="1" opacity=".5"/>
+      <circle cx="332" cy="250" r="30" fill="none" stroke="#ff2d55" stroke-width="1" opacity=".22"/>
+
+      <!-- secondary event: lower severity, solid small -->
+      <circle cx="470" cy="318" r="4" fill="#ff9f0a"/>
+      <circle cx="470" cy="318" r="11" fill="none" stroke="#ff9f0a" stroke-width="1" opacity=".4"/>
+
+      <!-- an uncertain signal: shimmering (dashed) -->
+      <circle cx="408" cy="360" r="5.5" fill="none" stroke="#c9b8ff" stroke-width="1.4" stroke-dasharray="3 4" opacity=".75"/>
+
+      <!-- impact arc -->
+      <path d="M332 250 Q420 150 506 246" fill="none" stroke="rgba(255,159,10,.7)" stroke-width="1.4"/>
+      <circle cx="506" cy="246" r="2.6" fill="#ff9f0a"/>
+    </g>
+  </svg>
+
+  <div class="ax-hud"><span class="dot"></span> AUSPEX · LIVE</div>
+
+  <div class="ax-toggle">
+    <button data-m="night" class="on" onclick="axMode('night')">NIGHT</button>
+    <button data-m="day" onclick="axMode('day')">DAY</button>
+  </div>
+
+  <div class="ax-card">
+    <div class="row1">
+      <span class="ax-sev"></span>
+      <h4>M6.4 earthquake</h4>
+      <span class="ax-conf">HIGH CONFIDENCE</span>
+    </div>
+    <p class="ax-meta">28 km W of coastline · depth 10 km · 12 min ago</p>
+    <p class="ax-brief">Strong, shallow quake near a populated coast. Shaking likely felt by ~1.2M
+    people; events this size and depth here have historically prompted local damage checks. No
+    tsunami alert issued.</p>
+    <p class="ax-src">SOURCES: USGS · GDACS &nbsp;›</p>
+  </div>
+</div>
+
+<div class="options" style="margin-top:18px">
+  <div class="option" data-choice="lock" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>This is it — lock the globe direction</h3>
+    <p>Obsidian NASA marble (day/night toggle) + sparse holographic overlays + honest event card.</p></div>
+  </div>
+  <div class="option" data-choice="adjust" onclick="toggleSelect(this)">
+    <div class="letter">±</div>
+    <div class="content"><h3>Close, but let's adjust</h3>
+    <p>Tell me what to change — overlay density, colors, card, glow, anything.</p></div>
+  </div>
+</div>
+
+<script>
+  (function(){
+    var svgns="http://www.w3.org/2000/svg";
+    var stars=document.getElementById('ax-stars');
+    if(stars){ for(var i=0;i<90;i++){ var c=document.createElementNS(svgns,'circle');
+      c.setAttribute('cx',(Math.random()*800).toFixed(1));
+      c.setAttribute('cy',(Math.random()*560).toFixed(1));
+      c.setAttribute('r',(Math.random()*1.1+0.2).toFixed(2));
+      c.setAttribute('fill','#fff');
+      c.setAttribute('opacity',(Math.random()*0.6+0.1).toFixed(2));
+      stars.appendChild(c);} }
+  })();
+  function axMode(m){
+    var n=document.getElementById('g-night'), d=document.getElementById('g-day');
+    if(n) n.style.display = (m==='night')?'':'none';
+    if(d) d.style.display = (m==='day')?'':'none';
+    var btns=document.querySelectorAll('.ax-toggle button');
+    for(var i=0;i<btns.length;i++){ btns[i].classList.toggle('on', btns[i].getAttribute('data-m')===m); }
+  }
+</script>
