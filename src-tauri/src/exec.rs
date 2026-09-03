@@ -16,12 +16,17 @@
 //!     on timeout AND on drop we `kill(-pgid, SIGKILL)` to take the WHOLE tree
 //!     (npx → tsc/vitest grandchildren) down, not just the npx shim.
 //!
+//! `run_checked_env` is the same runner with a fixed list of env pairs the
+//! caller composes from constants and LOOM-owned paths. `run_detached` is the
+//! one exception to "wait and kill": it spawns a process meant to outlive us
+//! (the warden, the relaunch) and returns only its pid.
+//!
 //! No shell is ever invoked.
 
 use crate::error::LoomError;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -87,22 +92,14 @@ fn ring_tail(bytes: &[u8]) -> String {
     lines.join("\n")
 }
 
-/// Run a fixed argv in `cwd`, which MUST canonicalize to a path under the
-/// canonical `allowed_root`. Kills the whole process group on timeout / drop.
-///
-/// `argv[0]` is the program; `argv[1..]` its arguments. Empty argv is rejected.
-pub fn run_checked(
-    argv: &[&str],
-    cwd: &Path,
-    allowed_root: &Path,
-    timeout: Duration,
-) -> Result<ExecOut, LoomError> {
+/// Validate the argv and the cwd containment shared by every spawn in this
+/// module. Both `cwd` and `allowed_root` are canonicalized before the
+/// `starts_with` check — a symlinked cwd resolving outside the allowed root
+/// must not pass. Returns the canonical cwd to spawn in.
+fn checked_cwd(argv: &[&str], cwd: &Path, allowed_root: &Path) -> Result<PathBuf, LoomError> {
     if argv.is_empty() {
         return Err(LoomError::Parse("exec: empty argv".into()));
     }
-
-    // Canonicalize BOTH sides before the containment check — a symlinked cwd
-    // resolving outside the allowed root must not pass.
     let canonical_cwd = cwd
         .canonicalize()
         .map_err(|e| LoomError::NotFound(format!("exec: canonicalize cwd {}: {e}", cwd.display())))?;
@@ -119,10 +116,42 @@ pub fn run_checked(
             canonical_root.display()
         )));
     }
+    Ok(canonical_cwd)
+}
+
+/// Run a fixed argv in `cwd`, which MUST canonicalize to a path under the
+/// canonical `allowed_root`. Kills the whole process group on timeout / drop.
+///
+/// `argv[0]` is the program; `argv[1..]` its arguments. Empty argv is rejected.
+pub fn run_checked(
+    argv: &[&str],
+    cwd: &Path,
+    allowed_root: &Path,
+    timeout: Duration,
+) -> Result<ExecOut, LoomError> {
+    run_checked_env(argv, cwd, allowed_root, timeout, &[])
+}
+
+/// `run_checked` plus a fixed list of environment pairs set on the child.
+///
+/// `envs` is composed by the caller from constants and LOOM-owned paths
+/// (e.g. `CARGO_TARGET_DIR`, `CARGO_NET_OFFLINE`) — never from model output.
+/// Everything else (containment, group kill, ring-capped output) is identical.
+pub fn run_checked_env(
+    argv: &[&str],
+    cwd: &Path,
+    allowed_root: &Path,
+    timeout: Duration,
+    envs: &[(&str, &str)],
+) -> Result<ExecOut, LoomError> {
+    let canonical_cwd = checked_cwd(argv, cwd, allowed_root)?;
 
     let mut cmd = Command::new(argv[0]);
     for a in &argv[1..] {
         cmd.arg(a);
+    }
+    for (k, v) in envs {
+        cmd.env(k, v);
     }
     cmd.current_dir(&canonical_cwd);
     cmd.stdin(Stdio::null());
@@ -204,6 +233,33 @@ pub fn run_checked(
         stdout,
         stderr,
     })
+}
+
+/// Spawn a fixed argv and let it go: no wait, no kill on drop, all stdio
+/// null, its own process group (unix) so it survives our exit. Returns the
+/// child's pid. Same argv / cwd containment rules as `run_checked`.
+///
+/// Used ONLY for the warden and the relaunch — processes that must outlive
+/// the LOOM that spawned them. Everything else goes through `run_checked`.
+pub fn run_detached(argv: &[&str], cwd: &Path, allowed_root: &Path) -> Result<u32, LoomError> {
+    let canonical_cwd = checked_cwd(argv, cwd, allowed_root)?;
+
+    let mut cmd = Command::new(argv[0]);
+    for a in &argv[1..] {
+        cmd.arg(a);
+    }
+    cmd.current_dir(&canonical_cwd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| LoomError::Git(format!("exec: spawn detached {}: {e}", argv[0])))?;
+    // Dropping a std `Child` neither kills nor waits; the pid is all we keep.
+    Ok(child.id())
 }
 
 #[cfg(test)]
@@ -304,5 +360,59 @@ mod tests {
         assert!(n <= RING_LINES, "stdout retained {n} lines, cap is {RING_LINES}");
         assert!(out.stdout.contains("line1000"), "must keep the tail");
         assert!(!out.stdout.contains("line1\n"), "must have dropped the head");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_pairs_reach_the_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = run_checked_env(
+            &["/usr/bin/env"],
+            dir.path(),
+            dir.path(),
+            Duration::from_secs(5),
+            &[("LOOM_T", "woven")],
+        )
+        .unwrap();
+        assert_eq!(out.code, 0);
+        assert!(out.stdout.contains("LOOM_T=woven"), "stdout was {:?}", out.stdout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_variant_still_rejects_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let res = run_checked_env(
+            &["/usr/bin/env"],
+            outside.path(),
+            root.path(),
+            Duration::from_secs(1),
+            &[("LOOM_T", "woven")],
+        );
+        assert!(matches!(res, Err(LoomError::Parse(_))), "got {res:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_returns_a_live_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid = run_detached(&["/bin/sleep", "2"], dir.path(), dir.path()).unwrap();
+        assert!(pid > 0, "pid must be positive, got {pid}");
+        // The child is alive and not waited on: signal 0 probes without killing.
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+        assert!(alive, "detached child {pid} should still be running");
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_rejects_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let res = run_detached(&["/bin/sleep", "2"], outside.path(), root.path());
+        assert!(matches!(res, Err(LoomError::Parse(_))), "got {res:?}");
     }
 }
