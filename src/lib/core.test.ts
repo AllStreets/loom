@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -178,6 +178,17 @@ describe("kernel self-edit wrappers", () => {
     const b = await kernelBootCheck();
     expect(invoke).toHaveBeenCalledWith("kernel_boot_check", { sourceRepo: null });
     expect(b.rolledBackTo).toBe("prev7");
+  });
+
+  it("kernelIdentity invokes kernel_identity with no args and returns the camelCase identity", async () => {
+    invoke.mockResolvedValue({ mode: "packaged", genomeSha: "deadbeef", generation: "deadbeef", threaded: true, loomhome: "/x/loom" });
+    const id = await kernelIdentity();
+    expect(invoke).toHaveBeenCalledWith("kernel_identity");
+    expect(id.mode).toBe("packaged");
+    expect(id.genomeSha).toBe("deadbeef");
+    expect(id.generation).toBe("deadbeef");
+    expect(id.threaded).toBe(true);
+    expect(id.loomhome).toBe("/x/loom");
   });
 });
 

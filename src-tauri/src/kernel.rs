@@ -56,6 +56,9 @@ const PROTECTED: &[&str] = &[
     "index.html",
     "vite.config.ts",
     "package.json",
+    // Phase 23 (Rebirth): a dependency edit is an arbitrary-code vector — the
+    // lockfile decides what `npm ci` runs during threading.
+    "package-lock.json",
 ];
 
 /// Protected by STEM PREFIX — every file whose lowercased path *starts with*
@@ -73,6 +76,9 @@ const PROTECTED_PREFIXES: &[&str] = &[
     "src/components/chrome/kerneldiff", // the approval diff card (+ tests)
     "src/components/chrome/recovery",  // recoveryNotice UI (+ tests)
     "src/components/errorboundary",    // drives noteBootError → boot-health veto
+    // Phase 23 (Rebirth): Tauri capability grants — what the webview may ask
+    // of the shell. Widening them is widening the walls.
+    "src-tauri/capabilities/",
 ];
 
 /// tsconfig*.json — matched by name pattern (tsconfig.json, tsconfig.node.json…).
@@ -101,6 +107,14 @@ const PROTECTED_RUST: &[&str] = &[
     "src-tauri/src/exec.rs",     // hardened fixed-argv spawn (the validation wall)
     "src-tauri/src/error.rs",    // the typed-error surface the walls speak in
     "src-tauri/src/timeline.rs", // rollback discipline the recovery reuses
+    // Phase 23 (Rebirth): the loomhome / build / bundle surface. These are
+    // already outside the `src-tauri/src/**/*.rs` whitelist (build.rs,
+    // tauri.conf.json) or would be inside it (loomhome.rs) — either way they
+    // are NAMED here so the protection is explicit and enumerable, not an
+    // accident of the whitelist's shape.
+    "src-tauri/src/loomhome.rs", // identity + every path the reweave reads/writes
+    "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA — a generation's own name
+    "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
 ];
 
 /// The guard script and Cargo manifests are protected by BASENAME anywhere in
@@ -1529,6 +1543,39 @@ mod tests {
         assert!(!is_editable("src-tauri/build.rs")); // src-tauri/ but not src-tauri/src/
         assert!(!is_editable("src-tauri/src/config.json")); // under src/ but not .rs
         assert!(!is_editable("src-tauri/Cargo.toml")); // manifest (also basename-denied)
+
+        // ── Phase 23 (Rebirth): the loomhome / build / bundle surface is
+        // EXPLICITLY protected, not merely outside the whitelist. Any file that
+        // constructs the app, declares a dependency, or names the paths the
+        // reweave reads and writes — refused in every casing.
+        let rebirth_safety_files = [
+            "src-tauri/src/loomhome.rs", // identity + every loomhome path
+            "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA into the binary
+            "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
+            "src-tauri/capabilities/default.json",
+            "src-tauri/capabilities/nested/extra.json",
+            "package.json",      // dependency declaration
+            "package-lock.json", // dependency lock
+            "vite.config.ts",    // constructs the frontend build
+        ];
+        for f in rebirth_safety_files {
+            assert!(!is_editable(f), "rebirth safety file must be protected: {f}");
+            assert!(!is_editable(&f.to_lowercase()), "case-collision must be protected: {f}");
+            assert!(!is_editable(&f.to_uppercase()), "uppercase-collision must be protected: {f}");
+        }
+        // Every one of them is NAMED in a protected set (explicit, enumerable —
+        // the `kernel_editable` meta lists it for the model), not just
+        // implicitly outside the whitelist.
+        for f in ["src-tauri/src/loomhome.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
+            assert!(PROTECTED_RUST.contains(&f), "{f} must be in PROTECTED_RUST");
+        }
+        for f in ["package.json", "package-lock.json", "vite.config.ts"] {
+            assert!(PROTECTED.contains(&f), "{f} must be in PROTECTED");
+        }
+        assert!(
+            PROTECTED_PREFIXES.contains(&"src-tauri/capabilities/"),
+            "capabilities/ must be a protected prefix"
+        );
     }
 
     #[test]

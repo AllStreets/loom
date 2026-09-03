@@ -162,6 +162,25 @@ export const kernelBootOk = () => safeInvoke<void>("kernel_boot_ok");
 export const kernelBootCheck = (sourceRepo?: string) =>
   safeInvoke<KernelBootCheck>("kernel_boot_check", { sourceRepo: sourceRepo ?? null });
 
+// ── Identity (Phase 23 — Rebirth) ──────────────────────────────────────────────
+
+/**
+ * Who this binary is: `dev` (tauri dev owns the binary; source is the cwd) or
+ * `packaged` (a built app; source is `loomhome/source`). `genomeSha` is the
+ * sha the binary was woven from (`unknown` outside a repo); `generation` is
+ * the ledger's current sha, null before the first reweave.
+ */
+export type Identity = {
+  mode: "dev" | "packaged";
+  genomeSha: string;
+  generation: string | null;
+  threaded: boolean;
+  loomhome: string;
+};
+
+/** Read by the Settings organ and the Shuttle ("which generation is this"). */
+export const kernelIdentity = () => safeInvoke<Identity>("kernel_identity");
+
 // ── Voice wrappers ─────────────────────────────────────────────────────────────
 
 export const voiceStatus = () => safeInvoke<VoiceStatus>("voice_status");
