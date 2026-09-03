@@ -6,7 +6,8 @@ import Companion from "./Companion";
 import Desktop from "./desktop/Desktop";
 import Field from "./ambient/Field";
 import Threads from "./ambient/Threads";
-import { fleetStatus, timelineInit, timelineLog, voiceStatus, type RoleStatus, type Commit } from "../lib/core";
+import { fleetStatus, timelineInit, timelineLog, voiceStatus, generationsList, type RoleStatus, type Commit } from "../lib/core";
+import type { WeaveGeneration } from "../lib/tapestry/weave";
 import { MOOD_TARGETS, type OrbMood } from "../lib/orb/state";
 import { organList, organWrite } from "../lib/core";
 import { installSeeds } from "../organs/seeds/install";
@@ -43,6 +44,9 @@ export default function Shell() {
   const [roles, setRoles] = useState<RoleStatus[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [voiceReady, setVoiceReady] = useState(false);
+  // Rebirth (Phase 23): the woven generations of LOOM's own body, fed to the
+  // Tapestry as knots. Empty outside the shell / before the loom is threaded.
+  const [generations, setGenerations] = useState<WeaveGeneration[]>([]);
   const reducedMotion = useReducedMotion() ?? false;
 
   // Boot migration MUST precede the useState initializers below — they read
@@ -116,6 +120,23 @@ export default function Shell() {
   useEffect(() => {
     const unmount = mountInitiative();
     return unmount;
+  }, []);
+
+  // ----- generations (Rebirth): one fetch at boot, refreshed after a reweave -----
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      generationsList()
+        .then((gs) => {
+          if (!live) return;
+          setGenerations(
+            gs.map((g) => ({ sha: g.sha, wovenAt: Date.parse(g.wovenAt) || 0, isCurrent: g.isCurrent })),
+          );
+        })
+        .catch(() => { /* no shell or no ledger yet — the cloth simply has no knots */ });
+    void load();
+    window.addEventListener("loom-generations-changed", load);
+    return () => { live = false; window.removeEventListener("loom-generations-changed", load); };
   }, []);
 
   // ----- seed install (originally in App) -----
@@ -781,7 +802,7 @@ export default function Shell() {
           (z 8: above the ambient field z 1, below chrome/orb-band z 10; OUTSIDE
           the orb-band screen-blend so threads stay legible) ── */}
       <ErrorBoundary zone="tapestry">
-        <Tapestry />
+        <Tapestry generations={generations} />
       </ErrorBoundary>
 
       {/* ── Notices: the notify power's glass toast stack (z 1500, top-right
