@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity, generationsList } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -189,6 +189,20 @@ describe("kernel self-edit wrappers", () => {
     expect(id.generation).toBe("deadbeef");
     expect(id.threaded).toBe(true);
     expect(id.loomhome).toBe("/x/loom");
+  });
+
+  it("generationsList invokes generations_list with no args and returns the camelCase rows", async () => {
+    invoke.mockResolvedValue([
+      { sha: "b".repeat(40), wovenAt: "2026-09-02T12:00:00Z", sizeBytes: 42, reason: "reweave", commitSubject: "feat: second weave", isCurrent: true, isPrevious: false },
+      { sha: "a".repeat(40), wovenAt: "2026-09-01T12:00:00Z", sizeBytes: 41, reason: "reweave", commitSubject: "unknown", isCurrent: false, isPrevious: true },
+    ]);
+    const rows = await generationsList();
+    expect(invoke).toHaveBeenCalledWith("generations_list");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].isCurrent).toBe(true);
+    expect(rows[0].commitSubject).toBe("feat: second weave");
+    expect(rows[1].isPrevious).toBe(true);
+    expect(rows[1].sizeBytes).toBe(41);
   });
 });
 

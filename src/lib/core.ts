@@ -198,3 +198,24 @@ export const ttsSpeak = (text: string, voiceId: string) =>
 export async function builderChat(messages: Msg[], opts?: ChatOpts): Promise<string> {
   return fleetChat("builder", messages, opts);
 }
+
+// ── Generations (Phase 23 — Rebirth) ───────────────────────────────────────────
+
+/**
+ * One woven body on the shelf: the ledger's row plus the genome's memory of
+ * the commit it came from (`commitSubject` is `"unknown"` when the genome or
+ * the commit is missing). `isCurrent` is the running body; `isPrevious` is the
+ * one the warden returns to.
+ */
+export type Generation = {
+  sha: string;
+  wovenAt: string;
+  sizeBytes: number;
+  reason: string;
+  commitSubject: string;
+  isCurrent: boolean;
+  isPrevious: boolean;
+};
+
+/** Every kept generation, newest first. Read by Settings → LOOM and the Shuttle. */
+export const generationsList = () => safeInvoke<Generation[]>("generations_list");

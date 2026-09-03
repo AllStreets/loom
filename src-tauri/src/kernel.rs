@@ -112,6 +112,7 @@ const PROTECTED_RUST: &[&str] = &[
     // tauri.conf.json) or would be inside it (loomhome.rs) — either way they
     // are NAMED here so the protection is explicit and enumerable, not an
     // accident of the whitelist's shape.
+    "src-tauri/src/generations.rs", // the ledger — decides which bodies survive on disk
     "src-tauri/src/loomhome.rs", // identity + every path the reweave reads/writes
     "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA — a generation's own name
     "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
@@ -1549,6 +1550,7 @@ mod tests {
         // constructs the app, declares a dependency, or names the paths the
         // reweave reads and writes — refused in every casing.
         let rebirth_safety_files = [
+            "src-tauri/src/generations.rs", // the ledger — which bodies survive
             "src-tauri/src/loomhome.rs", // identity + every loomhome path
             "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA into the binary
             "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
@@ -1566,7 +1568,7 @@ mod tests {
         // Every one of them is NAMED in a protected set (explicit, enumerable —
         // the `kernel_editable` meta lists it for the model), not just
         // implicitly outside the whitelist.
-        for f in ["src-tauri/src/loomhome.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
+        for f in ["src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
             assert!(PROTECTED_RUST.contains(&f), "{f} must be in PROTECTED_RUST");
         }
         for f in ["package.json", "package-lock.json", "vite.config.ts"] {
