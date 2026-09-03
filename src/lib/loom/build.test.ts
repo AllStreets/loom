@@ -347,17 +347,17 @@ describe("buildOrgan", () => {
   // ── Powers flow: request → manifest → gate → write ──────────────────────────
 
   describe("powers flow", () => {
-    const POWERED_REQUEST = "alert me when btc drops 5% in an hour";
+    const POWERED_REQUEST = "remind me to stand up every hour";
     const POWERED_MANIFEST = JSON.stringify({
-      id: "btc-drop-alert", name: "BTC Drop Alert", description: "d", version: 1,
-      permissions: ["storage"], powers: ["market", "notify", "pulse"],
+      id: "stand-up-reminder", name: "Stand-Up Reminder", description: "d", version: 1,
+      permissions: ["storage"], powers: ["notify", "pulse"],
     });
 
     function mkPoweredDeps() {
       return mkDeps({
         chat: vi.fn()
           .mockResolvedValueOnce("```json\n" + POWERED_MANIFEST + "\n```")
-          .mockResolvedValueOnce("```js\nexport default { id: 'btc-drop-alert', render(el){ el.textContent='hi'; } }\n```")
+          .mockResolvedValueOnce("```js\nexport default { id: 'stand-up-reminder', render(el){ el.textContent='hi'; } }\n```")
           .mockResolvedValueOnce("```js\nexport const tests = [];\n```"),
         gate: vi.fn().mockResolvedValue({ ok: true, manifest: JSON.parse(POWERED_MANIFEST), verdict: { ok: true, stage: "pass", errors: [], testResults: [], renderedHtml: RENDERED_HTML } }),
       });
@@ -367,15 +367,15 @@ describe("buildOrgan", () => {
       const deps = mkPoweredDeps();
       const r = await buildOrgan(POWERED_REQUEST, deps);
       expect(r.ok).toBe(true);
-      expect(r.organId).toBe("btc-drop-alert");
+      expect(r.organId).toBe("stand-up-reminder");
       // The gate saw the powers exactly as declared
       const [gateFiles] = deps.gate.mock.calls[0];
-      expect(JSON.parse(gateFiles.manifest).powers).toEqual(["market", "notify", "pulse"]);
+      expect(JSON.parse(gateFiles.manifest).powers).toEqual(["notify", "pulse"]);
       // The written manifest.json still carries them
       const [, writtenFiles] = deps.write.mock.calls[0];
       const manifestFile = (writtenFiles as { name: string; content: string }[]).find((f) => f.name === "manifest.json");
       expect(manifestFile).toBeDefined();
-      expect(JSON.parse(manifestFile!.content).powers).toEqual(["market", "notify", "pulse"]);
+      expect(JSON.parse(manifestFile!.content).powers).toEqual(["notify", "pulse"]);
     });
 
     it("a powered request injects the POWERS block into every builder system prompt", async () => {
@@ -384,7 +384,7 @@ describe("buildOrgan", () => {
       expect(deps.chat.mock.calls.length).toBe(3); // manifest, code, tests
       for (const call of deps.chat.mock.calls) {
         const system = call[1][0].content as string;
-        expect(system).toContain("POWERS — six gated capabilities");
+        expect(system).toContain("POWERS — four gated capabilities");
         expect(system).toContain("loom.pulse.every(ms, fn)");
       }
     });
@@ -394,7 +394,7 @@ describe("buildOrgan", () => {
       await buildOrgan("track my runs", deps);
       for (const call of deps.chat.mock.calls) {
         const system = call[1][0].content as string;
-        expect(system).not.toContain("POWERS — six gated capabilities");
+        expect(system).not.toContain("POWERS — four gated capabilities");
       }
     });
   });

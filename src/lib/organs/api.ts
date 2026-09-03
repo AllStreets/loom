@@ -1,9 +1,7 @@
-import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, cloudKeyPresent as coreCloudKeyPresent, cloudKeySet as coreCloudKeySet, cloudKeyClear as coreCloudKeyClear, marketChart as coreMarketChart, marketCrypto as coreMarketCrypto, marketBook as coreMarketBook, marketTrades as coreMarketTrades, marketFx as coreMarketFx, timelineLog as coreTimelineLog, FLEET_DEFAULTS, type Msg, type VoiceStatus, type MarketChart, type MarketCrypto, type MarketBook, type MarketTrade, type MarketFx, type Commit } from "../core";
+import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, timelineLog as coreTimelineLog, FLEET_DEFAULTS, type Msg, type VoiceStatus, type Commit } from "../core";
 import { getSetting, setSetting, isValidModelTag, VOICE_IDS, VOICE_LABELS, resetAllSettings as resetAllSettingsFn } from "../voice/settings";
 import { startRecording } from "../voice/recorder";
 import { playWav } from "../voice/player";
-import { getSalient } from "../watch/runtime";
-import { getWatchlist, type WatchlistEntry } from "../watch/store";
 import { makeLedger, type BudgetLedger, type BudgetedPower } from "./budgets";
 import { mintNotifyToken, revokeNotifyToken } from "./notifyGate";
 import { buildUiKit, type LoomUiKit } from "./uikit";
@@ -33,14 +31,8 @@ export type LoomSettingsApi = {
   setup(onPct?: (pct: number) => void): Promise<void>;
   models(): Promise<ModelEntry[]>;
   setModel(role: string, tag: string): Promise<{ ok: boolean; error?: string }>;
-  cloudKeyPresent(): Promise<boolean>;
-  cloudKeySet(key: string): Promise<void>;
-  cloudKeyClear(): Promise<void>;
   resetAll(): Promise<void>;
 };
-
-/** One ranked watch item — the read-only shape organs see. */
-export type WatchTopItem = { title: string; source: string; score: number; reasons: string[] };
 
 export type LoomApi = {
   storage: { get<T>(k: string, fallback: T): T; set(k: string, v: unknown): void; del(k: string): void };
@@ -49,17 +41,6 @@ export type LoomApi = {
   /** Notify power — glass toast via the `loom-notify` event. Old organs may still call it with one arg. */
   notify: (title: string, body?: string) => void;
   settings: LoomSettingsApi;
-  market: {
-    chart(symbol: string): Promise<MarketChart>;
-    crypto(product: string): Promise<MarketCrypto>;
-    book(product: string, depth?: number): Promise<MarketBook>;
-    trades(product: string): Promise<MarketTrade[]>;
-    fx(base: string, symbols: string[]): Promise<MarketFx>;
-  };
-  watch: {
-    top(n?: number): WatchTopItem[];
-    list(): WatchlistEntry[];
-  };
   timeline: { log(n?: number): Promise<Commit[]> };
   voice: { say(text: string): Promise<void> };
   pulse: { every(ms: number, fn: () => void): () => void };
@@ -68,14 +49,7 @@ export type LoomApi = {
 export type ApiDeps = {
   chat?: typeof fleetChat;
   notify?: (t: string) => void;
-  marketChart?: typeof coreMarketChart;
-  marketCrypto?: typeof coreMarketCrypto;
-  marketBook?: typeof coreMarketBook;
-  marketTrades?: typeof coreMarketTrades;
-  marketFx?: typeof coreMarketFx;
   timelineLog?: typeof coreTimelineLog;
-  getSalient?: typeof getSalient;
-  getWatchlist?: typeof getWatchlist;
   /** Injectable budget ledger — tests pass makeLedger(fakeClock). */
   ledger?: BudgetLedger;
   voiceStatus?: typeof coreVoiceStatus;
@@ -86,9 +60,6 @@ export type ApiDeps = {
   playWav?: typeof playWav;
   listenProgress?: (cb: (pct: number) => void) => Promise<() => void>;
   fleetStatus?: typeof fleetStatus;
-  cloudKeyPresent?: typeof coreCloudKeyPresent;
-  cloudKeySet?: typeof coreCloudKeySet;
-  cloudKeyClear?: typeof coreCloudKeyClear;
   resetAllSettings?: () => void;
 };
 
@@ -176,17 +147,7 @@ export function makeLoomApi(
   const _ttsSpeak = deps.ttsSpeak ?? ttsSpeak;
   const _startRecording = deps.startRecording ?? startRecording;
   const _playWav = deps.playWav ?? playWav;
-  const _cloudKeyPresent = deps.cloudKeyPresent ?? coreCloudKeyPresent;
-  const _cloudKeySet = deps.cloudKeySet ?? coreCloudKeySet;
-  const _cloudKeyClear = deps.cloudKeyClear ?? coreCloudKeyClear;
-  const _marketChart = deps.marketChart ?? coreMarketChart;
-  const _marketCrypto = deps.marketCrypto ?? coreMarketCrypto;
-  const _marketBook = deps.marketBook ?? coreMarketBook;
-  const _marketTrades = deps.marketTrades ?? coreMarketTrades;
-  const _marketFx = deps.marketFx ?? coreMarketFx;
   const _timelineLog = deps.timelineLog ?? coreTimelineLog;
-  const _getSalient = deps.getSalient ?? getSalient;
-  const _getWatchlist = deps.getWatchlist ?? getWatchlist;
   const ledger = deps.ledger ?? defaultLedger;
 
   // Spend one budget token or throw calmly — and tell the organ's window so it
@@ -242,45 +203,6 @@ export function makeLoomApi(
         detail: { id: organId, title: String(title), body: body === undefined ? undefined : String(body), token: notifyToken },
       }));
       deps.notify?.(String(title));
-    },
-    market: {
-      async chart(symbol) {
-        need("market");
-        spend("market");
-        return _marketChart(symbol);
-      },
-      async crypto(product) {
-        need("market");
-        spend("market");
-        return _marketCrypto(product);
-      },
-      async book(product, depth = 10) {
-        need("market");
-        spend("market");
-        return _marketBook(product, depth);
-      },
-      async trades(product) {
-        need("market");
-        spend("market");
-        return _marketTrades(product);
-      },
-      async fx(base, symbols) {
-        need("market");
-        spend("market");
-        return _marketFx(base, symbols);
-      },
-    },
-    watch: {
-      top(n = 10) {
-        need("watch");
-        return _getSalient(n).map(({ title, source, score, reasons }) => ({
-          title, source, score, reasons: [...reasons],
-        }));
-      },
-      list() {
-        need("watch");
-        return _getWatchlist().map((e) => ({ ...e }));
-      },
     },
     timeline: {
       async log(n = 20) {
@@ -411,18 +333,6 @@ export function makeLoomApi(
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
-      },
-      async cloudKeyPresent() {
-        need("settings");
-        return _cloudKeyPresent();
-      },
-      async cloudKeySet(key) {
-        need("settings");
-        return _cloudKeySet(key);
-      },
-      async cloudKeyClear() {
-        need("settings");
-        return _cloudKeyClear();
       },
       async resetAll() {
         need("settings");

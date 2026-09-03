@@ -28,11 +28,6 @@ async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
   return args !== undefined ? invoke<T>(cmd, args) : invoke<T>(cmd);
 }
 
-// ── Cloud builder types ────────────────────────────────────────────────────────
-
-export type Brain = "local" | "cloud";
-export type BuilderChatResult = { text: string; brain: Brain };
-
 // ── Voice types ────────────────────────────────────────────────────────────────
 
 export type VoicePresence = { id: string; label: string; present: boolean };
@@ -176,145 +171,11 @@ export const sttTranscribe = (samples: number[]) =>
 export const ttsSpeak = (text: string, voiceId: string) =>
   safeInvoke<number[]>("tts_speak", { text, voiceId });
 
-// ── Cloud builder wrappers ─────────────────────────────────────────────────────
-
-export const cloudChat = (system: string, messages: Msg[], maxTokens?: number) =>
-  safeInvoke<string>("cloud_chat", { system, messages, maxTokens: maxTokens ?? null });
-
-export const cloudKeySet = (key: string) =>
-  safeInvoke<void>("cloud_key_set", { key });
-
-export const cloudKeyPresent = () =>
-  safeInvoke<boolean>("cloud_key_present");
-
-export const cloudKeyClear = () =>
-  safeInvoke<void>("cloud_key_clear");
-
-// ── Market engine (market.rs) ──────────────────────────────────────────────────
+// ── builderChat — the single builder-role seam ─────────────────────────────────
 //
-// Typed keyless sources: Yahoo chart (browser UA — the 429 fix), Coinbase
-// Exchange, Frankfurter. Hosts hardcoded in Rust; inputs validated there.
-// All shapes are serialized camelCase by market.rs.
+// This is the ONLY entry point for builder-role model calls. There is one
+// brain: the local fleet. Companion/rewriter roles call fleetChat directly.
 
-/** Yahoo intraday chart, normalized. */
-export type MarketChart = {
-  symbol: string;
-  name: string | null;
-  price: number;
-  prevClose: number;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  volume: number | null;
-  /** Intraday closes with epoch-second timestamps — same length, nulls dropped. */
-  closes: number[];
-  timestamps: number[];
-};
-
-/** Coinbase spot ticker merged with 24h stats. */
-export type MarketCrypto = {
-  product: string;
-  price: number;
-  bid: number | null;
-  ask: number | null;
-  open24h: number | null;
-  high24h: number | null;
-  low24h: number | null;
-  volume24h: number | null;
-  changePct24h: number | null;
-  time: string | null;
-};
-
-export type BookLevel = { price: number; size: number };
-
-/** Coinbase level-2 order book, truncated per side. */
-export type MarketBook = { product: string; bids: BookLevel[]; asks: BookLevel[] };
-
-/** One Coinbase trade (side is the maker side, raw). */
-export type MarketTrade = {
-  tradeId: number;
-  time: string;
-  price: number;
-  size: number;
-  side: string;
-};
-
-/** Frankfurter daily FX rates. */
-export type MarketFx = { base: string; date: string; rates: Record<string, number> };
-
-export const marketChart = (symbol: string) =>
-  safeInvoke<MarketChart>("market_chart", { symbol });
-
-export const marketCrypto = (product: string) =>
-  safeInvoke<MarketCrypto>("market_crypto", { product });
-
-export const marketBook = (product: string, depth: number) =>
-  safeInvoke<MarketBook>("market_book", { product, depth });
-
-export const marketTrades = (product: string) =>
-  safeInvoke<MarketTrade[]>("market_trades", { product });
-
-export const marketFx = (base: string, symbols: string[]) =>
-  safeInvoke<MarketFx>("market_fx", { base, symbols });
-
-/**
- * Legacy batch chart fetch (market.rs, folded in from quotes.rs — command name
- * unchanged). Returns the raw JSON array string:
- *   `[{"symbol":"SPY","body":<raw JSON or null>},...]`
- * Rejects with ShellUnavailableError in the browser (safeInvoke contract).
- */
-export const quoteFetch = (symbols: string[]) =>
-  safeInvoke<string>("quote_fetch", { symbols });
-
-// ── builderChat — the single cloud-override seam ────────────────────────────────
-//
-// This is the ONLY entry point for builder-role model calls.
-// - When model.cloudBuilder == "anthropic" AND a key is present → tries cloud first,
-//   falls back to fleetChat on any cloud error (emits brain "local").
-// - Otherwise → fleetChat (brain "local").
-// Companion/rewriter roles NEVER flow through here (they call fleetChat directly).
-//
-// The `system` and `messages` arguments mirror what fleet_chat receives:
-// - system is passed as the first system-role message when using cloud
-// - For cloud: system is extracted from messages[0] if role="system", else passed as ""
-
-export async function builderChat(
-  messages: Msg[],
-  opts?: ChatOpts,
-): Promise<BuilderChatResult> {
-  const cloudSetting = getSetting("model.cloudBuilder");
-
-  if (cloudSetting === "anthropic") {
-    // Extract system message if present as first message
-    let systemMsg = "";
-    let chatMessages = messages;
-    if (messages.length > 0 && messages[0].role === "system") {
-      systemMsg = messages[0].content;
-      chatMessages = messages.slice(1);
-    }
-
-    // Check if key is configured — avoid a round-trip if not
-    let keyPresent = false;
-    try {
-      keyPresent = await cloudKeyPresent();
-    } catch {
-      // cloud not available — fall through to local
-    }
-
-    if (keyPresent) {
-      try {
-        // max_tokens fixed at cloud.rs DEFAULT_MAX_TOKENS
-        const text = await cloudChat(systemMsg, chatMessages, undefined);
-        return { text, brain: "cloud" };
-      } catch {
-        // Cloud error → fall back to local; caller will log "cloud unavailable"
-        const text = await fleetChat("builder", messages, opts);
-        return { text, brain: "local" };
-      }
-    }
-  }
-
-  // Default: local fleet
-  const text = await fleetChat("builder", messages, opts);
-  return { text, brain: "local" };
+export async function builderChat(messages: Msg[], opts?: ChatOpts): Promise<string> {
+  return fleetChat("builder", messages, opts);
 }

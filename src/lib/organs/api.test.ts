@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { purgeOrganStorage, addOrganTombstone, makeLoomApi, clearOrganPulses, organPulseCount, PULSE_MIN_MS, PULSE_MAX_PER_ORGAN } from "./api";
 import { makeLedger } from "./budgets";
 import { isLiveNotifyToken } from "./notifyGate";
-import type { ScoredEvent } from "../watch/types";
 
 beforeEach(() => { localStorage.clear(); });
 afterEach(() => { localStorage.clear(); vi.useRealTimers(); });
@@ -51,79 +50,29 @@ describe("addOrganTombstone", () => {
   });
 });
 
-// ── The six powers ─────────────────────────────────────────────────────────────
+// ── The four powers ────────────────────────────────────────────────────────────
 
-const SCORED: ScoredEvent[] = [
-  { id: "e1", title: "BTC slides 5%", source: "auspex", category: "finance", publishedAt: "2026-08-22T00:00:00Z", score: 0.9, reasons: ["watchlist: bitcoin"] },
-  { id: "e2", title: "M6.1 quake", source: "quakes", category: "seismic", publishedAt: "2026-08-22T00:01:00Z", score: 0.7, reasons: ["magnitude"] },
-];
-
-describe("power: market", () => {
-  it("every market call throws without the market grant", async () => {
-    const api = makeLoomApi("x", [], { ledger: makeLedger(() => 0) });
-    await expect(api.market.chart("SPY")).rejects.toThrow(/permission "market" not granted/);
-    await expect(api.market.crypto("BTC-USD")).rejects.toThrow(/not granted/);
-    await expect(api.market.book("BTC-USD")).rejects.toThrow(/not granted/);
-    await expect(api.market.trades("BTC-USD")).rejects.toThrow(/not granted/);
-    await expect(api.market.fx("USD", ["EUR"])).rejects.toThrow(/not granted/);
+describe("retired powers (Rebirth)", () => {
+  it("the api object carries no market or watch surface at all", () => {
+    const api = makeLoomApi("x", ["market", "watch"]) as unknown as Record<string, unknown>;
+    expect(api.market).toBeUndefined();
+    expect(api.watch).toBeUndefined();
   });
 
-  it("wraps the core market fns thinly when granted", async () => {
-    const marketChart = vi.fn().mockResolvedValue({ symbol: "SPY", price: 500 });
-    const marketCrypto = vi.fn().mockResolvedValue({ product: "BTC-USD", price: 50000 });
-    const marketBook = vi.fn().mockResolvedValue({ product: "BTC-USD", bids: [], asks: [] });
-    const marketTrades = vi.fn().mockResolvedValue([]);
-    const marketFx = vi.fn().mockResolvedValue({ base: "USD", date: "2026-08-22", rates: { EUR: 0.9 } });
-    const api = makeLoomApi("x", ["market"], { marketChart, marketCrypto, marketBook, marketTrades, marketFx, ledger: makeLedger(() => 0) });
-    await expect(api.market.chart("SPY")).resolves.toMatchObject({ symbol: "SPY" });
-    await api.market.crypto("BTC-USD");
-    await api.market.book("BTC-USD");
-    await api.market.trades("BTC-USD");
-    await api.market.fx("USD", ["EUR"]);
-    expect(marketChart).toHaveBeenCalledWith("SPY");
-    expect(marketBook).toHaveBeenCalledWith("BTC-USD", 10); // default depth
-  });
-
-  it("throttles after 30 calls in a minute and dispatches loom-throttled", async () => {
-    const marketCrypto = vi.fn().mockResolvedValue({ product: "BTC-USD", price: 1 });
-    const api = makeLoomApi("btc", ["market"], { marketCrypto, ledger: makeLedger(() => 0) });
+  it("throttles notify after 6 calls in an hour and dispatches loom-throttled", () => {
+    const api = makeLoomApi("nudge", ["notify"], { ledger: makeLedger(() => 0) });
     const events: unknown[] = [];
     const onThrottle = (e: Event) => events.push((e as CustomEvent).detail);
     window.addEventListener("loom-throttled", onThrottle);
     try {
-      for (let i = 0; i < 30; i++) await api.market.crypto("BTC-USD");
-      await expect(api.market.crypto("BTC-USD")).rejects.toThrow(/"market" budget spent/);
+      for (let i = 0; i < 6; i++) api.notify("stand", "up");
+      expect(() => api.notify("stand", "up")).toThrow(/"notify" budget spent/);
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ id: "btc", power: "market" });
+      expect(events[0]).toMatchObject({ id: "nudge", power: "notify" });
       expect((events[0] as { retryMs: number }).retryMs).toBeGreaterThan(0);
-      expect(marketCrypto).toHaveBeenCalledTimes(30); // the 31st never reached the engine
     } finally {
       window.removeEventListener("loom-throttled", onThrottle);
     }
-  });
-});
-
-describe("power: watch", () => {
-  it("throws without the watch grant", () => {
-    const api = makeLoomApi("x", []);
-    expect(() => api.watch.top()).toThrow(/permission "watch" not granted/);
-    expect(() => api.watch.list()).toThrow(/not granted/);
-  });
-
-  it("top(n) returns the ranked title/source/score/reasons shape only", () => {
-    const api = makeLoomApi("x", ["watch"], { getSalient: (k = 10) => SCORED.slice(0, k) });
-    const top = api.watch.top(1);
-    expect(top).toEqual([{ title: "BTC slides 5%", source: "auspex", score: 0.9, reasons: ["watchlist: bitcoin"] }]);
-    // no leakage of ids/coords/urls
-    expect(Object.keys(top[0]).sort()).toEqual(["reasons", "score", "source", "title"]);
-  });
-
-  it("list() returns the watchlist as copies", () => {
-    const entries = [{ kind: "topic" as const, value: "bitcoin" }];
-    const api = makeLoomApi("x", ["watch"], { getWatchlist: () => entries });
-    const list = api.watch.list();
-    expect(list).toEqual(entries);
-    expect(list[0]).not.toBe(entries[0]); // organ mutation never reaches the store
   });
 });
 
@@ -327,12 +276,12 @@ describe("power: pulse", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
-  it("revocation mid-flight: splicing the granted array makes the next call throw", () => {
-    const granted = ["watch"];
-    const api = makeLoomApi("x", granted, { getSalient: (k = 10) => SCORED.slice(0, k) });
-    expect(api.watch.top(1)).toHaveLength(1);
-    granted.splice(granted.indexOf("watch"), 1); // what the POWERS row revoke does
-    expect(() => api.watch.top(1)).toThrow(/permission "watch" not granted/);
+  it("revocation mid-flight: splicing the granted array makes the next call throw", async () => {
+    const granted = ["timeline"];
+    const api = makeLoomApi("x", granted, { timelineLog: async () => [{ sha: "a", message: "m" }] });
+    await expect(api.timeline.log(1)).resolves.toHaveLength(1);
+    granted.splice(granted.indexOf("timeline"), 1); // what the POWERS row revoke does
+    await expect(api.timeline.log(1)).rejects.toThrow(/permission "timeline" not granted/);
   });
 });
 

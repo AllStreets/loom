@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, cloudKeySet, cloudKeyPresent, cloudKeyClear, ShellUnavailableError, quoteFetch, marketChart, marketCrypto, marketBook, marketTrades, marketFx, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -87,67 +87,24 @@ describe("FLEET_DEFAULTS", () => {
   });
 });
 
-// ── builderChat routing ────────────────────────────────────────────────────────
+// ── builderChat — one brain ────────────────────────────────────────────────────
 
-describe("builderChat routing", () => {
-  it("(a) cloudBuilder='anthropic' + key present → cloud_chat invoked, brain='cloud'", async () => {
-    localStorage.setItem("model.cloudBuilder", "anthropic");
-    // cloudKeyPresent returns true
-    invoke.mockResolvedValueOnce(true);
-    // cloud_chat returns text
-    invoke.mockResolvedValueOnce("cloud reply");
-    const result = await builderChat([{ role: "user", content: "build it" }]);
-    expect(invoke).toHaveBeenCalledWith("cloud_key_present");
-    expect(invoke).toHaveBeenCalledWith("cloud_chat", expect.objectContaining({ system: "", messages: [{ role: "user", content: "build it" }] }));
-    expect(result.brain).toBe("cloud");
-    expect(result.text).toBe("cloud reply");
-  });
-
-  it("(b) cloudBuilder='off' → fleet_chat invoked, brain='local'", async () => {
-    localStorage.setItem("model.cloudBuilder", "off");
+describe("builderChat", () => {
+  it("routes to fleet_chat with the builder role and returns the text", async () => {
     invoke.mockResolvedValueOnce("fleet reply");
     const result = await builderChat([{ role: "user", content: "build it" }]);
     expect(invoke).toHaveBeenCalledWith("fleet_chat", expect.objectContaining({ role: "builder" }));
-    expect(result.brain).toBe("local");
-    expect(result.text).toBe("fleet reply");
+    expect(result).toBe("fleet reply");
   });
 
-  it("(c) cloud_chat rejects → fleet_chat fallback, brain='local'", async () => {
-    localStorage.setItem("model.cloudBuilder", "anthropic");
-    // cloudKeyPresent returns true
-    invoke.mockResolvedValueOnce(true);
-    // cloud_chat throws
-    invoke.mockRejectedValueOnce(new Error("cloud error"));
-    // fleet_chat fallback
-    invoke.mockResolvedValueOnce("fallback reply");
-    const result = await builderChat([{ role: "user", content: "build it" }]);
-    expect(result.brain).toBe("local");
-    expect(result.text).toBe("fallback reply");
+  it("never invokes a cloud command", async () => {
+    localStorage.setItem("model.cloudBuilder", "anthropic"); // a retired key, ignored
+    invoke.mockResolvedValueOnce("fleet reply");
+    await builderChat([{ role: "user", content: "build it" }]);
+    for (const call of invoke.mock.calls) expect(String(call[0])).not.toMatch(/cloud/);
   });
 });
 
-// ── cloudKey wrappers ──────────────────────────────────────────────────────────
-
-describe("cloudKey wrappers", () => {
-  it("cloudKeySet invokes 'cloud_key_set' with { key }", async () => {
-    invoke.mockResolvedValueOnce(undefined);
-    await cloudKeySet("sk-ant-test");
-    expect(invoke).toHaveBeenCalledWith("cloud_key_set", { key: "sk-ant-test" });
-  });
-
-  it("cloudKeyPresent invokes 'cloud_key_present' with no args", async () => {
-    invoke.mockResolvedValueOnce(true);
-    const present = await cloudKeyPresent();
-    expect(invoke).toHaveBeenCalledWith("cloud_key_present");
-    expect(present).toBe(true);
-  });
-
-  it("cloudKeyClear invokes 'cloud_key_clear' with no args", async () => {
-    invoke.mockResolvedValueOnce(undefined);
-    await cloudKeyClear();
-    expect(invoke).toHaveBeenCalledWith("cloud_key_clear");
-  });
-});
 
 // ── Kernel self-edit wrappers (Phase 21) ────────────────────────────────────────
 
@@ -278,57 +235,5 @@ describe("ShellUnavailableError: browser-mode rejection", () => {
     expect(e.message).toBe("This surface needs the desktop shell.");
     expect(e.name).toBe("ShellUnavailableError");
   });
-
-  it("quoteFetch invokes quote_fetch with camelCase symbols arg", async () => {
-    invoke.mockResolvedValue('[{"symbol":"SPY","body":null}]');
-    const result = await quoteFetch(["SPY"]);
-    expect(invoke).toHaveBeenCalledWith("quote_fetch", { symbols: ["SPY"] });
-    expect(result).toBe('[{"symbol":"SPY","body":null}]');
-  });
-
-  it("quoteFetch passes multiple symbols as an array", async () => {
-    invoke.mockResolvedValue('[{"symbol":"SPY","body":null},{"symbol":"^VIX","body":null}]');
-    await quoteFetch(["SPY", "^VIX"]);
-    expect(invoke).toHaveBeenCalledWith("quote_fetch", { symbols: ["SPY", "^VIX"] });
-  });
 });
 
-// ── Market engine wrappers ─────────────────────────────────────────────────────
-
-describe("market engine wrappers", () => {
-  it("marketChart invokes market_chart with symbol and returns the typed shape", async () => {
-    const chart = { symbol: "SPY", name: "S&P 500", price: 450.5, prevClose: 445, open: 447.5, high: 451.5, low: 447, volume: 4500, closes: [448, 450.5], timestamps: [1000, 1120] };
-    invoke.mockResolvedValue(chart);
-    const out = await marketChart("SPY");
-    expect(invoke).toHaveBeenCalledWith("market_chart", { symbol: "SPY" });
-    expect(out.prevClose).toBe(445);
-    expect(out.closes).toHaveLength(2);
-  });
-
-  it("marketCrypto invokes market_crypto with product", async () => {
-    invoke.mockResolvedValue({ product: "BTC-USD", price: 77361.43, changePct24h: -0.02 });
-    const out = await marketCrypto("BTC-USD");
-    expect(invoke).toHaveBeenCalledWith("market_crypto", { product: "BTC-USD" });
-    expect(out.price).toBe(77361.43);
-  });
-
-  it("marketBook passes product and depth", async () => {
-    invoke.mockResolvedValue({ product: "BTC-USD", bids: [], asks: [] });
-    await marketBook("BTC-USD", 12);
-    expect(invoke).toHaveBeenCalledWith("market_book", { product: "BTC-USD", depth: 12 });
-  });
-
-  it("marketTrades invokes market_trades with product and returns the array", async () => {
-    invoke.mockResolvedValue([{ tradeId: 1, time: "t", price: 1, size: 2, side: "buy" }]);
-    const out = await marketTrades("ETH-USD");
-    expect(invoke).toHaveBeenCalledWith("market_trades", { product: "ETH-USD" });
-    expect(out[0].tradeId).toBe(1);
-  });
-
-  it("marketFx passes base and symbols array", async () => {
-    invoke.mockResolvedValue({ base: "USD", date: "2026-08-21", rates: { EUR: 0.85 } });
-    const out = await marketFx("USD", ["EUR", "GBP", "JPY"]);
-    expect(invoke).toHaveBeenCalledWith("market_fx", { base: "USD", symbols: ["EUR", "GBP", "JPY"] });
-    expect(out.rates.EUR).toBe(0.85);
-  });
-});

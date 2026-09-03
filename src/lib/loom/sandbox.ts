@@ -51,13 +51,6 @@ const freshLoom = () => {
     try { fn(); } catch (e) { /* a pulse must never crash the harness */ }
     return function() {};
   };
-  var FX_RATES = { EUR: 0.92, GBP: 0.79, JPY: 155.3, CHF: 0.88 };
-  var WATCH_TOP = [
-    { title: "BTC slides 5% in the hour", source: "auspex", score: 0.92, reasons: ["watchlist: bitcoin"] },
-    { title: "M6.1 quake off Honshu", source: "quakes", score: 0.74, reasons: ["magnitude 6.1"] },
-    { title: "Launch window opens at Boca Chica", source: "auspex", score: 0.55, reasons: ["category: launch"] },
-  ];
-  var WATCHLIST = [{ kind: "topic", value: "bitcoin" }, { kind: "place", value: "tokyo" }];
   var COMMITS = [
     { sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", message: "feat(organ): first weave" },
     { sha: "b2c3d4e5f60718293a4b5c6d7e8f901234567890", message: "fix(organ): calm the edge case" },
@@ -67,39 +60,6 @@ const freshLoom = () => {
     model: { chat: async () => "(model unavailable in sandbox)" },
     ui: makeUi(tokens),
     notify: notifyFn,
-    market: {
-      chart: async function(symbol) {
-        // name is string|null in core.ts — the mock returns the realistic null
-        // case so generated organs learn to guard it before rendering.
-        return { symbol: String(symbol), name: null, price: 512.34, prevClose: 508.1, open: 509.0, high: 514.2, low: 506.8, volume: 1234567, closes: [508.1, 509.4, 511.0, 512.34], timestamps: [1755820800, 1755820860, 1755820920, 1755820980] };
-      },
-      crypto: async function(product) {
-        // changePct24h stays a deterministic -5.0 (the few-shot's tests depend
-        // on it) but is number|null in core.ts — live organs must null-guard.
-        return { product: String(product), price: 61250.0, bid: 61249.5, ask: 61250.5, open24h: 64473.68, high24h: 64980.0, low24h: 60900.0, volume24h: 8421.5, changePct24h: -5.0, time: "2026-08-22T12:00:00Z" };
-      },
-      book: async function(product, depth) {
-        var d = Math.max(1, Math.min(depth || 10, 4));
-        var bids = [{ price: 61249.5, size: 0.8 }, { price: 61249.0, size: 1.2 }, { price: 61248.5, size: 0.4 }, { price: 61248.0, size: 2.1 }];
-        var asks = [{ price: 61250.5, size: 0.6 }, { price: 61251.0, size: 2.0 }, { price: 61251.5, size: 0.9 }, { price: 61252.0, size: 1.5 }];
-        return { product: String(product), bids: bids.slice(0, d), asks: asks.slice(0, d) };
-      },
-      trades: async function(product) {
-        return [
-          { tradeId: 101, time: "2026-08-22T12:00:00Z", price: 61250.0, size: 0.05, side: "buy" },
-          { tradeId: 100, time: "2026-08-22T11:59:58Z", price: 61251.0, size: 0.12, side: "sell" },
-        ];
-      },
-      fx: async function(base, symbols) {
-        var rates = {};
-        (symbols || []).forEach(function(s) { rates[s] = FX_RATES[s] !== undefined ? FX_RATES[s] : 1.0; });
-        return { base: String(base), date: "2026-08-22", rates: rates };
-      },
-    },
-    watch: {
-      top: function(n) { return WATCH_TOP.slice(0, n === undefined ? 10 : n).map(function(r) { return { title: r.title, source: r.source, score: r.score, reasons: r.reasons.slice() }; }); },
-      list: function() { return WATCHLIST.map(function(e) { return { kind: e.kind, value: e.value }; }); },
-    },
     timeline: {
       log: async function(n) { return COMMITS.slice(0, n === undefined ? 20 : n); },
     },
@@ -134,9 +94,6 @@ const freshLoom = () => {
         settingsMap.set("model." + role, tag);
         return { ok: true };
       },
-      cloudKeyPresent: async function() { return settingsMap.has("__cloudKey") && !!settingsMap.get("__cloudKey"); },
-      cloudKeySet: async function(key) { settingsMap.set("__cloudKey", key); },
-      cloudKeyClear: async function() { settingsMap.delete("__cloudKey"); },
     },
   };
 };

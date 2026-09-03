@@ -5,13 +5,11 @@ export type { OrganFilesIn };
 export type OrganManifest = { id: string; name: string; description: string; version: number; permissions: string[]; powers?: string[] };
 
 /** The six organ powers — the only capabilities a manifest may request. */
-export const POWERS = ["market", "watch", "timeline", "voice", "notify", "pulse"] as const;
+export const POWERS = ["timeline", "voice", "notify", "pulse"] as const;
 export type Power = (typeof POWERS)[number];
 
 /** Plain-language labels for the permission card and the POWERS row. */
 export const POWER_LABELS: Record<Power, string> = {
-  market: "read market data",
-  watch: "read your watch feed",
   timeline: "read the timeline",
   voice: "speak aloud",
   notify: "notify you",

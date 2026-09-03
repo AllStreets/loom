@@ -27,27 +27,34 @@ describe("manifestGuard", () => {
 });
 
 describe("manifestGuard powers", () => {
-  const base = { id: "btc", name: "BTC", description: "d", version: 1, permissions: ["storage"] };
+  const base = { id: "nudge", name: "Nudge", description: "d", version: 1, permissions: ["storage"] };
   it("accepts a manifest with no powers field (unchanged path)", () => {
     const r = manifestGuard(JSON.stringify(base));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.manifest.powers).toBeUndefined();
   });
-  it("accepts any subset of the six powers", () => {
-    const r = manifestGuard(JSON.stringify({ ...base, powers: ["market", "watch", "timeline", "voice", "notify", "pulse"] }));
+  it("accepts any subset of the four powers", () => {
+    const r = manifestGuard(JSON.stringify({ ...base, powers: ["timeline", "voice", "notify", "pulse"] }));
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.manifest.powers).toEqual(["market", "watch", "timeline", "voice", "notify", "pulse"]);
+    if (r.ok) expect(r.manifest.powers).toEqual(["timeline", "voice", "notify", "pulse"]);
   });
   it("accepts an empty powers array", () => {
     expect(manifestGuard(JSON.stringify({ ...base, powers: [] })).ok).toBe(true);
   });
   it("rejects an unknown power with a reason string", () => {
-    const r = manifestGuard(JSON.stringify({ ...base, powers: ["market", "filesystem"] }));
+    const r = manifestGuard(JSON.stringify({ ...base, powers: ["pulse", "filesystem"] }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("unknown power: filesystem");
   });
+  it("rejects the retired market and watch powers as unknown", () => {
+    for (const p of ["market", "watch"]) {
+      const r = manifestGuard(JSON.stringify({ ...base, powers: [p] }));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toContain(`unknown power: ${p}`);
+    }
+  });
   it("rejects a non-array powers field with a reason string", () => {
-    const r = manifestGuard(JSON.stringify({ ...base, powers: "market" }));
+    const r = manifestGuard(JSON.stringify({ ...base, powers: "pulse" }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("powers must be an array");
   });
@@ -64,17 +71,17 @@ describe("manifestGuard legacy notify normalization", () => {
     }
   });
   it("dedupes when the manifest already declares the notify power", () => {
-    const r = manifestGuard(JSON.stringify({ ...base, permissions: ["notify"], powers: ["market", "notify"] }));
+    const r = manifestGuard(JSON.stringify({ ...base, permissions: ["notify"], powers: ["pulse", "notify"] }));
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.manifest.permissions).toEqual([]);
-      expect(r.manifest.powers).toEqual(["market", "notify"]);
+      expect(r.manifest.powers).toEqual(["pulse", "notify"]);
     }
   });
   it("appends notify to existing powers that lack it", () => {
-    const r = manifestGuard(JSON.stringify({ ...base, permissions: ["storage", "notify"], powers: ["market"] }));
+    const r = manifestGuard(JSON.stringify({ ...base, permissions: ["storage", "notify"], powers: ["pulse"] }));
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.manifest.powers).toEqual(["market", "notify"]);
+    if (r.ok) expect(r.manifest.powers).toEqual(["pulse", "notify"]);
   });
   it("still rejects genuinely unknown permissions after the migration", () => {
     const r = manifestGuard(JSON.stringify({ ...base, permissions: ["notify", "filesystem"] }));
@@ -126,18 +133,12 @@ describe("buildHarnessSrc", () => {
 describe("buildHarnessSrc power mocks", () => {
   const src = buildHarnessSrc({ manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" }, "n0nce");
 
-  it("mocks all six powers deterministically", () => {
-    // market — canned fixtures matching the core.ts shapes
-    expect(src).toContain("prevClose");
-    expect(src).toContain("changePct24h");
-    expect(src).toContain("bids");
-    expect(src).toContain("tradeId");
-    expect(src).toContain("rates");
-    // watch — canned ranked rows + watchlist
-    expect(src).toContain("BTC slides 5% in the hour");
-    expect(src).toContain("WATCHLIST");
+  it("mocks the four powers deterministically and nothing retired", () => {
     // timeline — canned commits
     expect(src).toContain("first weave");
+    // the retired Cockpit powers are gone from the harness
+    expect(src).not.toContain("market:");
+    expect(src).not.toContain("watch:");
   });
 
   it("records voice.say into loom.voice.said with the 300-char cap", () => {
