@@ -36,4 +36,5 @@ src-tauri/target/
 
 # Rebirth (Phase 23): the genome bundle is a build output written by
 # scripts/genome-bundle.mjs into the packaged app. Never committed.
-src-tauri/genome/
+src-tauri/genome/*
+!src-tauri/genome/README.md
