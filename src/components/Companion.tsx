@@ -10,8 +10,6 @@ import { handle, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
 import { getSetting, setSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
-import { sendDeckCommands } from "./decks/GlobeDeck";
-import { getSalient } from "../lib/watch/runtime";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -896,11 +894,6 @@ export default function Companion() {
           dispatchFleetActivity(null);
         }
       },
-      // Provide current deck state to the runtime so deck_command rules can
-      // auto-switch from void → globe when needed.
-      currentDeck: () => getSetting("cockpit.deck") as "void" | "globe" | "terminal",
-      getSalient: (k: number) => getSalient(k),
-      sendDeckCommands: (cmds: import("../lib/decks/commands").BridgeCmd[]) => sendDeckCommands(cmds),
     };
 
     let turn: CompanionTurn;
@@ -1011,36 +1004,7 @@ export default function Companion() {
       );
       const oneliner = `Opening ${turn.organId} below.`;
       appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
-    } else if (turn.kind === "deck_command") {
-      const { deckCommandResult, confirmation } = turn;
-
-      // 1. Orb mood pulse: building → idle (fast visual beat for instant commands)
-      dispatchMood("building");
-
-      // 2. Deck switch first (spec requirement 4: auto-switch fires before bridge cmd)
-      if (deckCommandResult.deckSwitch) {
-        // Shell's loom-deck listener is the single persistence owner for cockpit.deck
-        window.dispatchEvent(
-          new CustomEvent("loom-deck", {
-            detail: { deck: deckCommandResult.deckSwitch },
-          })
-        );
-      }
-
-      // 3. Bridge commands forwarded to GlobeDeck via mount-safe queue.
-      // sendDeckCommands dispatches immediately when GlobeDeck is mounted;
-      // otherwise enqueues for drain on mount+iframe-load (C1 fix).
-      if (deckCommandResult.bridgeCmds.length > 0) {
-        sendDeckCommands(deckCommandResult.bridgeCmds);
-      }
-
-      // 4. Push confirmation to history and show in companion
-      appendItem({ kind: "bubble", role: "assistant", text: confirmation, id: nextId() });
-      history.current.push({ role: "assistant", content: confirmation });
-
-      // 5. Orb settle to idle
-      dispatchMood("idle");
-    } else if (turn.kind === "briefing" || turn.kind === "help") {
+    } else if (turn.kind === "help") {
       const replyText = turn.text;
       appendItem({ kind: "bubble", role: "assistant", text: replyText, id: nextId() });
       history.current.push({ role: "assistant", content: replyText });
@@ -1058,9 +1022,7 @@ export default function Companion() {
       if (r.ok && r.organId) speakableText = `${r.organId} updated.`;
     } else if (turn.kind === "act") {
       speakableText = `Opening ${turn.organId} below.`;
-    } else if (turn.kind === "deck_command") {
-      speakableText = turn.confirmation;
-    } else if (turn.kind === "briefing" || turn.kind === "help") {
+    } else if (turn.kind === "help") {
       speakableText = turn.text;
     }
 

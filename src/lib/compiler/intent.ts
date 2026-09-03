@@ -1,15 +1,12 @@
 import { normalize } from "./normalize";
-import { classifyDeckCommand } from "../decks/commands";
 
-export type Intent = "self_edit" | "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "deck_command" | "briefing" | "help";
+export type Intent = "self_edit" | "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "help";
 
 export type IntentResult = {
   intent: Intent;
   confidence: number;
   organId?: string;
   source: "rules" | "model";
-  /** Populated when intent === "deck_command" (rules path only) */
-  deckCommandResult?: import("../decks/commands").DeckCommandResult;
 };
 
 export type HistoryMsg = { role: string; content: string };
@@ -20,8 +17,6 @@ const VALID_INTENTS = new Set<string>([
   "edit_organ",
   "act_on_organ",
   "converse",
-  "deck_command",
-  "briefing",
   "help",
 ]);
 
@@ -54,22 +49,6 @@ const GREETING_RE = /^(hi|hey|hello|thanks)\b/;
 
 // Anaphora pronouns that refer back to a previously-named organ.
 const ANAPHORA_RE = /\b(it|that|this one|the last one)\b/;
-
-// Phrases that signal a watch briefing request.
-// BRIEFING_PHRASES is the canonical phrase table (data for the shuttle catalog);
-// the regex is its tolerant matcher (optional apostrophes, brief/briefing).
-// catalog.test.ts asserts every phrase still classifies as briefing, so the
-// table and the regex cannot drift apart.
-export const BRIEFING_PHRASES: readonly string[] = [
-  "brief me",
-  "what matters",
-  "what's happening",
-  "morning briefing",
-  "since I've been gone",
-  "what's the watch",
-];
-const BRIEFING_RE =
-  /\b(brief me|what matters|what'?s happening|morning brief(?:ing)?|since i'?ve been gone|what'?s the watch)\b/;
 
 // Phrases that ask LOOM to explain its own command grammar. Anchored to the
 // whole utterance so "help me build a tracker" still routes to build_organ.
@@ -132,17 +111,14 @@ function resolveOrganFromHistory(history: HistoryMsg[]): string | null {
  *   2. edit_organ   — organ mention + edit verb                           (0.9)
  *   3. build_organ  — build phrase + NO organ mention                     (0.85)
  *   4. act_on_organ — organ mentioned, no edit verb                       (0.7)
- *   5. deck_command — matches a globe/deck phrase (after build/edit/act)  (0.95)
- *   6. briefing     — watch briefing request ("brief me", "what matters") (0.95)
- *   6.5 help        — whole-utterance "help" / "what can you do"          (0.95)
- *   7. converse     — greeting or bare question                           (0.8)
- *   8. null         — rules cannot decide
+ *   5. help         — whole-utterance "help" / "what can you do"          (0.95)
+ *   6. converse     — greeting or bare question                           (0.8)
+ *   7. null         — rules cannot decide
  */
 export function classifyByRules(
   utterance: string,
   organIds: string[],
-  history: HistoryMsg[] = [],
-  currentDeck: "void" | "globe" | "terminal" | "ember" = "void"
+  history: HistoryMsg[] = []
 ): IntentResult | null {
   const normed = normalize(utterance);
   const lower = normed.toLowerCase();
@@ -211,42 +187,24 @@ export function classifyByRules(
     };
   }
 
-  // 5. deck_command — distinctive globe-control phrases that didn't match
-  //    any organ reference above. Fires AFTER build/edit/act so organ-named
-  //    utterances ("show me the water tracker") still route correctly.
-  const deckCmd = classifyDeckCommand(lower, currentDeck);
-  if (deckCmd !== null) {
-    return {
-      intent: "deck_command",
-      confidence: 0.95,
-      source: "rules",
-      deckCommandResult: deckCmd,
-    };
-  }
-
-  // 6. briefing — watch briefing request (fires before converse so "what's happening?" is routed here)
-  if (BRIEFING_RE.test(lower)) {
-    return { intent: "briefing", confidence: 0.95, source: "rules" };
-  }
-
-  // 6.5. help — "what can you do" / bare "help" speaks the command grammar
-  //      (fires before converse so the trailing "?" doesn't swallow it).
+  // 5. help — "what can you do" / bare "help" speaks the command grammar
+  //    (fires before converse so the trailing "?" doesn't swallow it).
   if (HELP_RE.test(lower)) {
     return { intent: "help", confidence: 0.95, source: "rules" };
   }
 
-  // 7. converse — greeting word or question (no organ, no build phrase).
+  // 6. converse — greeting word or question (no organ, no build phrase).
   const isGreeting = GREETING_RE.test(lower);
   const isQuestion = lower.endsWith("?") && !hasBuildPhrase;
   if (isGreeting || isQuestion) {
     return { intent: "converse", confidence: 0.8, source: "rules" };
   }
 
-  // 8. Rules unsure.
+  // 7. Rules unsure.
   return null;
 }
 
-const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: self_edit, build_organ, edit_organ, act_on_organ, converse, deck_command, briefing, help.
+const FEW_SHOT_SYSTEM = `You are an intent classifier for a voice assistant. Classify utterances into exactly one of: self_edit, build_organ, edit_organ, act_on_organ, converse, help.
 
 self_edit means the user is asking LOOM to change ITS OWN code/kernel ("change yourself", "edit your <x>", "rewrite your own <x>"). This is distinct from editing an organ (a tool LOOM built).
 
@@ -260,13 +218,7 @@ User: "add a delete button to the water tracker" -> {"intent":"edit_organ","orga
 User: "make it dark mode" (after assistant: "Built water-tracker: ...") -> {"intent":"edit_organ","organId":"water-tracker"}
 User: "open the budget tool" -> {"intent":"act_on_organ","organId":"budget-tool"}
 User: "what can you do?" -> {"intent":"help","organId":null}
-User: "show the globe" -> {"intent":"deck_command","organId":null}
-User: "show me the markets" -> {"intent":"deck_command","organId":null}
-User: "show military news" -> {"intent":"deck_command","organId":null}
-User: "brief me" -> {"intent":"briefing","organId":null}
-User: "what matters right now" -> {"intent":"briefing","organId":null}
-User: "show the failsafe" -> {"intent":"deck_command","organId":null}
-User: "open the floor" -> {"intent":"deck_command","organId":null}
+User: "how are you today?" -> {"intent":"converse","organId":null}
 
 Reply with a single line of JSON and nothing else: {"intent":"<value>","organId":null}
 If an organ id is known from context, put it in organId; otherwise null.`;
@@ -293,18 +245,14 @@ function formatHistoryBlock(history: HistoryMsg[]): string {
  *
  * history (optional) — last few turns, used for anaphora resolution and
  * included in the model fallback prompt for context.
- *
- * currentDeck (optional) — "void"|"globe"|"terminal"|"ember", used by the deck_command
- * rule to decide whether a globe-only command should auto-switch the deck.
  */
 export async function classifyIntent(
   utterance: string,
   organIds: string[],
   askModel: (system: string, prompt: string) => Promise<string>,
-  history: HistoryMsg[] = [],
-  currentDeck: "void" | "globe" | "terminal" | "ember" = "void"
+  history: HistoryMsg[] = []
 ): Promise<IntentResult> {
-  const rulesResult = classifyByRules(utterance, organIds, history, currentDeck);
+  const rulesResult = classifyByRules(utterance, organIds, history);
   if (rulesResult !== null) return rulesResult;
 
   const historyBlock = formatHistoryBlock(history);
