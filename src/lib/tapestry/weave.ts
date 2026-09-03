@@ -5,8 +5,10 @@
  * - warp (vertical, structural): recent timeline commits — the machine's own
  *   git history. Newest brightest, newest furthest right (weaving advances).
  * - weft (horizontal, colored): organs (alive = accent, deleted = faint scar),
- *   decks used, and build experiences (clean pass = smooth thread, repaired
- *   build = visible knots — honesty in cloth).
+ *   decks used, build experiences (clean pass = smooth thread, repaired
+ *   build = visible knots — honesty in cloth), and generations — each woven
+ *   body of LOOM itself, tied as a knot on the warp of the commit it was
+ *   woven from; the current one luminous.
  *
  * PURE + DETERMINISTIC: no Math.random, no Date.now. Age arrives via
  * `inputs.now`; jitter is seeded from ids/shas (fnv-1a), so the same life
@@ -33,12 +35,22 @@ export interface WeaveExperience {
   repairRounds: number;
 }
 
+/** One woven body of LOOM — a generation from the ledger. */
+export interface WeaveGeneration {
+  /** The genome sha the binary was woven from. */
+  sha: string;
+  wovenAt: number;
+  isCurrent: boolean;
+}
+
 export interface WeaveInputs {
   /** Newest first — timelineLog order. */
   commits: WeaveCommit[];
   organs: WeaveOrgan[];
   deletedOrganIds: string[];
   experiences: WeaveExperience[];
+  /** Woven generations of LOOM itself. Optional — only the shell knows them. */
+  generations?: WeaveGeneration[];
   /** Current epoch ms — passed in so this module never calls Date.now(). */
   now: number;
 }
@@ -61,7 +73,7 @@ export interface WarpThread {
   action: ThreadAction;
 }
 
-export type WeftKind = "organ" | "scar" | "build";
+export type WeftKind = "organ" | "scar" | "build" | "generation";
 
 export interface WeftThread {
   id: string;
@@ -72,8 +84,13 @@ export interface WeftThread {
   label: string;
   action: ThreadAction;
   kind: WeftKind;
-  /** x positions (0..1) of visible knots — repaired/failed builds only. */
+  /** x positions (0..1) of visible knots — repaired/failed builds, and the
+   *  single anchor knot of a generation thread. */
   knots: number[];
+  /** A generation thread — its one knot is a woven crossing, not a loop. */
+  knot?: boolean;
+  /** The current generation only — the body that is running right now. */
+  luminous?: boolean;
 }
 
 export interface WeaveModel {
@@ -85,7 +102,8 @@ export interface WeaveModel {
 
 // PERF CAP (honest): the band renders at most WARP_CAP + WEFT_CAP = 64 threads
 // total. A long life is summarized, not fully drawn — organs, scars and decks
-// always win weft slots first; oldest builds fall off the cloth first.
+// always win weft slots first (organs, then generations, then scars); oldest
+// builds fall off the cloth first.
 export const WARP_CAP = 24;
 export const WEFT_CAP = 40;
 
@@ -93,6 +111,9 @@ export const WEFT_CAP = 40;
 const KNOT_CAP = 3;
 
 const LABEL_MAX = 64;
+
+/** Generations whose sha has left the warp are tied along this left margin (0..1). */
+const UNPLACED_MARGIN = 0.3;
 
 // ── Deterministic seed — fnv-1a hash of an id/sha → [0,1) ─────────────────────
 
@@ -163,6 +184,32 @@ export function weaveModel(inputs: WeaveInputs): WeaveModel {
       action: { kind: "organ", id: organ.id },
       kind: "organ",
       knots: [],
+    });
+  }
+
+  // Generations — each woven body of LOOM, tied where its genome commit stands
+  // on the warp. A sha the warp no longer holds (older than WARP_CAP, or a
+  // body woven elsewhere) still gets a place: ordered by wovenAt on the left
+  // margin, newest furthest right, so no generation vanishes from the cloth.
+  const warpX = new Map(commits.map((c, i) => [c.sha, warp[i].x] as const));
+  const generations = [...(inputs.generations ?? [])].sort((a, b) => b.wovenAt - a.wovenAt);
+  const unplaced = generations.filter((g) => !warpX.has(g.sha)).sort((a, b) => a.wovenAt - b.wovenAt);
+  const marginX = new Map(
+    unplaced.map((g, i) => [g.sha, UNPLACED_MARGIN * ((i + 1) / (unplaced.length + 1))] as const)
+  );
+  for (const g of generations) {
+    const onWarp = warpX.has(g.sha);
+    const x = onWarp ? warpX.get(g.sha)! : marginX.get(g.sha)!;
+    candidates.push({
+      id: `generation-${g.sha}`,
+      opacity: g.isCurrent ? 0.9 : 0.4,
+      colorToken: g.isCurrent ? "--accent" : "--t3",
+      label: `generation · ${g.sha.slice(0, 7)} · ${formatAge(inputs.now, g.wovenAt)}${g.isCurrent ? " · current" : ""}`,
+      action: onWarp ? { kind: "commit", sha: g.sha } : null,
+      kind: "generation",
+      knots: [x],
+      knot: true,
+      luminous: g.isCurrent,
     });
   }
 

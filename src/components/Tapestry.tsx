@@ -3,7 +3,9 @@
  *
  * Replaces the constellation. Not decoration: the band renders LOOM's actual
  * life — its git history (warp), its organs alive and deleted, its build
- * experiences with visible knots for repaired weaves. Every LOOM weaves a
+ * experiences with visible knots for repaired weaves, and its generations —
+ * each woven body of LOOM tied as a small woven crossing on the warp of the
+ * commit it was woven from, the running one luminous. Every LOOM weaves a
  * different cloth.
  *
  * CLOTH, NOT GRID: the render is the glyph's over-under technique
@@ -20,11 +22,13 @@
  * blend mode.
  *
  * DATA: gathered once at mount, re-gathered on `loom-fleet-activity` and
- * `organs-changed` events. NO polling interval.
+ * `organs-changed` events. NO polling interval. Generations arrive as a prop
+ * from the shell (only it knows the ledger); absent, the strand is absent.
  *
  * MOTION: slow shimmer only — a CSS opacity breathing over several seconds on
- * weft threads. prefers-reduced-motion: fully static (class never applied, and
- * the media query kills it as defense-in-depth).
+ * weft threads, and the same slow breath on the luminous generation knot.
+ * prefers-reduced-motion: fully static (classes never applied, and the media
+ * query kills them as defense-in-depth).
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -35,6 +39,7 @@ import {
   weaveModel,
   WARP_CAP,
   type WeaveInputs,
+  type WeaveGeneration,
   type WeaveModel,
   type ThreadAction,
 } from "../lib/tapestry/weave";
@@ -70,6 +75,12 @@ const WARP_MAX_OPACITY = 0.3;
 /** Scar threads stay under this — a scar is remembered, not displayed. */
 const SCAR_MAX_OPACITY = 0.15;
 
+/** Half-size of a generation knot — the woven crossing spans ±GEN_KNOT_R px. */
+const GEN_KNOT_R = 5;
+
+/** A generation's own weft runs faint — the knot is the body, the thread its trace. */
+const GEN_THREAD_OPACITY = 0.35;
+
 const KEYFRAMES_ID = "loom-tapestry-kf";
 
 function ensureKeyframes() {
@@ -84,16 +95,58 @@ function ensureKeyframes() {
     .loom-weft-shimmer {
       animation: loom-tapestry-shimmer 7s ease-in-out infinite;
     }
+    @keyframes loom-tapestry-breathe {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.7; }
+    }
+    .loom-knot-luminous {
+      animation: loom-tapestry-breathe 5s ease-in-out infinite;
+    }
     @media (prefers-reduced-motion: reduce) {
       .loom-weft-shimmer { animation: none !important; }
+      .loom-knot-luminous { animation: none !important; }
     }
   `;
   document.head.appendChild(style);
 }
 
+// ── Generation knot — a small woven crossing, curves only ─────────────────────
+
+/** Bézier circle constant — four cubics approximate a ring without arcs. */
+const KAPPA = 0.5523;
+
+const fmt = (v: number) => Number(v.toFixed(2));
+
+/**
+ * Two S-curves crossing at the anchor (one over, one under — the glyph's
+ * technique at knot scale), and for the luminous body a ring of four cubics
+ * around them. Every segment is a curve: the identity rule is curves, never
+ * straight grid lines, and a knot is the one place a straight tick would be
+ * tempting.
+ */
+function generationKnotPaths(x: number, y: number, luminous: boolean): string[] {
+  const r = GEN_KNOT_R;
+  const c = r * 0.45;
+  const over = `M ${fmt(x - r)} ${fmt(y - r)} C ${fmt(x + c)} ${fmt(y - r)} ${fmt(x - c)} ${fmt(y + r)} ${fmt(x + r)} ${fmt(y + r)}`;
+  const under = `M ${fmt(x - r)} ${fmt(y + r)} C ${fmt(x + c)} ${fmt(y + r)} ${fmt(x - c)} ${fmt(y - r)} ${fmt(x + r)} ${fmt(y - r)}`;
+  const paths = [over, under];
+  if (luminous) {
+    const R = r * 1.8;
+    const k = KAPPA * R;
+    paths.push(
+      `M ${fmt(x - R)} ${fmt(y)}` +
+        ` C ${fmt(x - R)} ${fmt(y - k)} ${fmt(x - k)} ${fmt(y - R)} ${fmt(x)} ${fmt(y - R)}` +
+        ` C ${fmt(x + k)} ${fmt(y - R)} ${fmt(x + R)} ${fmt(y - k)} ${fmt(x + R)} ${fmt(y)}` +
+        ` C ${fmt(x + R)} ${fmt(y + k)} ${fmt(x + k)} ${fmt(y + R)} ${fmt(x)} ${fmt(y + R)}` +
+        ` C ${fmt(x - k)} ${fmt(y + R)} ${fmt(x - R)} ${fmt(y + k)} ${fmt(x - R)} ${fmt(y)}`
+    );
+  }
+  return paths;
+}
+
 // ── Data gathering — callers adapt rich records to weave's narrow inputs ──────
 
-async function gatherInputs(): Promise<WeaveInputs> {
+async function gatherInputs(generations?: WeaveGeneration[]): Promise<WeaveInputs> {
   // Timeline + organ list need the desktop shell; in the browser they reject
   // (ShellUnavailableError) and the tapestry honestly weaves without them.
   let commits: WeaveInputs["commits"] = [];
@@ -126,7 +179,7 @@ async function gatherInputs(): Promise<WeaveInputs> {
     repairRounds: r.repairRounds,
   }));
 
-  return { commits, organs, deletedOrganIds, experiences, now: Date.now() };
+  return { commits, organs, deletedOrganIds, experiences, generations, now: Date.now() };
 }
 
 // ── Thread click routing ──────────────────────────────────────────────────────
@@ -152,7 +205,12 @@ function runAction(action: ThreadAction) {
 
 type HoverState = { label: string; x: number; y: number } | null;
 
-export default function Tapestry() {
+export interface TapestryProps {
+  /** Woven generations of LOOM itself — fed by the shell; undefined outside it. */
+  generations?: WeaveGeneration[];
+}
+
+export default function Tapestry({ generations }: TapestryProps = {}) {
   const [visible, setVisible] = useState(() => getSetting("cockpit.tapestry") === "on");
   const [model, setModel] = useState<WeaveModel | null>(null);
   const [hover, setHover] = useState<HoverState>(null);
@@ -164,11 +222,11 @@ export default function Tapestry() {
 
   const refresh = useCallback(() => {
     let cancelled = false;
-    gatherInputs().then((inputs) => {
+    gatherInputs(generations).then((inputs) => {
       if (!cancelled) setModel(weaveModel(inputs));
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [generations]);
 
   // Live setting toggle — same loom-settings-changed pattern the shell uses.
   useEffect(() => {
@@ -345,7 +403,9 @@ export default function Tapestry() {
             {renderedWeft.map((t, j) => {
               const row = rows[j];
               const isScar = t.kind === "scar";
+              const isGeneration = t.knot === true;
               const opacity = isScar ? Math.min(t.opacity, SCAR_MAX_OPACITY) : t.opacity;
+              const threadOpacity = isGeneration ? opacity * GEN_THREAD_OPACITY : opacity;
               return (
                 <g key={t.id}>
                   <path
@@ -356,10 +416,41 @@ export default function Tapestry() {
                     strokeWidth={t.kind === "organ" ? 1.6 : 1.1}
                     strokeDasharray={isScar ? "3 5" : undefined}
                     strokeLinecap="round"
-                    opacity={opacity}
+                    opacity={threadOpacity}
                   />
+                  {/* generation knot — a woven crossing on the warp of the
+                      commit this body was woven from; the running one luminous */}
+                  {isGeneration && t.knots.length > 0 && (() => {
+                    const p = knotPoint(t.knots[0], row, warpXs, width);
+                    const luminous = t.luminous === true;
+                    return (
+                      <g
+                        data-testid={`tapestry-${t.id}`}
+                        data-kind="generation"
+                        data-current={luminous ? "true" : "false"}
+                        className={luminous && !reducedMotion ? "loom-knot-luminous" : undefined}
+                        opacity={opacity}
+                        style={
+                          luminous
+                            ? { filter: "drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 70%, transparent))" }
+                            : undefined
+                        }
+                      >
+                        {generationKnotPaths(p.x, p.y, luminous).map((d, pi) => (
+                          <path
+                            key={pi}
+                            d={d}
+                            fill="none"
+                            stroke={`var(${t.colorToken})`}
+                            strokeWidth={pi === 2 ? 0.8 : 1.4}
+                            strokeLinecap="round"
+                          />
+                        ))}
+                      </g>
+                    );
+                  })()}
                   {/* knots — repaired/failed builds tied at their seeded crossing */}
-                  {t.knots.map((k, ki) => {
+                  {!isGeneration && t.knots.map((k, ki) => {
                     const p = knotPoint(k, row, warpXs, width);
                     return (
                       <circle
