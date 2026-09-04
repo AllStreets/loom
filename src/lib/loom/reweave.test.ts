@@ -34,7 +34,6 @@ import {
   REASON_IN_FLIGHT,
   reweaveReadiness,
   shouldAutoReweave,
-  swapSupported,
 } from "./reweave";
 
 const identity = (over: Partial<Identity> = {}): Identity => ({
@@ -44,6 +43,7 @@ const identity = (over: Partial<Identity> = {}): Identity => ({
   threaded: true,
   loomhome: "/home/loom",
   loomhomeBytes: 0,
+  canSwap: true,
   ...over,
 });
 
@@ -167,8 +167,10 @@ describe("reweaveReadiness — the dry run the companion asks before consent", (
       ok: true,
       generation: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       genomeSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      // the consent line needs this: in dev nothing is swapped
+      // the consent line needs both: in dev nothing is swapped, and off
+      // macOS the swap is refused even when packaged
       mode: "packaged",
+      canSwap: true,
     });
     expect(core.reweaveStart).not.toHaveBeenCalled();
   });
@@ -276,20 +278,17 @@ describe("stations", () => {
   });
 });
 
-// ── swapSupported — what the consent line may promise about the swap ─────────
+// ── canSwap — what the consent line may promise about the swap ──────────────
 
-describe("swapSupported", () => {
-  it("says no on the platforms platform.rs has no swap for", () => {
-    expect(swapSupported("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe(false);
-    expect(swapSupported("Mozilla/5.0 (X11; Linux x86_64)")).toBe(false);
-  });
-
-  it("says yes on macOS", () => {
-    expect(swapSupported("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe(true);
-  });
-
-  it("an agent it cannot read never SHRINKS the truth — Rust still has the last word", () => {
-    expect(swapSupported("")).toBe(true);
+describe("readiness carries canSwap from the core", () => {
+  it("passes the core's answer through rather than guessing it", async () => {
+    for (const canSwap of [true, false]) {
+      const r = await reweaveReadiness({
+        identity: async () => identity({ canSwap }),
+      });
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.canSwap).toBe(canSwap);
+    }
   });
 });
 

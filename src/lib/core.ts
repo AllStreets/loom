@@ -187,6 +187,10 @@ export type Identity = {
   loomhome: string;
   /** Bytes on disk under loomhome (vendor + warm target) — a bounded walk, honest not exact. */
   loomhomeBytes: number;
+  /** Whether this body can actually be swapped: packaged, on a supported
+   *  platform, inside a bundle LOOM can find. The consent line reads this
+   *  before it promises "LOOM will close and return". */
+  canSwap: boolean;
 };
 
 /** Read by the Settings organ and the Shuttle ("which generation is this"). */

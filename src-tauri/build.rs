@@ -76,6 +76,18 @@ fn main() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.parent().map(Path::to_path_buf).unwrap_or(manifest_dir.clone());
 
+    // The TTS stack (sherpa-onnx + onnxruntime) ships as dylibs whose install
+    // names are `@rpath/...`, and nothing else emits an rpath — without these
+    // three lines the binary dies at launch with "no LC_RPATH's found", in dev
+    // and in the bundle alike. The dylibs sit beside the binary in
+    // `target/<profile>/` (dev), one level up from a test binary in
+    // `target/<profile>/deps/`, and in `Contents/Frameworks` of the packaged
+    // app (put there by `bundle.macOS.frameworks`). dyld tries each in turn.
+    #[cfg(target_os = "macos")]
+    for rpath in ["@executable_path", "@executable_path/..", "@executable_path/../Frameworks"] {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{rpath}");
+    }
+
     println!("cargo:rustc-env=LOOM_GENOME_SHA={}", genome_sha(&repo_root));
     for p in watched_paths(&repo_root) {
         println!("cargo:rerun-if-changed={}", p.display());

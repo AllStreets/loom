@@ -40,6 +40,7 @@ const PACKAGED = async () => ({
   threaded: true,
   loomhome: "/l",
   loomhomeBytes: 0,
+  canSwap: true,
 });
 
 function acts(over: Partial<{
@@ -55,8 +56,9 @@ function acts(over: Partial<{
 }
 
 /** Mount the card and let the identity read settle. */
-async function mount(a = acts(), canSwap = () => true) {
-  render(<BodyRequest identity={PACKAGED} acts={a} canSwap={canSwap} />);
+async function mount(a = acts(), canSwap = true) {
+  const id = async () => ({ ...(await PACKAGED()), canSwap });
+  render(<BodyRequest identity={id} acts={a} />);
   await act(async () => {});
   return a;
 }
@@ -160,7 +162,7 @@ describe("BodyRequest — the line is chrome's, not the organ's", () => {
   });
 
   it("off macOS it never promises a close and return", async () => {
-    await mount(acts(), () => false);
+    await mount(acts(), false);
     ask("reweave", "notes");
     await act(async () => {});
     expect(screen.getByTestId("consent-reweave_consent")).toHaveTextContent(
@@ -172,7 +174,7 @@ describe("BodyRequest — the line is chrome's, not the organ's", () => {
     const failing = vi.fn(async () => {
       throw new Error("This surface needs the desktop shell.");
     });
-    render(<BodyRequest identity={failing} acts={acts()} canSwap={() => true} />);
+    render(<BodyRequest identity={failing} acts={acts()} />);
     await act(async () => {});
     ask("reweave", "notes");
     await act(async () => {});

@@ -56,24 +56,6 @@ export const REASON_UNTHREADED = "the loom isn't threaded — open Settings";
 export const REASON_NOTHING_NEW = "nothing new to weave — the body already matches the genome";
 export const REASON_IN_FLIGHT = "a weave is already under way";
 
-/**
- * Is the binary swap implemented on this machine? `platform.rs` answers this
- * for real ("the swap is macOS-only in this generation — the build and the
- * ledger still work"), but only once a weave has already started; a consent
- * line has to know BEFORE it promises "LOOM will close and return".
- *
- * The webview's user agent is the only platform signal the TS side has —
- * `kernel_identity` carries no platform field. That is a guess, so it is only
- * ever used to make a promise SMALLER: an unrecognised agent reads as
- * supported and the Rust refusal still has the last word. A `platform` (or
- * `canSwap`) field on `kernel_identity` would retire this function.
- */
-export function swapSupported(
-  ua: string = typeof navigator === "undefined" ? "" : navigator.userAgent,
-): boolean {
-  if (/windows|win32|linux|x11|android|cros/i.test(ua)) return false;
-  return true;
-}
 
 /** Index of `stage` on the rail; -1 for idle, done, failed, cancelled. */
 export function stationIndex(stage: ReweaveStage): number {
@@ -129,7 +111,16 @@ export type StartResult = { ok: true } | { ok: false; reason: string };
 export type ReadinessDeps = { identity: typeof kernelIdentity };
 
 export type Readiness =
-  | { ok: true; generation: string | null; genomeSha: string; mode: "dev" | "packaged" }
+  | {
+      ok: true;
+      generation: string | null;
+      genomeSha: string;
+      mode: "dev" | "packaged";
+      /** Whether this body can actually be swapped — read from the core, which
+       *  knows. The consent line must not promise a close-and-return that the
+       *  platform will refuse. */
+      canSwap: boolean;
+    }
   | { ok: false; reason: string };
 
 /**
@@ -156,7 +147,13 @@ export async function reweaveReadiness(
     }
     // `mode` travels with the verdict so the consent line can say what will
     // actually happen — in dev nothing is swapped and LOOM does not close.
-    return { ok: true, generation: id.generation, genomeSha: id.genomeSha, mode: id.mode };
+    return {
+      ok: true,
+      generation: id.generation,
+      genomeSha: id.genomeSha,
+      mode: id.mode,
+      canSwap: id.canSwap,
+    };
   } catch (e) {
     return { ok: false, reason: reasonOf(e) };
   }

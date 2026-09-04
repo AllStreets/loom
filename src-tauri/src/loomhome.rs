@@ -245,6 +245,12 @@ pub struct Identity {
     /// A bounded walk — see `loomhome_bytes` — so the number is honest, never
     /// a hang.
     pub loomhome_bytes: u64,
+    /// Whether THIS body can actually be swapped: packaged, on a platform the
+    /// swap supports, and inside an app bundle we can find. The consent line
+    /// asks before it promises "LOOM will close and return" — previously it
+    /// guessed the platform from the webview's user-agent string, in an app
+    /// that has always known the answer.
+    pub can_swap: bool,
 }
 
 /// The most directory entries `loomhome_bytes` will visit. A warm cargo
@@ -319,6 +325,10 @@ pub fn identity(home: &Home) -> Identity {
         threaded: read_threaded(home),
         loomhome: home.root.to_string_lossy().into_owned(),
         loomhome_bytes: loomhome_bytes(&home.root),
+        // Packaged, on a platform whose swap is implemented, and inside a
+        // bundle we can locate. Any of those missing and the body stays put —
+        // which the consent line must say before it promises otherwise.
+        can_swap: mode() == Mode::Packaged && crate::platform::app_layout().is_ok(),
     }
 }
 
@@ -376,10 +386,12 @@ mod tests {
             threaded: true,
             loomhome: "/tmp/loom".into(),
             loomhome_bytes: 1_234,
+            can_swap: false,
         };
         let v = serde_json::to_value(&id).unwrap();
         assert_eq!(v["loomhomeBytes"], 1_234);
         assert!(v.get("loomhome_bytes").is_none(), "snake_case must not leak");
+        assert_eq!(v.get("canSwap").and_then(|b| b.as_bool()), Some(false));
         assert_eq!(v["mode"], "packaged");
         assert_eq!(v["genomeSha"], "deadbeef");
         assert_eq!(v["generation"], "deadbeef");

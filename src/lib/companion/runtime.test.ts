@@ -137,6 +137,8 @@ function identity(over: Partial<Identity> = {}): Identity {
     generation: SHA_B,
     threaded: true,
     loomhome: "/home/loom",
+    loomhomeBytes: 0,
+    canSwap: true,
     ...over,
   };
 }
@@ -171,8 +173,9 @@ function generation(over: Partial<Generation> = {}): Generation {
 
 function rebirth(over: Partial<RebirthDeps> = {}): RebirthDeps {
   return {
-    readiness: vi.fn().mockResolvedValue({ ok: true, generation: SHA_B, genomeSha: SHA_A, mode: "packaged" }),
-    canSwap: () => true,
+    readiness: vi
+      .fn()
+      .mockResolvedValue({ ok: true, generation: SHA_B, genomeSha: SHA_A, mode: "packaged", canSwap: true }),
     threadStatus: vi.fn().mockResolvedValue(threadStatus()),
     threadLoom: vi.fn().mockResolvedValue(undefined),
     identity: vi.fn().mockResolvedValue(identity()),
@@ -223,7 +226,11 @@ describe("handle — reweave", () => {
   });
 
   it("packaged off macOS → the consent line says the swap is not implemented here", async () => {
-    const rb = rebirth({ canSwap: () => false });
+    const rb = rebirth({
+      readiness: vi
+        .fn()
+        .mockResolvedValue({ ok: true, generation: SHA_B, genomeSha: SHA_A, mode: "packaged", canSwap: false }),
+    });
     const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toBe(
       "weave generation 3f2a1c — the swap is macOS-only in this generation; the build and the ledger still work, the body stays",

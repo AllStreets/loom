@@ -8,7 +8,7 @@ import {
   type Msg,
   type ThreadStatus,
 } from "../core";
-import { reweaveReadiness, swapSupported, type Readiness } from "../loom/reweave";
+import { reweaveReadiness, type Readiness } from "../loom/reweave";
 import { listGenerations } from "../loom/generations";
 import { COMPANION_SYSTEM, windowMessages } from "./persona";
 import { buildCatalog, helpText } from "../shuttle/catalog";
@@ -26,8 +26,6 @@ import { buildCatalog, helpText } from "../shuttle/catalog";
  */
 export type RebirthDeps = {
   readiness: () => Promise<Readiness>;
-  /** Is the binary swap implemented on this machine? See `swapSupported`. */
-  canSwap: () => boolean;
   threadStatus: () => Promise<ThreadStatus>;
   identity: () => Promise<Identity>;
   generations: () => Promise<Generation[]>;
@@ -35,7 +33,6 @@ export type RebirthDeps = {
 
 const REBIRTH_DEFAULTS: RebirthDeps = {
   readiness: () => reweaveReadiness(),
-  canSwap: () => swapSupported(),
   threadStatus,
   identity: kernelIdentity,
   generations: listGenerations,
@@ -146,7 +143,7 @@ export async function handle(
       return {
         kind: "consent",
         consent: "reweave_consent",
-        line: reweaveConsentLine(ready.genomeSha, ready.mode, body.canSwap()),
+        line: reweaveConsentLine(ready.genomeSha, ready.mode, ready.canSwap),
       };
     }
 
@@ -176,7 +173,7 @@ export async function handle(
         kind: "consent",
         consent: "generation_return_consent",
         sha: previous.sha,
-        line: returnConsentLine(previous.sha, id.mode, body.canSwap()),
+        line: returnConsentLine(previous.sha, id.mode, id.canSwap),
       };
     }
 

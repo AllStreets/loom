@@ -12,7 +12,8 @@
  *
  * It renders the SAME consent card the Companion uses, plus a quiet line
  * naming the organ that asked, and the line itself is composed from chrome's
- * own reading of the body (`kernel_identity` + `swapSupported`) — never from
+ * own reading of the body (`kernel_identity`, which knows whether this body
+ * can be swapped at all) — never from
  * anything the organ sent. The organ can ask; only the owner decides.
  *
  * One card at a time: a second request while one is open is refused with the
@@ -25,7 +26,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import ConsentCard, { type ConsentKind } from "./ConsentCard";
 import LoomGlyph from "./LoomGlyph";
 import { kernelIdentity, threadLoom, type Identity } from "../../lib/core";
-import { startReweave, swapSupported } from "../../lib/loom/reweave";
+import { startReweave } from "../../lib/loom/reweave";
 import { returnToGeneration } from "../../lib/loom/generations";
 import {
   BODY_REQUEST_EVENT,
@@ -76,8 +77,6 @@ export type BodyRequestProps = {
     reweave: () => Promise<{ ok: boolean; reason?: string }>;
     returnTo: (sha: string) => Promise<void>;
   };
-  /** Platform seam — defaults to the webview's own agent. */
-  canSwap?: () => boolean;
 };
 
 const DEFAULT_ACTS = {
@@ -89,7 +88,6 @@ const DEFAULT_ACTS = {
 export default function BodyRequest({
   identity = kernelIdentity,
   acts = DEFAULT_ACTS,
-  canSwap = swapSupported,
 }: BodyRequestProps) {
   const rm = useReducedMotion() ?? false;
   const [req, setReq] = useState<Request | null>(null);
@@ -206,7 +204,7 @@ export default function BodyRequest({
           <LoomGlyph size={18} style={{ flexShrink: 0, marginTop: 2 }} />
           <ConsentCard
             consent={KIND_TO_CONSENT[req.kind]}
-            line={requestLine(req, id, canSwap())}
+            line={requestLine(req, id, id?.canSwap ?? false)}
             note={askedBy(req.organId)}
             settled={null}
             onChoose={choose}
