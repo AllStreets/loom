@@ -22,7 +22,9 @@
 //! progress); `run_job_stream` is that plus a `Slot` that holds the child's
 //! pgid so `thread_cancel` / reweave-cancel can take the tree down from
 //! another thread. There is ONE global `JOB` slot: threading and reweave can
-//! never run at once. `run_detached` is the one exception to "wait and kill":
+//! never run at once, and a job holds it through a `SlotGuard` so a panicking
+//! job thread frees it on the way out. `run_detached` is the one exception to
+//! "wait and kill":
 //! it spawns a process meant to outlive us (the warden, the relaunch) and
 //! returns only its pid.
 //!
@@ -331,6 +333,40 @@ impl Slot {
 /// other is in flight.
 pub static JOB: Slot = Slot::new();
 
+/// An RAII hold on a `Slot`: taken with `SlotGuard::take`, released when it
+/// drops — including on an unwind. A job thread that panics mid-step would
+/// otherwise leave the slot held forever (`Slot::lock` recovers from
+/// poisoning, so nothing else notices), and every later threading or reweave
+/// would answer "already in flight" until the app restarted.
+///
+/// Hold it for the whole life of the job thread; never call `release`
+/// yourself while one is alive.
+pub struct SlotGuard<'a> {
+    slot: &'a Slot,
+}
+
+impl<'a> SlotGuard<'a> {
+    /// Claim `slot`, or `None` when a job is already in flight.
+    pub fn take(slot: &'a Slot) -> Option<SlotGuard<'a>> {
+        if slot.try_take() {
+            Some(SlotGuard { slot })
+        } else {
+            None
+        }
+    }
+
+    /// The slot being held — for `set_pid` / `cancelled` while the job runs.
+    pub fn slot(&self) -> &'a Slot {
+        self.slot
+    }
+}
+
+impl Drop for SlotGuard<'_> {
+    fn drop(&mut self) {
+        self.slot.release();
+    }
+}
+
 // ── Streaming runner ──────────────────────────────────────────────────────────
 
 /// `run_checked_env` that hands every output line (stdout and stderr, each
@@ -449,15 +485,7 @@ fn stream_impl(
             Err(disconnected) => {
                 match guard.child.try_wait() {
                     Ok(Some(status)) => break status,
-                    Ok(None) => {
-                        if start.elapsed() >= timeout {
-                            guard.kill_tree();
-                            if let Some(s) = slot {
-                                s.clear_pid();
-                            }
-                            return Err(LoomError::Timeout);
-                        }
-                    }
+                    Ok(None) => {}
                     Err(e) => {
                         guard.kill_tree();
                         if let Some(s) = slot {
@@ -471,6 +499,18 @@ fn stream_impl(
                     std::thread::sleep(POLL);
                 }
             }
+        }
+        // Evaluated on EVERY iteration, not only when the channel is idle. A
+        // chatty child — `cargo build`, `npm ci`, every long step here — hands
+        // us a line on each poll and takes the `Ok` arm above; a timeout that
+        // only fires when the channel goes quiet is no timeout at all. An
+        // exited child broke out above, so reaching here means it still runs.
+        if start.elapsed() >= timeout {
+            guard.kill_tree();
+            if let Some(s) = slot {
+                s.clear_pid();
+            }
+            return Err(LoomError::Timeout);
         }
     };
     guard.reaped = true; // exited; Drop must not re-kill/re-wait
@@ -724,6 +764,41 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(5));
     }
 
+    /// A chatty child — `cargo build`, `npm ci`, every long step in the
+    /// ceremony — hands the runner a line on every poll. The timeout must be
+    /// evaluated on those iterations too, or the longest jobs in the product
+    /// have no timeout at all.
+    #[cfg(unix)]
+    #[test]
+    fn stream_timeout_fires_while_the_child_keeps_printing() {
+        let dir = tempfile::tempdir().unwrap();
+        // The talker is backgrounded so its pid is recorded: the group kill
+        // must reach it, not only the shell that waits on it.
+        let script = "(while :; do echo compiling; done) & echo $! > pid.txt; wait";
+        let start = Instant::now();
+        let mut lines = 0usize;
+        let res = run_checked_env_stream(
+            &["sh", "-c", script],
+            dir.path(),
+            dir.path(),
+            Duration::from_millis(500),
+            &[],
+            &mut |_| lines += 1,
+        );
+        assert!(matches!(res, Err(LoomError::Timeout)), "got {res:?} after {:?}", start.elapsed());
+        assert!(start.elapsed() < Duration::from_secs(5), "timeout must fire promptly");
+        assert!(lines > 0, "the child was chatty — every poll took the Ok arm");
+
+        std::thread::sleep(Duration::from_millis(250));
+        let pid = std::fs::read_to_string(dir.path().join("pid.txt")).unwrap().trim().to_string();
+        let out = Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(
+            stat.is_empty() || stat.starts_with('Z'),
+            "the talking grandchild must be dead after the timeout kill, got stat={stat:?}"
+        );
+    }
+
     #[test]
     fn slot_refuses_a_second_job() {
         let slot = Slot::new();
@@ -734,6 +809,35 @@ mod tests {
         slot.release();
         assert_eq!(slot.pid(), None, "release forgets the pid");
         assert!(slot.try_take(), "released slot is free again");
+        slot.release();
+    }
+
+    #[test]
+    fn a_panicking_job_thread_frees_the_slot() {
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+        let job = std::thread::spawn(move || {
+            let _held = SlotGuard::take(slot).expect("a free slot is taken");
+            panic!("a step blew up mid-ceremony");
+        });
+        assert!(job.join().is_err(), "the job thread panicked");
+        assert!(
+            slot.try_take(),
+            "a panicking job must not strand the slot — every later weave would answer IN_FLIGHT until restart"
+        );
+        slot.release();
+    }
+
+    #[test]
+    fn slot_guard_holds_then_releases() {
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+        {
+            let held = SlotGuard::take(slot).expect("a free slot is taken");
+            assert!(SlotGuard::take(slot).is_none(), "a held slot refuses a second job");
+            held.slot().set_pid(77);
+            assert_eq!(slot.pid(), Some(77));
+        }
+        assert_eq!(slot.pid(), None, "drop released the slot");
+        assert!(slot.try_take(), "the slot is free again");
         slot.release();
     }
 
