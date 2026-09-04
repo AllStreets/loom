@@ -1574,8 +1574,9 @@ pub enum Action {
     Leave,
 }
 
-/// PURE: the pre-main decision table. `warden_alive` is whether
-/// `warden.json` names a pid that is still running.
+/// PURE: the pre-main decision table. `warden_alive` is whether `warden.json`
+/// holds a job for THIS birth — its `newSha` is the sentinel's `applied_sha`
+/// — naming a pid that is still running.
 ///
 /// - `applied` armed by `reweave` → Arm (either mode: the first sighting of a
 ///   woven body). Any other `applied` → Arm in dev (Phase 22's guard-absent
@@ -1685,11 +1686,14 @@ fn preboot_heal_packaged_in(
     let job: Option<warden::Job> = std::fs::read_to_string(home.warden_json())
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok());
-    let warden_alive = job
-        .as_ref()
-        .and_then(|j| j.warden_pid)
-        .map(pid_alive)
-        .unwrap_or(false);
+    // A live warden is a job that names THIS birth and whose pid is still
+    // running (round-1 review, Finding 5). `warden.json` is never deleted, so
+    // a job left by an earlier birth — whose pid the system may since have
+    // handed to something else — is a leftover, not a guard: trusting it
+    // would disarm the backstop forever.
+    let warden_alive = job.as_ref().map_or(false, |j| {
+        j.new_sha == s.applied_sha && j.warden_pid.map_or(false, |p| pid_alive(p))
+    });
 
     match decide(&s.status, s.armed_by.as_deref(), warden_alive, Mode::Packaged) {
         Action::Leave => Backstop::Left,
@@ -3450,13 +3454,17 @@ mod tests {
     }
 
     fn warden_file(home: &Home, warden_pid: Option<u32>) {
+        warden_file_for(home, "bbb222", warden_pid)
+    }
+
+    fn warden_file_for(home: &Home, new_sha: &str, warden_pid: Option<u32>) {
         crate::threads::write_json_atomic(
             &home.warden_json(),
             &crate::warden::Job {
                 old_pid: 1,
                 app_path: PathBuf::from("/x/LOOM.app"),
                 exe_path: PathBuf::from("/x/LOOM.app/Contents/MacOS/loom"),
-                new_sha: "bbb222".into(),
+                new_sha: new_sha.into(),
                 prev_sha: "aaa111".into(),
                 loomhome: home.root.clone(),
                 timeout_secs: 90,
@@ -3503,6 +3511,31 @@ mod tests {
         assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("booting"));
         assert_eq!(fx.exe(), "new body");
         assert!(!fx.home.recovery_json().exists());
+    }
+
+    /// Round-1 review, Finding 5. `warden.json` is never invalidated, so a
+    /// job left by an earlier birth whose pid the system has since handed to
+    /// an unrelated process would disarm the backstop forever: a crash loop
+    /// with no heal. A job is only a live guard if it guards THIS birth —
+    /// its `newSha` is the sentinel's `applied_sha`.
+    #[test]
+    fn preboot_packaged_treats_a_warden_from_another_birth_as_gone() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave")); // applied_sha bbb222
+        // A leftover job for an older birth, whose pid is alive again.
+        warden_file_for(&fx.home, "ccc333", Some(777));
+        let alive = |pid: u32| pid == 777;
+        let out = preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools());
+        assert!(matches!(out, Backstop::Healed { .. }), "got {out:?}");
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("healed"));
+        // The job that DOES name this birth still owns it.
+        let fx2 = packaged_fx();
+        app_sentinel(&fx2.home, "booting", Some("reweave"));
+        warden_file_for(&fx2.home, "bbb222", Some(777));
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx2.home, Some(&fx2.layout), &alive, &fx2.tools()),
+            Backstop::Left
+        ));
     }
 
     #[test]

@@ -63,7 +63,10 @@ pub struct Job {
     pub app_path: PathBuf,
     /// `…/LOOM.app/Contents/MacOS/loom`
     pub exe_path: PathBuf,
-    /// The generation being born.
+    /// The generation being born — and the job's stamp: a job whose
+    /// `newSha` is not the sentinel's `applied_sha` guards some earlier
+    /// birth, and the pre-main backstop reads it as gone (round-1 review,
+    /// Finding 5), however alive its recorded pid looks.
     pub new_sha: String,
     /// The generation to come home to (= the warden's own body).
     pub prev_sha: String,
