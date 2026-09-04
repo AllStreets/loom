@@ -33,6 +33,7 @@ import {
   REASON_NOTHING_NEW,
   REASON_IN_FLIGHT,
   reweaveReadiness,
+  shouldAutoReweave,
 } from "./reweave";
 
 const identity = (over: Partial<Identity> = {}): Identity => ({
@@ -269,5 +270,25 @@ describe("stations", () => {
     expect(stationIndex("done")).toBe(-1);
     expect(stationIndex("failed")).toBe(-1);
     expect(stationIndex("cancelled")).toBe(-1);
+  });
+});
+
+// ── shouldAutoReweave — the packaged apply that may start a weave on its own ──
+
+describe("shouldAutoReweave", () => {
+  it("a packaged CORE apply with the setting on starts the weave", () => {
+    expect(shouldAutoReweave({ mode: "packaged", isCore: true }, "on")).toBe(true);
+  });
+
+  it("a packaged TypeScript apply never starts a weave — the toggle says core", () => {
+    expect(shouldAutoReweave({ mode: "packaged", isCore: false }, "on")).toBe(false);
+  });
+
+  it("the setting off never starts a weave", () => {
+    expect(shouldAutoReweave({ mode: "packaged", isCore: true }, "off")).toBe(false);
+  });
+
+  it("dev never starts a weave — tauri dev owns the binary", () => {
+    expect(shouldAutoReweave({ mode: "dev", isCore: true }, "on")).toBe(false);
   });
 });

@@ -337,3 +337,116 @@ describe("KernelDiff — packaged framing (Rebirth)", () => {
     expect(onApplied).toHaveBeenCalledWith({ mode: "packaged", isCore: true, sha: "abc1234" });
   });
 });
+
+// ── Round-1 review: a refused weave is spoken, not swallowed ──────────────────
+
+describe("KernelDiff — a refused reweave states the reason", () => {
+  it("packaged: REWEAVE refused → the calm reason renders and the card stays open", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    const reweave = vi.fn(async () => ({ ok: false as const, reason: "a weave is already under way" }));
+    render(<KernelDiff api={api} identity={PACKAGED} reweave={reweave} />);
+    act(() => dispatchReview(sampleProposal()));
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-reweave"));
+    });
+    expect(screen.getByTestId("kernel-diff-reweave-reason")).toHaveTextContent(
+      "a weave is already under way",
+    );
+    // the card is still here — the owner asked and got an answer, not silence
+    expect(screen.getByTestId("kernel-diff-reweave")).toBeInTheDocument();
+  });
+
+  it("packaged: a REWEAVE that throws still states a calm reason", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    const reweave = vi.fn(async () => {
+      throw new Error("the shell went away");
+    });
+    render(<KernelDiff api={api} identity={PACKAGED} reweave={reweave} />);
+    act(() => dispatchReview(sampleProposal()));
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-reweave"));
+    });
+    expect(screen.getByTestId("kernel-diff-reweave-reason")).toHaveTextContent(/the shell went away/);
+  });
+});
+
+// ── Round-1 review: the copy never promises an approval that is not asked ─────
+
+describe("KernelDiff — autoReweave changes what the card promises", () => {
+  it("packaged core edit with autoReweave on: the banner says the weave starts on approval, no second approval promised", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    render(
+      <KernelDiff
+        api={api}
+        identity={PACKAGED}
+        autoReweave={() => true}
+        reweave={vi.fn(async () => ({ ok: true as const }))}
+      />,
+    );
+    act(() => dispatchReview(sampleProposal({ targetPaths: ["src-tauri/src/moods.rs"], isCore: true })));
+    await act(async () => {});
+    const banner = screen.getByTestId("kernel-diff-core-banner");
+    expect(banner).toHaveTextContent(/approving starts the reweave/i);
+    expect(banner).not.toHaveTextContent(/a reweave you approve/i);
+  });
+
+  it("packaged core edit with autoReweave on: the applied note says the weave has started and offers no REWEAVE", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    render(
+      <KernelDiff
+        api={api}
+        identity={PACKAGED}
+        autoReweave={() => true}
+        reweave={vi.fn(async () => ({ ok: true as const }))}
+      />,
+    );
+    act(() => dispatchReview(sampleProposal({ targetPaths: ["src-tauri/src/moods.rs"], isCore: true })));
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    expect(screen.getByTestId("kernel-diff-applied")).toHaveTextContent(
+      "woven into source — the weave has started",
+    );
+    expect(screen.queryByTestId("kernel-diff-reweave")).not.toBeInTheDocument();
+  });
+
+  it("packaged TypeScript edit with autoReweave on: nothing auto-starts, so REWEAVE is still offered", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    render(
+      <KernelDiff
+        api={api}
+        identity={PACKAGED}
+        autoReweave={() => true}
+        reweave={vi.fn(async () => ({ ok: true as const }))}
+      />,
+    );
+    act(() => dispatchReview(sampleProposal()));
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    expect(screen.getByTestId("kernel-diff-applied")).toHaveTextContent(
+      "woven into source — reweave to become it",
+    );
+    expect(screen.getByTestId("kernel-diff-reweave")).toBeInTheDocument();
+  });
+});

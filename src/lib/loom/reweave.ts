@@ -161,6 +161,26 @@ export async function startReweave(
   }
 }
 
+/** What an applied kernel edit was, as far as the auto-reweave decision cares. */
+export type AppliedEdit = { mode: "dev" | "packaged"; isCore: boolean };
+
+/**
+ * Should an approved apply start a weave with no second click?
+ *
+ * Only when all three hold, because that is exactly what the owner opted into:
+ *   - packaged — in dev `tauri dev` owns the binary and nothing is swapped;
+ *   - the edit reached the CORE — a TypeScript edit is bundled by the next
+ *     weave anyway, and closing the app for it is a surprise the toggle never
+ *     promised ("after an approved **core** edit");
+ *   - `kernel.autoReweave` is on.
+ *
+ * Pure so the decision is testable without a shell — the caller reads the
+ * setting and passes it in.
+ */
+export function shouldAutoReweave(applied: AppliedEdit, setting: string): boolean {
+  return applied.mode === "packaged" && applied.isCore === true && setting === "on";
+}
+
 /**
  * Turn a core rejection into a calm sentence. LoomError serializes as
  * `{ kind, message }` with the message prefixed `"<kind>: "`; strip that. A
