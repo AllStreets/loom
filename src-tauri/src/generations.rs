@@ -148,8 +148,19 @@ pub fn record(home: &Home, sha: &str, exe_src: &Path, reason: &str) -> Result<Me
     let dest = home.generation_exe(sha);
     let dir = dest.parent().ok_or_else(|| LoomError::NotFound("generation dir".into()))?;
     std::fs::create_dir_all(dir).map_err(|e| io_err("create", dir, e))?;
-    // fs::copy carries the mode bits, so the shelved body stays executable.
-    let size_bytes = std::fs::copy(exe_src, &dest).map_err(|e| io_err("copy", &dest, e))?;
+    // The same atomic copy the swap uses (round-1 review, Finding 8): a
+    // staging file, then a rename, so the shelf path is only ever the old
+    // body or the whole new one — never a write in progress. The mode bits
+    // ride along, so the shelved body stays executable.
+    crate::platform::copy_atomic(exe_src, &dest)?;
+    let size_bytes = std::fs::metadata(&dest).map_err(|e| io_err("stat", &dest, e))?.len();
+    let src_bytes = std::fs::metadata(exe_src).map_err(|e| io_err("stat", exe_src, e))?.len();
+    if size_bytes != src_bytes {
+        return Err(LoomError::Git(format!(
+            "the shelved body is {size_bytes} bytes of {src_bytes} — the copy was cut short: {}",
+            dest.display()
+        )));
+    }
     let meta = Meta {
         sha: sha.to_string(),
         woven_at: now_rfc3339(),
@@ -200,6 +211,20 @@ pub(crate) fn now_rfc3339() -> String {
         (sod % 3600) / 60,
         sod % 60
     )
+}
+
+/// Is the body shelved for `sha` one a healer can trust? (Round-1 review,
+/// Finding 8.) `is_file()` cannot tell a whole body from one a crash cut
+/// short; the size `meta.json` recorded at `record` can. A body with no meta
+/// — the one the swap's `EnsureCurrentKept` shelves — is judged on its
+/// presence, because there is nothing to compare it against.
+pub fn shelved_whole(home: &Home, sha: &str) -> bool {
+    let Ok(md) = std::fs::metadata(home.generation_exe(sha)) else { return false };
+    if !md.is_file() {
+        return false;
+    }
+    let recorded = read_meta(home, sha).size_bytes;
+    recorded == 0 || recorded == md.len()
 }
 
 // ── List ──────────────────────────────────────────────────────────────────────
@@ -258,6 +283,7 @@ pub fn generations_list(app: tauri::AppHandle) -> Result<Vec<GenerationView>, Lo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     fn home() -> (tempfile::TempDir, Home) {
         let d = tempfile::tempdir().unwrap();
@@ -273,6 +299,64 @@ mod tests {
             keep,
             confirmed: true,
         }
+    }
+
+    /// Round-1 review, Finding 8. A body shelved by a crashed copy is present
+    /// but cut short; `is_file()` cannot tell the difference, `meta.json`'s
+    /// recorded size can.
+    #[test]
+    fn a_body_cut_short_is_not_a_body_to_come_home_to() {
+        let (_d, h) = home();
+        let src = h.root.join("built-loom");
+        std::fs::write(&src, "a whole body").unwrap();
+        record(&h, "aaa111", &src, "reweave").unwrap();
+        assert!(shelved_whole(&h, "aaa111"), "a freshly shelved body is whole");
+
+        // The crash: the copy stopped half way.
+        std::fs::write(h.generation_exe("aaa111"), "a whole").unwrap();
+        assert!(
+            !shelved_whole(&h, "aaa111"),
+            "a body shorter than its meta records must not be trusted"
+        );
+        // Nothing on the shelf at all is not whole either.
+        assert!(!shelved_whole(&h, "nope"));
+        // A body with no meta (shelved by the swap's EnsureCurrentKept, which
+        // writes no meta) is trusted on its presence — there is nothing to
+        // compare it against.
+        let bare = h.generation_exe("bbb222");
+        std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+        std::fs::write(&bare, "kept by the swap").unwrap();
+        assert!(shelved_whole(&h, "bbb222"));
+    }
+
+    /// The shelf copies a body exactly the way the swap does: onto a staging
+    /// file, then a rename. The shelf path is only ever the old body or the
+    /// new one — never the write in progress. Pinned by the one observable
+    /// difference: the rename needs the directory, not the old file.
+    #[test]
+    fn record_lands_the_body_by_rename() {
+        let (_d, h) = home();
+        let src = h.root.join("built-loom");
+        std::fs::write(&src, "new body").unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        record(&h, "aaa111", &src, "reweave").unwrap();
+        let dest = h.generation_exe("aaa111");
+        // The body on the shelf cannot be opened for writing; the rename can
+        // still land the new one, because it needs only the directory.
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        std::fs::write(&src, "newer body").unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let meta = record(&h, "aaa111", &src, "reweave").unwrap();
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "newer body");
+        assert_eq!(meta.size_bytes, "newer body".len() as u64);
+        assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o111, 0o111);
+        let mut names: Vec<String> = std::fs::read_dir(dest.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["loom".to_string(), "meta.json".to_string()], "no staging file remains");
     }
 
     #[test]

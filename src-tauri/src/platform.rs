@@ -15,20 +15,34 @@
 //!   warden (warden.rs) reuses to heal — the same executor, a shorter plan
 //!   ending in `WriteSentinelHealed`.
 //!
-//! Ordering of the swap plan, and why:
+//! Ordering of the swap plan, and why (round-1 review, Finding 1): every
+//! healer is armed BEFORE the running body's file is destroyed. `CopyExe` is
+//! the irreversible step, so nothing that can fail — a `codesign` subprocess,
+//! a ledger write — stands between it and the state that brings LOOM home.
 //!
 //! 1. `EnsureCurrentKept` — generation 0 may predate the ledger; before the
 //!    live body's file is overwritten, a copy of it must exist on the shelf
 //!    or there is nothing to come home to.
-//! 2. `CopyExe` — `<to>.weaving` then `rename` over `to`. macOS permits
+//! 2. `WriteSentinel` — `applied`, `armedBy: "reweave"`: the warden owns
+//!    this birth (spec §Sentinel state machine).
+//! 3. `WriteLedger` — `current`/`previous` move, `confirmed: false` until
+//!    `kernel_boot_ok` in the new body says otherwise.
+//! 4. `CopyExe` — `<to>.weaving` then `rename` over `to`. macOS permits
 //!    replacing a running executable's file; the running process keeps its
 //!    mapped image. The rename is atomic, so a crash mid-copy leaves the old
 //!    body intact and a stray `.weaving` file, never a torn executable.
-//! 3. `Codesign` — ad-hoc re-sign of the bundle so Gatekeeper launches it.
-//! 4. `WriteSentinel` — `applied`, `armedBy: "reweave"`: the warden owns
-//!    this birth (spec §Sentinel state machine).
-//! 5. `WriteLedger` — `current`/`previous` move, `confirmed: false` until
-//!    `kernel_boot_ok` in the new body says otherwise.
+//! 5. `Codesign` — ad-hoc re-sign of the bundle so Gatekeeper launches it.
+//!
+//! A death between 3 and 4 leaves the old body on disk with the sentinel
+//! armed: the next boot heals to a body that is already the right one — a
+//! no-op, and the ledger is corrected by that heal. A death between 4 and 5
+//! leaves the new body in place, already ad-hoc signed at the `stage` step,
+//! with the sentinel and the shelf naming the way back.
+//!
+//! The HEAL plan (warden.rs) keeps the opposite order for the same reason:
+//! there `CopyExe` is the restorative act and its sentinel is terminal, so
+//! the file goes back FIRST and the terminal state is written only once it
+//! is home.
 //!
 //! Every spawn goes through `exec::run_checked` (fixed argv, canonicalized cwd
 //! inside an allowed root, no shell). The only tool here is `codesign`, whose
@@ -130,10 +144,10 @@ pub fn swap_plan(
     }
     Ok(vec![
         Step::EnsureCurrentKept { sha: current.clone(), from: layout.exe_path.clone() },
+        Step::WriteSentinel { applied: new_sha.to_string(), prev: current.clone() },
+        Step::WriteLedger { current: new_sha.to_string(), previous: current.clone() },
         Step::CopyExe { from: home.generation_exe(new_sha), to: layout.exe_path.clone() },
         Step::Codesign { path: layout.app_path.clone() },
-        Step::WriteSentinel { applied: new_sha.to_string(), prev: current.clone() },
-        Step::WriteLedger { current: new_sha.to_string(), previous: current },
     ])
 }
 
@@ -149,9 +163,10 @@ pub fn execute(
     for step in plan {
         match step {
             Step::EnsureCurrentKept { sha, from } => {
-                let dest = home.generation_exe(sha);
-                if !dest.is_file() {
-                    copy_atomic(from, &dest)?;
+                // A body that is present but cut short is not a way home
+                // (round-1 review, Finding 8): re-shelve it from the live one.
+                if !generations::shelved_whole(home, sha) {
+                    copy_atomic(from, &home.generation_exe(sha))?;
                 }
             }
             Step::CopyExe { from, to } => copy_atomic(from, to)?,
@@ -180,8 +195,9 @@ fn io_err(what: &str, path: &Path, e: std::io::Error) -> LoomError {
 
 /// `<to>.weaving` ← `from` (mode bits carried by `fs::copy`, then set
 /// explicitly so the body stays executable), then rename over `to`. A crash
-/// before the rename leaves `to` untouched.
-fn copy_atomic(from: &Path, to: &Path) -> Result<(), LoomError> {
+/// before the rename leaves `to` untouched. `pub(crate)` so the shelf
+/// (generations.rs) copies a body exactly the way the swap does.
+pub(crate) fn copy_atomic(from: &Path, to: &Path) -> Result<(), LoomError> {
     if !from.is_file() {
         return Err(LoomError::NotFound(format!("executable: {}", from.display())));
     }
@@ -214,8 +230,11 @@ fn codesign(path: &Path, tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(), 
     let argv = [tool.as_str(), "--force", "--deep", "--sign", "-", target.as_str()];
     let out = exec::run_checked(&argv, root, root, Duration::from_secs(120))?;
     if out.code != 0 {
+        // No claim about the running generation here: this runs at the end of
+        // a swap (the file is already the new body), at the end of a heal, and
+        // over a shelved body at `stage`. Each caller adds its own context.
         return Err(LoomError::Git(format!(
-            "codesign exited {} — the body is unsigned; the running generation is untouched: {}",
+            "codesign exited {} — the body is unsigned: {}",
             out.code,
             out.stderr.trim()
         )));
@@ -296,14 +315,15 @@ mod tests {
         let lay = layout(d.path());
         let led = ledger(Some("aaa111"), None);
         let plan = swap_plan(&led, &lay, &home, "bbb222", "macos").unwrap();
+        // The healers are armed BEFORE the body is replaced (Finding 1).
         assert_eq!(
             plan,
             vec![
                 Step::EnsureCurrentKept { sha: "aaa111".into(), from: lay.exe_path.clone() },
-                Step::CopyExe { from: home.generation_exe("bbb222"), to: lay.exe_path.clone() },
-                Step::Codesign { path: lay.app_path.clone() },
                 Step::WriteSentinel { applied: "bbb222".into(), prev: "aaa111".into() },
                 Step::WriteLedger { current: "bbb222".into(), previous: "aaa111".into() },
+                Step::CopyExe { from: home.generation_exe("bbb222"), to: lay.exe_path.clone() },
+                Step::Codesign { path: lay.app_path.clone() },
             ]
         );
         // Generation 0 predates the ledger: no `current` on file, so the
@@ -311,12 +331,13 @@ mod tests {
         let plan0 = swap_plan(&Ledger::default(), &lay, &home, "bbb222", "macos").unwrap();
         let g0 = loomhome::genome_sha().to_string();
         assert_eq!(plan0[0], Step::EnsureCurrentKept { sha: g0.clone(), from: lay.exe_path.clone() });
-        assert_eq!(plan0[3], Step::WriteSentinel { applied: "bbb222".into(), prev: g0.clone() });
-        assert_eq!(plan0[4], Step::WriteLedger { current: "bbb222".into(), previous: g0 });
+        assert_eq!(plan0[1], Step::WriteSentinel { applied: "bbb222".into(), prev: g0.clone() });
+        assert_eq!(plan0[2], Step::WriteLedger { current: "bbb222".into(), previous: g0 });
         // The plan is serializable — it is logged before it runs.
         let v = serde_json::to_value(&plan).unwrap();
         assert_eq!(v[0]["step"], "ensureCurrentKept");
-        assert_eq!(v[3]["step"], "writeSentinel");
+        assert_eq!(v[1]["step"], "writeSentinel");
+        assert_eq!(v[3]["step"], "copyExe");
     }
 
     #[test]
@@ -429,6 +450,68 @@ mod tests {
         assert_eq!(after.kept, vec!["aaa111".to_string()], "kept is the shelf's business, not the swap's");
     }
 
+    /// Round-1 review, Finding 1. The plan is executed by a process that can
+    /// die at any point — a `codesign` that hangs, an owner who force-quits,
+    /// a panic. After EVERY prefix of the plan the disk must still name a way
+    /// home: either the running body is untouched, or the new body is in
+    /// place AND the sentinel, the shelf and the ledger together let a healer
+    /// bring the old one back.
+    #[test]
+    fn execute_interrupted_after_each_step_leaves_a_way_home() {
+        let steps = {
+            let f = fake_app("aaa111", "bbb222");
+            swap_plan(&generations::read(&f.home), &f.lay, &f.home, "bbb222", "macos").unwrap().len()
+        };
+        for k in 0..=steps {
+            let f = fake_app("aaa111", "bbb222");
+            let plan = swap_plan(&generations::read(&f.home), &f.lay, &f.home, "bbb222", "macos").unwrap();
+            execute(&plan[..k], &f.home, &f.tools()).unwrap();
+            if let Err(why) = way_home(&f, "aaa111", "bbb222") {
+                panic!("killed after {k} of {steps} step(s): {why}");
+            }
+        }
+    }
+
+    /// The disk after an interrupted swap, judged the way a healer judges it.
+    fn way_home(f: &Fake, prev: &str, new: &str) -> Result<(), String> {
+        if f.exe_content() == "old body" {
+            return Ok(()); // the running body is still the one on disk
+        }
+        let s = kernel::read_sentinel(&f.home.sentinel_json())
+            .ok_or("the body was replaced with no sentinel — nothing on disk arms a healer")?;
+        if !kernel::is_unconfirmed(&s.status) || s.armed_by.as_deref() != Some("reweave") {
+            return Err(format!("the sentinel arms no warden: {} / {:?}", s.status, s.armed_by));
+        }
+        if s.applied_sha != new || s.prev_sha != prev {
+            return Err(format!("the sentinel names the wrong pair: {} over {}", s.applied_sha, s.prev_sha));
+        }
+        if !f.home.generation_exe(prev).is_file() {
+            return Err("the previous body is not on the shelf".into());
+        }
+        if generations::read(&f.home).current.as_deref() == Some(prev) {
+            return Err("the ledger still calls the previous body current — generations_return refuses it".into());
+        }
+        Ok(())
+    }
+
+    /// Round-1 review, Finding 1 (the inner sentence). `codesign` runs AFTER
+    /// the file is replaced, so its failure may not claim the running
+    /// generation is untouched.
+    #[test]
+    fn codesign_failure_does_not_claim_the_body_is_untouched() {
+        let f = fake_app("aaa111", "bbb222");
+        std::fs::write(&f.codesign, "#!/bin/sh\necho 'refused' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&f.codesign, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plan = swap_plan(&generations::read(&f.home), &f.lay, &f.home, "bbb222", "macos").unwrap();
+        let err = execute(&plan, &f.home, &f.tools()).unwrap_err().to_string();
+        assert!(err.contains("unsigned"), "the fact is the missing signature: {err}");
+        assert!(
+            !err.contains("untouched"),
+            "the body was already replaced when codesign ran — the sentence must not say otherwise: {err}"
+        );
+        assert_eq!(f.exe_content(), "new body", "the swap reached codesign");
+    }
+
     #[test]
     fn execute_keeps_current_only_if_absent() {
         let f = fake_app("aaa111", "bbb222");
@@ -438,6 +521,23 @@ mod tests {
         let step = Step::EnsureCurrentKept { sha: "aaa111".into(), from: f.lay.exe_path.clone() };
         execute(&[step], &f.home, &f.tools()).unwrap();
         assert_eq!(std::fs::read_to_string(&shelved).unwrap(), "already shelved");
+    }
+
+    /// Round-1 review, Finding 8. A shelved body cut short by an earlier
+    /// crash is not a way home: the step re-shelves it from the live one.
+    #[test]
+    fn execute_reshelves_a_body_cut_short() {
+        let f = fake_app("aaa111", "bbb222");
+        let src = f.home.root.join("built-loom");
+        std::fs::write(&src, "old body").unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        generations::record(&f.home, "aaa111", &src, "reweave").unwrap();
+        // The crash: half a body on the shelf, its meta still naming the size.
+        std::fs::write(f.home.generation_exe("aaa111"), "old").unwrap();
+
+        let step = Step::EnsureCurrentKept { sha: "aaa111".into(), from: f.lay.exe_path.clone() };
+        execute(&[step], &f.home, &f.tools()).unwrap();
+        assert_eq!(std::fs::read_to_string(f.home.generation_exe("aaa111")).unwrap(), "old body");
     }
 
     #[test]

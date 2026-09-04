@@ -282,12 +282,13 @@ pub fn check_start(threaded: bool, mode: Mode, head: &str, current: Option<&str>
     Ok(())
 }
 
-/// `generations_return`'s rules: the body must be on the shelf and must not
-/// be the one already running.
-pub fn check_return(exe_exists: bool, current: Option<&str>, sha: &str) -> Result<(), LoomError> {
-    if !exe_exists {
+/// `generations_return`'s rules: the body must be on the shelf WHOLE (round-1
+/// review, Finding 8 — a body a crash cut short is not a body to return to)
+/// and must not be the one already running.
+pub fn check_return(exe_whole: bool, current: Option<&str>, sha: &str) -> Result<(), LoomError> {
+    if !exe_whole {
         return Err(LoomError::NotFound(format!(
-            "generation {} isn't on the shelf — it was pruned or never woven",
+            "generation {} isn't on the shelf whole — it was pruned, never woven, or cut short",
             short(sha)
         )));
     }
@@ -653,7 +654,7 @@ pub fn generations_return(app: tauri::AppHandle, sha: String) -> Result<(), Loom
         _ => return Err(LoomError::Unsupported(platform::UNSUPPORTED_SWAP.into())),
     };
     let current = generations::read(&home).current;
-    check_return(home.generation_exe(&sha).is_file(), current.as_deref(), &sha)?;
+    check_return(generations::shelved_whole(&home, &sha), current.as_deref(), &sha)?;
     if !JOB.try_take() {
         return Err(LoomError::Parse(IN_FLIGHT.into()));
     }
@@ -1066,7 +1067,7 @@ mod tests {
     #[test]
     fn return_refuses_an_absent_or_running_generation() {
         match check_return(false, Some("aaa"), "bbb").unwrap_err() {
-            LoomError::NotFound(m) => assert!(m.contains("isn't on the shelf"), "msg was {m}"),
+            LoomError::NotFound(m) => assert!(m.contains("isn't on the shelf whole"), "msg was {m}"),
             other => panic!("expected NotFound, got {other:?}"),
         }
         match check_return(true, Some("aaa"), "aaa").unwrap_err() {
