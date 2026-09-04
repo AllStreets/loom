@@ -541,7 +541,19 @@ fn ceremony_steps(
                         "the genome bundle is missing — this LOOM was built without its history".into(),
                     ))
                 })?;
-                crate::loomhome::seed_source(home, bundle, sha)?;
+                // Follow the bundle's own sha when it disagrees with the one
+                // baked into this binary — the bundle is the authority on
+                // which commits exist to check out. They agree in a healthy
+                // build; a disagreement is worth saying out loud.
+                let seed_sha = crate::loomhome::bundle_sha(bundle).unwrap_or_else(|| sha.to_string());
+                if seed_sha != sha {
+                    emit(
+                        "seed",
+                        "the bundle and the binary name different shas — following the bundle",
+                        none,
+                    );
+                }
+                crate::loomhome::seed_source(home, bundle, &seed_sha)?;
             }
         }
         t.steps.seed = true;

@@ -151,6 +151,23 @@ impl Home {
 /// (~20 MB); this is a wall against a wedged git, not a budget.
 const SEED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// The sha the bundle beside this path was written at, read from the
+/// `genome.json` the bundling script leaves next to it.
+///
+/// Two independent readings of HEAD exist in a packaged LOOM: the sha baked
+/// into the binary at compile time (`LOOM_GENOME_SHA`) and this one, written
+/// when the bundle was packed. They come from the same build and should agree.
+/// When they do not, THIS is the reading to follow: the bundle is the authority
+/// on which commits actually exist to check out, and a sha it does not contain
+/// cannot be checked out at all. Absent, unreadable, or not a sha → `None`, and
+/// the caller keeps the baked one.
+pub fn bundle_sha(bundle: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(bundle.parent()?.join("genome.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let s = v.get("sha")?.as_str()?.trim().to_string();
+    (s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())).then_some(s)
+}
+
 /// Threading step 1 (spec §Threading): clone the bundled genome into
 /// `source/` and check out the sha this binary was woven from, on a local
 /// `main` so later commits land somewhere named. A no-op if `source/.git`
@@ -517,5 +534,38 @@ mod tests {
             other => panic!("expected NotFound, got {other:?}"),
         }
         assert!(!home.source().exists(), "nothing is created when the bundle is absent");
+    }
+
+    #[test]
+    fn bundle_sha_reads_the_manifest_and_refuses_junk() {
+        let d = tempfile::tempdir().unwrap();
+        let bundle = d.path().join("genome.bundle");
+        std::fs::write(&bundle, b"not really a bundle").unwrap();
+
+        // No manifest beside it — the caller keeps the baked sha.
+        assert_eq!(bundle_sha(&bundle), None);
+
+        let good = "a".repeat(40);
+        std::fs::write(
+            d.path().join("genome.json"),
+            format!("{{\"sha\": \"{good}\", \"createdAt\": \"now\"}}"),
+        )
+        .unwrap();
+        assert_eq!(bundle_sha(&bundle).as_deref(), Some(good.as_str()));
+
+        // Anything that is not a 40-char hex sha is refused rather than
+        // handed to `git checkout` — a short sha, a ref name, an injection.
+        for junk in ["", "abc", "main", "../../etc", &"z".repeat(40)] {
+            std::fs::write(
+                d.path().join("genome.json"),
+                format!("{{\"sha\": \"{junk}\"}}"),
+            )
+            .unwrap();
+            assert_eq!(bundle_sha(&bundle), None, "must refuse {junk:?}");
+        }
+
+        // Unparseable manifest → None, never a panic.
+        std::fs::write(d.path().join("genome.json"), "{ not json").unwrap();
+        assert_eq!(bundle_sha(&bundle), None);
     }
 }
