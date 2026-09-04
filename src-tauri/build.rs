@@ -22,17 +22,51 @@ fn genome_sha(repo_root: &Path) -> String {
     }
 }
 
-/// Where `HEAD` lives. `../.git/HEAD` is the plain case; in a linked worktree
-/// `.git` is a file naming the real gitdir, so we also watch that HEAD — the
-/// sha must move when HEAD moves, in either layout.
-fn head_paths(repo_root: &Path) -> Vec<PathBuf> {
+/// Where HEAD and the refs it points at live. Two layouts: a plain checkout
+/// (`.git` is a directory) and a linked worktree (`.git` is a file naming the
+/// real gitdir, whose `commondir` names where refs live).
+fn git_dirs(repo_root: &Path) -> (PathBuf, PathBuf) {
     let dot_git = repo_root.join(".git");
-    let mut v = vec![dot_git.join("HEAD")];
     if let Ok(s) = std::fs::read_to_string(&dot_git) {
         if let Some(rest) = s.trim().strip_prefix("gitdir:") {
             let gitdir = PathBuf::from(rest.trim());
             let gitdir = if gitdir.is_absolute() { gitdir } else { repo_root.join(gitdir) };
-            v.push(gitdir.join("HEAD"));
+            let common = std::fs::read_to_string(gitdir.join("commondir"))
+                .ok()
+                .map(|c| {
+                    let p = PathBuf::from(c.trim());
+                    if p.is_absolute() { p } else { gitdir.join(p) }
+                })
+                .unwrap_or_else(|| gitdir.clone());
+            return (gitdir, common);
+        }
+    }
+    (dot_git.clone(), dot_git)
+}
+
+/// Every path whose change means HEAD now names a different commit.
+///
+/// `HEAD` ALONE IS NOT ENOUGH, and getting this wrong bakes a lie into the
+/// binary. On a branch, `HEAD` holds `ref: refs/heads/<branch>` and never
+/// changes when you commit — git rewrites `refs/heads/<branch>` instead. A
+/// build script watching only `HEAD` therefore does not rerun after a commit,
+/// and the next binary carries the PREVIOUS sha as its own name: the ledger
+/// would record one generation while the body reported another, `seed_source`
+/// would check a fresh install out to an older commit than the bundle it
+/// shipped with, and the owner would be offered a reweave that never settles.
+/// So we watch the resolved ref too — loose and packed (a ref that is packed
+/// has no loose file; cargo reruns when a watched path appears).
+fn watched_paths(repo_root: &Path) -> Vec<PathBuf> {
+    let (gitdir, common) = git_dirs(repo_root);
+    let head = gitdir.join("HEAD");
+    let mut v = vec![head.clone()];
+    if let Ok(s) = std::fs::read_to_string(&head) {
+        if let Some(r) = s.trim().strip_prefix("ref:") {
+            let r = r.trim();
+            if !r.is_empty() && !r.contains("..") {
+                v.push(common.join(r));
+                v.push(common.join("packed-refs"));
+            }
         }
     }
     v
@@ -43,8 +77,7 @@ fn main() {
     let repo_root = manifest_dir.parent().map(Path::to_path_buf).unwrap_or(manifest_dir.clone());
 
     println!("cargo:rustc-env=LOOM_GENOME_SHA={}", genome_sha(&repo_root));
-    println!("cargo:rerun-if-changed=../.git/HEAD");
-    for p in head_paths(&repo_root).into_iter().skip(1) {
+    for p in watched_paths(&repo_root) {
         println!("cargo:rerun-if-changed={}", p.display());
     }
 
