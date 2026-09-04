@@ -20,9 +20,11 @@ import Notices from './chrome/Notices';
 import Proposal from './chrome/Proposal';
 import KernelDiff, { type KernelAppliedInfo } from './chrome/KernelDiff';
 import Reweave from './chrome/Reweave';
+import BodyRequest from './chrome/BodyRequest';
 import RecoveryNotice from './chrome/recoveryNotice';
 import { runBootCheck, markBootOk } from '../lib/loom/recovery';
-import { startReweave } from '../lib/loom/reweave';
+import { startReweave, shouldAutoReweave } from '../lib/loom/reweave';
+import { shellNotify } from '../lib/organs/notifyGate';
 import { mountInitiative } from '../lib/initiative/runtime';
 import Shuttle from './Shuttle';
 import ErrorBoundary from './ErrorBoundary';
@@ -109,13 +111,22 @@ export default function Shell() {
     };
   }, []);
 
-  // ----- Auto-reweave (Phase 23) — after a packaged apply, if the owner opted
-  // in (`kernel.autoReweave`), start the weave without the REWEAVE click. The
-  // reweave card then carries the honest countdown; LOOM closes and returns.
+  // ----- Auto-reweave (Phase 23) — after an approved packaged CORE edit, if
+  // the owner opted in (`kernel.autoReweave`), start the weave without the
+  // REWEAVE click. The toggle says "after an approved core edit", so a
+  // TypeScript-only edit must never close the app: `shouldAutoReweave` holds
+  // that rule. A refusal is spoken as a notice — the owner asked LOOM to
+  // rebuild itself and is owed the sentence, not silence.
   function onKernelApplied(info: KernelAppliedInfo) {
-    if (info.mode !== 'packaged') return;
-    if (getSetting('kernel.autoReweave') !== 'on') return;
-    void startReweave();
+    if (!shouldAutoReweave(info, getSetting('kernel.autoReweave'))) return;
+    void (async () => {
+      try {
+        const out = await startReweave();
+        if (!out.ok) shellNotify('the weave did not start', out.reason);
+      } catch (e) {
+        shellNotify('the weave did not start', e instanceof Error ? e.message : String(e));
+      }
+    })();
   }
 
   // ----- Boot migration — idempotent: deletes stored values for retired
@@ -855,6 +866,13 @@ export default function Shell() {
           has just ended; fed by the protected reweave.ts subscription. ── */}
       <ErrorBoundary zone="reweave">
         <Reweave />
+      </ErrorBoundary>
+
+      {/* ── BodyRequest: the shell's answer when an ORGAN asks to thread,
+          reweave, or return (z 1900). The `self` power can only ask; this is
+          the one place that acts, and only after the owner's consent card. ── */}
+      <ErrorBoundary zone="body-request">
+        <BodyRequest />
       </ErrorBoundary>
 
       {/* ── Minimized typing box: bottom-center glass pill — the mark and the

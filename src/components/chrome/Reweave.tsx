@@ -36,7 +36,18 @@ const REWEAVE_Z = 1700;
 /** How many tail lines the card shows. The state carries up to 400. */
 const TAIL_LINES = 6;
 
-/** The line before the swap. Spec §Honest residuals: the microphone may be re-asked. */
+/**
+ * The warning, said while it can still be acted on. STAGE is the last
+ * cancellable station: SWAP writes the new executable over the running one and
+ * RELAUNCH exits, and neither can be stopped. The spec says the card must say
+ * so BEFORE the irreversible step, so this line stands next to a live CANCEL —
+ * a warning shown only once the swap is running is not a warning.
+ * Spec §Honest residuals: the microphone may be re-asked after the re-sign.
+ */
+export const APPROACHING_RETURN =
+  "the next station cannot be cancelled — LOOM will close and return, and macOS may ask for the microphone again. cancel now if this is not the moment.";
+
+/** The same fact, once it is no longer a warning but a description. */
 export const POINT_OF_RETURN =
   "past the point of return — LOOM will close and return in a moment. macOS may ask for the microphone again.";
 
@@ -155,6 +166,10 @@ export default function Reweave({ feed = subscribe, cancel = reweaveCancel }: Re
   const stage: ReweaveStage = state?.stage ?? "idle";
   const terminal = TERMINAL.has(stage);
   const pastReturn = stage === "swap" || stage === "relaunch";
+  // In dev the job stops after STAGE — stages 4→5 are skipped and nothing is
+  // ever swapped, so there is no irreversible step to warn about.
+  const nearingReturn = stage === "stage" && state?.mode === "packaged";
+  const returnLine = pastReturn ? POINT_OF_RETURN : nearingReturn ? APPROACHING_RETURN : null;
   const sha7 = state?.targetSha ? state.targetSha.slice(0, 7) : "";
   const tail = state ? state.tail.slice(-TAIL_LINES) : [];
   const elapsedMs = state
@@ -307,13 +322,14 @@ export default function Reweave({ feed = subscribe, cancel = reweaveCancel }: Re
             </pre>
           )}
 
-          {/* Past the point of return — said before the swap runs */}
-          {pastReturn && (
+          {/* The point of return — warned at STAGE, while CANCEL still works;
+              restated plainly once SWAP has begun. */}
+          {returnLine && (
             <div
               data-testid="reweave-return-line"
               style={{ fontSize: 12.5, color: "var(--warn)", lineHeight: 1.5 }}
             >
-              {POINT_OF_RETURN}
+              {returnLine}
             </div>
           )}
 

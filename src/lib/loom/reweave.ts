@@ -56,6 +56,25 @@ export const REASON_UNTHREADED = "the loom isn't threaded — open Settings";
 export const REASON_NOTHING_NEW = "nothing new to weave — the body already matches the genome";
 export const REASON_IN_FLIGHT = "a weave is already under way";
 
+/**
+ * Is the binary swap implemented on this machine? `platform.rs` answers this
+ * for real ("the swap is macOS-only in this generation — the build and the
+ * ledger still work"), but only once a weave has already started; a consent
+ * line has to know BEFORE it promises "LOOM will close and return".
+ *
+ * The webview's user agent is the only platform signal the TS side has —
+ * `kernel_identity` carries no platform field. That is a guess, so it is only
+ * ever used to make a promise SMALLER: an unrecognised agent reads as
+ * supported and the Rust refusal still has the last word. A `platform` (or
+ * `canSwap`) field on `kernel_identity` would retire this function.
+ */
+export function swapSupported(
+  ua: string = typeof navigator === "undefined" ? "" : navigator.userAgent,
+): boolean {
+  if (/windows|win32|linux|x11|android|cros/i.test(ua)) return false;
+  return true;
+}
+
 /** Index of `stage` on the rail; -1 for idle, done, failed, cancelled. */
 export function stationIndex(stage: ReweaveStage): number {
   return STATIONS.indexOf(stage);
@@ -110,7 +129,7 @@ export type StartResult = { ok: true } | { ok: false; reason: string };
 export type ReadinessDeps = { identity: typeof kernelIdentity };
 
 export type Readiness =
-  | { ok: true; generation: string | null; genomeSha: string }
+  | { ok: true; generation: string | null; genomeSha: string; mode: "dev" | "packaged" }
   | { ok: false; reason: string };
 
 /**
@@ -135,7 +154,9 @@ export async function reweaveReadiness(
     if (!force && id.generation !== null && id.generation === id.genomeSha) {
       return { ok: false, reason: REASON_NOTHING_NEW };
     }
-    return { ok: true, generation: id.generation, genomeSha: id.genomeSha };
+    // `mode` travels with the verdict so the consent line can say what will
+    // actually happen — in dev nothing is swapped and LOOM does not close.
+    return { ok: true, generation: id.generation, genomeSha: id.genomeSha, mode: id.mode };
   } catch (e) {
     return { ok: false, reason: reasonOf(e) };
   }
@@ -159,6 +180,26 @@ export async function startReweave(
   } catch (e) {
     return { ok: false, reason: reasonOf(e) };
   }
+}
+
+/** What an applied kernel edit was, as far as the auto-reweave decision cares. */
+export type AppliedEdit = { mode: "dev" | "packaged"; isCore: boolean };
+
+/**
+ * Should an approved apply start a weave with no second click?
+ *
+ * Only when all three hold, because that is exactly what the owner opted into:
+ *   - packaged — in dev `tauri dev` owns the binary and nothing is swapped;
+ *   - the edit reached the CORE — a TypeScript edit is bundled by the next
+ *     weave anyway, and closing the app for it is a surprise the toggle never
+ *     promised ("after an approved **core** edit");
+ *   - `kernel.autoReweave` is on.
+ *
+ * Pure so the decision is testable without a shell — the caller reads the
+ * setting and passes it in.
+ */
+export function shouldAutoReweave(applied: AppliedEdit, setting: string): boolean {
+  return applied.mode === "packaged" && applied.isCore === true && setting === "on";
 }
 
 /**

@@ -1,6 +1,7 @@
-import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, timelineLog as coreTimelineLog, kernelIdentity, threadStatus as coreThreadStatus, threadLoom as coreThreadLoom, THREAD_EVENT, FLEET_DEFAULTS, type Msg, type VoiceStatus, type Commit, type Identity, type ThreadStatus, type ThreadEvent, type Generation } from "../core";
-import { listGenerations, returnToGeneration } from "../loom/generations";
-import { startReweave as loomStartReweave, type StartResult } from "../loom/reweave";
+import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, timelineLog as coreTimelineLog, kernelIdentity, threadStatus as coreThreadStatus, THREAD_EVENT, FLEET_DEFAULTS, type Msg, type VoiceStatus, type Commit, type Identity, type ThreadStatus, type ThreadEvent, type Generation } from "../core";
+import { listGenerations } from "../loom/generations";
+import { type StartResult } from "../loom/reweave";
+import { requestBody, BodyRequestDeclined } from "./bodyGate";
 import { getSetting, setSetting, isValidModelTag, VOICE_IDS, VOICE_LABELS, resetAllSettings as resetAllSettingsFn } from "../voice/settings";
 import { startRecording } from "../voice/recorder";
 import { playWav } from "../voice/player";
@@ -37,10 +38,14 @@ export type LoomSettingsApi = {
 };
 
 /**
- * The `self` power (Rebirth): LOOM's own body, read and moved. Reads are
- * free; the three actions each close or rebuild LOOM and share one budget.
- * Every call sits behind `need("self")` — the Settings seed declares it, the
- * owner approves it, nothing else is taught to ask.
+ * The `self` power (Rebirth): LOOM's own body, READ directly and MOVED only by
+ * asking. Reads sit behind `need("self")` and answer straight away. The three
+ * acts — thread, reweave, return — do not touch the protected orchestration at
+ * all: each dispatches a `loom-body-request` (see bodyGate.ts) and waits for
+ * chrome to render the owner's consent card and answer. Round-1 review: organs
+ * share the shell's JS realm, so a capability any organ holds is a capability
+ * every organ's code can reach — the grant decides who may ask, and only the
+ * shell decides what happens.
  */
 export type LoomSelfApi = {
   /** `{ mode, genomeSha, generation, threaded, loomhome, loomhomeBytes }`. */
@@ -49,12 +54,15 @@ export type LoomSelfApi = {
   threads(): Promise<ThreadStatus>;
   /** Every kept generation, newest first. */
   generations(): Promise<Generation[]>;
-  /** Run the one-time ceremony; `onEvent` gets every `loom-thread` line.
-   *  Resolves on `done`, rejects with the detail on `failed`. */
+  /** Ask the owner to run the one-time ceremony. `onEvent` gets every
+   *  `loom-thread` line once it starts. Resolves on `done`; rejects with the
+   *  detail on `failed`, and with the calm refusal if the owner declines. */
   thread(onEvent?: (e: ThreadEvent) => void): Promise<void>;
-  /** Start a reweave through the protected orchestration — `{ ok }` or the calm reason. */
+  /** Ask the owner to start a reweave — `{ ok: true }` once it is running,
+   *  `{ ok: false, reason }` when the core refuses, and a rejection carrying
+   *  the calm refusal line when the owner says not now. */
   reweave(): Promise<StartResult>;
-  /** Become `sha` again. LOOM will close and return. */
+  /** Ask the owner to become `sha` again. LOOM will close and return. */
   returnTo(sha: string): Promise<void>;
 };
 
@@ -86,14 +94,14 @@ export type ApiDeps = {
   listenProgress?: (cb: (pct: number) => void) => Promise<() => void>;
   fleetStatus?: typeof fleetStatus;
   resetAllSettings?: () => void;
-  // self power seams
+  // self power seams — reads only. The three ACTS have no seam here on
+  // purpose: they go through bodyGate, and only chrome can answer.
   identity?: typeof kernelIdentity;
   threadStatus?: typeof coreThreadStatus;
   generationsList?: typeof listGenerations;
-  threadLoom?: typeof coreThreadLoom;
   listenThread?: (cb: (e: ThreadEvent) => void) => Promise<() => void>;
-  startReweave?: () => Promise<StartResult>;
-  returnTo?: typeof returnToGeneration;
+  /** The ask itself — injectable so tests need no chrome. */
+  requestBody?: typeof requestBody;
 };
 
 // ── Pulse registry — live intervals per organ, cleared on unmount/delete ──────
@@ -204,13 +212,12 @@ export function makeLoomApi(
     return unlisten;
   });
 
-  // self power seams — the protected orchestration modules by default.
+  // self power seams — the reads go straight to the core; the three acts go
+  // through the body gate, where only chrome can answer.
   const _identity = deps.identity ?? kernelIdentity;
   const _threadStatus = deps.threadStatus ?? coreThreadStatus;
   const _generationsList = deps.generationsList ?? listGenerations;
-  const _threadLoom = deps.threadLoom ?? coreThreadLoom;
-  const _startReweave = deps.startReweave ?? (() => loomStartReweave());
-  const _returnTo = deps.returnTo ?? returnToGeneration;
+  const _requestBody = deps.requestBody ?? requestBody;
   const _listenThread = deps.listenThread ?? (async (cb: (e: ThreadEvent) => void) => {
     const { listen } = await import("@tauri-apps/api/event");
     return listen<ThreadEvent>(THREAD_EVENT, (e) => { cb(e.payload); });
@@ -280,8 +287,9 @@ export function makeLoomApi(
       async thread(onEvent) {
         need("self");
         spend("self");
-        // Listen BEFORE starting so the first line is never missed; settle on
-        // the ceremony's own terminal step; always let go of the listener.
+        // Listen BEFORE asking so the first line is never missed; the organ
+        // only ever asks — chrome runs the ceremony after the owner agrees.
+        // Settle on the ceremony's own terminal step; always let the listener go.
         let settle: { resolve: () => void; reject: (e: Error) => void } | null = null;
         const finished = new Promise<void>((resolve, reject) => { settle = { resolve, reject }; });
         const unlisten = await _listenThread((e) => {
@@ -290,7 +298,7 @@ export function makeLoomApi(
           else if (e.step === "failed") settle?.reject(new Error(e.detail));
         });
         try {
-          await _threadLoom();
+          await _requestBody("thread", organId);
         } catch (err) {
           unlisten();
           throw err;
@@ -304,12 +312,21 @@ export function makeLoomApi(
       async reweave() {
         need("self");
         spend("self");
-        return _startReweave();
+        try {
+          await _requestBody("reweave", organId);
+          return { ok: true };
+        } catch (e) {
+          // The owner saying not now is a refusal of the ASK — it rejects, so
+          // an organ cannot mistake it for "the weave could not start". The
+          // core's own refusal keeps the StartResult shape it always had.
+          if (e instanceof BodyRequestDeclined) throw e;
+          return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+        }
       },
       async returnTo(sha) {
         need("self");
         spend("self");
-        return _returnTo(String(sha));
+        return _requestBody("return", organId, String(sha));
       },
     },
     pulse: {

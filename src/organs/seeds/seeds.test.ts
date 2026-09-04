@@ -417,41 +417,42 @@ describe("settings seed — LOOM page", () => {
     expect(el.querySelector('[data-testid="loom-page"]')!.textContent).toContain("the body matches the genome");
   });
 
-  it("REWEAVE appears when threaded and the genome is ahead; it asks once, then starts", async () => {
+  it("REWEAVE appears when threaded and the genome is ahead; pressing it ASKS, it does not weave", async () => {
+    // Round-1 finding 1: Settings is an organ, so its REWEAVE only ever asks —
+    // `self.reweave()` dispatches a body request and the SHELL's consent card
+    // carries the sentence. The organ no longer holds a second confirm strip
+    // that would ask the same question twice in the same words.
     const reweave = vi.fn(async () => ({ ok: true }));
     const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", generation: SHA_B }), reweave }));
     const btn = el.querySelector('[data-action="self-reweave"]') as HTMLButtonElement;
     expect(btn).not.toBeNull();
     expect(btn.textContent).toBe("REWEAVE");
+    expect(el.querySelector('[data-testid="loom-reweave-confirm"]')).toBeNull();
     btn.click();
-    expect(reweave).not.toHaveBeenCalled();
-    const strip = el.querySelector('[data-testid="loom-reweave-confirm"]') as HTMLElement;
-    expect(strip.style.display).not.toBe("none");
-    expect(strip.textContent).toContain("weave generation " + SHA_A.slice(0, 7));
-    expect(strip.textContent).toContain("LOOM will close and return");
-    (el.querySelector('[data-action="self-reweave-confirm"]') as HTMLButtonElement).click();
     await tick();
     expect(reweave).toHaveBeenCalledTimes(1);
-  });
-
-  it("REWEAVE in dev says the body stays", async () => {
-    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ generation: null }) }));
-    (el.querySelector('[data-action="self-reweave"]') as HTMLButtonElement).click();
-    const strip = el.querySelector('[data-testid="loom-reweave-confirm"]') as HTMLElement;
-    expect(strip.textContent).toContain("restart tauri dev");
-    expect(strip.textContent).not.toContain("LOOM will close");
+    expect(el.querySelector('[data-testid="loom-reweave-note"]')!.textContent).toContain(
+      "the weave has started",
+    );
   });
 
   it("a refused reweave states the reason inline", async () => {
     const reweave = vi.fn(async () => ({ ok: false, reason: "a weave is already under way" }));
     const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", generation: SHA_B }), reweave }));
     (el.querySelector('[data-action="self-reweave"]') as HTMLButtonElement).click();
-    (el.querySelector('[data-action="self-reweave-confirm"]') as HTMLButtonElement).click();
     await tick();
     expect(el.querySelector('[data-testid="loom-reweave-note"]')!.textContent).toContain("a weave is already under way");
   });
 
-  it("generations list rows with the current marked and RETURN on the others; consent comes first", async () => {
+  it("a declined reweave states the owner's own answer, not a failure", async () => {
+    const reweave = vi.fn(async () => { throw new Error("you said not now — the body stays as it is"); });
+    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", generation: SHA_B }), reweave }));
+    (el.querySelector('[data-action="self-reweave"]') as HTMLButtonElement).click();
+    await tick();
+    expect(el.querySelector('[data-testid="loom-reweave-note"]')!.textContent).toContain("you said not now");
+  });
+
+  it("generations list rows with the current marked and RETURN on the others; RETURN only asks", async () => {
     const returnTo = vi.fn(async () => {});
     const { el } = await renderSettings(selfMock({
       identity: async () => threadedDev({ mode: "packaged", generation: SHA_A }),
@@ -471,18 +472,29 @@ describe("settings seed — LOOM page", () => {
     expect(rowB.textContent).toContain("1d ago");
     const ret = rowB.querySelector('[data-action="self-return-' + SHA_B.slice(0, 7) + '"]') as HTMLButtonElement;
     expect(ret.textContent).toBe("RETURN");
+    expect(rowB.querySelector('[data-testid="loom-return-confirm"]')).toBeNull();
     ret.click();
-    expect(returnTo).not.toHaveBeenCalled();
-    const strip = rowB.querySelector('[data-testid="loom-return-confirm"]') as HTMLElement;
-    expect(strip.style.display).not.toBe("none");
-    expect(strip.textContent).toContain("return to generation " + SHA_B.slice(0, 7));
-    expect(strip.textContent).toContain("LOOM will close and return");
-    (rowB.querySelector('[data-action="self-return-keep-' + SHA_B.slice(0, 7) + '"]') as HTMLButtonElement).click();
-    expect(strip.style.display).toBe("none");
-    ret.click();
-    (rowB.querySelector('[data-action="self-return-confirm-' + SHA_B.slice(0, 7) + '"]') as HTMLButtonElement).click();
     await tick();
     expect(returnTo).toHaveBeenCalledWith(SHA_B);
+    expect(rowB.querySelector('[data-testid="loom-return-note-' + SHA_B.slice(0, 7) + '"]')!.textContent)
+      .toContain("returning to " + SHA_B.slice(0, 7));
+  });
+
+  it("a declined return leaves the row as it was and says why", async () => {
+    const returnTo = vi.fn(async () => { throw new Error("you said not now — the body stays as it is"); });
+    const { el } = await renderSettings(selfMock({
+      identity: async () => threadedDev({ mode: "packaged", generation: SHA_A }),
+      generations: async () => [
+        { sha: SHA_A, wovenAt: new Date().toISOString(), sizeBytes: 42, reason: "reweave", commitSubject: "b", isCurrent: true, isPrevious: false },
+        { sha: SHA_B, wovenAt: new Date().toISOString(), sizeBytes: 41, reason: "threading", commitSubject: "a", isCurrent: false, isPrevious: true },
+      ],
+      returnTo,
+    }));
+    const rowB = el.querySelector('[data-testid="loom-generation-' + SHA_B.slice(0, 7) + '"]') as HTMLElement;
+    (rowB.querySelector('[data-action="self-return-' + SHA_B.slice(0, 7) + '"]') as HTMLButtonElement).click();
+    await tick();
+    expect(rowB.querySelector('[data-testid="loom-return-note-' + SHA_B.slice(0, 7) + '"]')!.textContent)
+      .toContain("you said not now");
   });
 
   it("an empty ledger says so plainly", async () => {

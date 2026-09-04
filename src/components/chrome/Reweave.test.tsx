@@ -11,7 +11,7 @@
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import "@testing-library/jest-dom";
-import Reweave, { formatElapsed, POINT_OF_RETURN } from "./Reweave";
+import Reweave, { formatElapsed, POINT_OF_RETURN, APPROACHING_RETURN } from "./Reweave";
 import type { ReweaveState } from "../../lib/core";
 import { STATIONS } from "../../lib/loom/reweave";
 
@@ -236,6 +236,36 @@ describe("Reweave — tail, clock, cancel", () => {
     render(<Reweave feed={feed} cancel={vi.fn()} />);
     push(state({ stage: "swap", cancellable: false }));
     expect(screen.queryByTestId("reweave-cancel")).not.toBeInTheDocument();
+  });
+});
+
+describe("Reweave — the warning comes BEFORE the irreversible step", () => {
+  it("stage (packaged, still cancellable): warns that the next station cannot be undone", () => {
+    const { feed, push } = makeFeed();
+    render(<Reweave feed={feed} cancel={vi.fn()} />);
+    push(state({ stage: "stage", cancellable: true }));
+    // CANCEL is still there — this is the last moment the owner can stop it.
+    expect(screen.getByTestId("reweave-cancel")).toBeInTheDocument();
+    const line = screen.getByTestId("reweave-return-line");
+    expect(line).toHaveTextContent(APPROACHING_RETURN);
+    expect(APPROACHING_RETURN).toMatch(/microphone/);
+    expect(APPROACHING_RETURN).not.toMatch(/!/);
+  });
+
+  it("stage (dev): no warning — nothing is swapped, so nothing is irreversible", () => {
+    const { feed, push } = makeFeed();
+    render(<Reweave feed={feed} cancel={vi.fn()} />);
+    push(state({ stage: "stage", mode: "dev", cancellable: true }));
+    expect(screen.queryByTestId("reweave-return-line")).not.toBeInTheDocument();
+  });
+
+  it("assets and core: no warning yet — the irreversible step is still two stations away", () => {
+    const { feed, push } = makeFeed();
+    render(<Reweave feed={feed} cancel={vi.fn()} />);
+    push(state({ stage: "assets", cancellable: true }));
+    expect(screen.queryByTestId("reweave-return-line")).not.toBeInTheDocument();
+    push(state({ stage: "core", cancellable: true }));
+    expect(screen.queryByTestId("reweave-return-line")).not.toBeInTheDocument();
   });
 });
 

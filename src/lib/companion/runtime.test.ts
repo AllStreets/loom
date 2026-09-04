@@ -1,6 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import { handle, type CompanionDeps, type RebirthDeps } from "./runtime";
+import {
+  handle,
+  LINE_THREAD_CONSENT,
+  LINE_THREADING,
+  reweaveConsentLine,
+  type CompanionDeps,
+  type RebirthDeps,
+} from "./runtime";
 import type { Identity, ThreadStatus, Generation } from "../core";
+import { files as settingsFiles } from "../../organs/seeds/settings";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -163,8 +171,8 @@ function generation(over: Partial<Generation> = {}): Generation {
 
 function rebirth(over: Partial<RebirthDeps> = {}): RebirthDeps {
   return {
-    readiness: vi.fn().mockResolvedValue({ ok: true, generation: SHA_B, genomeSha: SHA_A }),
-    commitsAhead: vi.fn().mockResolvedValue(null),
+    readiness: vi.fn().mockResolvedValue({ ok: true, generation: SHA_B, genomeSha: SHA_A, mode: "packaged" }),
+    canSwap: () => true,
     threadStatus: vi.fn().mockResolvedValue(threadStatus()),
     threadLoom: vi.fn().mockResolvedValue(undefined),
     identity: vi.fn().mockResolvedValue(identity()),
@@ -192,7 +200,7 @@ describe("handle — reweave", () => {
     expect(deps.askModel).not.toHaveBeenCalled();
   });
 
-  it("ready, commit count unknown → consent turn with the short line", async () => {
+  it("packaged → consent turn: LOOM will close and return", async () => {
     const deps = makeDeps({ rebirth: rebirth() });
     const turn = await handle("become the new version", [], deps);
     expect(turn).toEqual({
@@ -202,22 +210,34 @@ describe("handle — reweave", () => {
     });
   });
 
-  it("ready, commits counted → consent turn names the count", async () => {
-    const deps = makeDeps({ rebirth: rebirth({ commitsAhead: vi.fn().mockResolvedValue(4) }) });
-    const turn = await handle("rebuild yourself", [], deps);
+  it("dev → the consent line never promises a close and return that will not happen", async () => {
+    const rb = rebirth({
+      readiness: vi.fn().mockResolvedValue({ ok: true, generation: null, genomeSha: SHA_A, mode: "dev" }),
+    });
+    const turn = await handle("rebuild yourself", [], makeDeps({ rebirth: rb }));
     expect(turn).toEqual({
       kind: "consent",
       consent: "reweave_consent",
-      line: "weave generation 3f2a1c from 4 commits — LOOM will close and return",
+      line: "weave generation 3f2a1c — in dev the body stays; restart tauri dev to become it",
     });
   });
 
-  it("one commit reads singular", async () => {
-    const deps = makeDeps({ rebirth: rebirth({ commitsAhead: vi.fn().mockResolvedValue(1) }) });
-    const turn = await handle("weave the new generation", [], deps);
+  it("packaged off macOS → the consent line says the swap is not implemented here", async () => {
+    const rb = rebirth({ canSwap: () => false });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toBe(
-      "weave generation 3f2a1c from 1 commit — LOOM will close and return",
+      "weave generation 3f2a1c — the swap is macOS-only in this generation; the build and the ledger still work, the body stays",
     );
+  });
+
+  it("never claims a commit count nobody can produce", async () => {
+    // `commitsAhead` was hardwired to null: the count could never be spoken, so
+    // the parameter was a promise the code could not keep. Until a genome_ahead
+    // command exists, the line simply does not mention commits.
+    const deps = makeDeps({ rebirth: rebirth() });
+    const turn = await handle("weave the new generation", [], deps);
+    expect(turn.kind === "consent" && turn.line).not.toMatch(/commit/);
+    expect(reweaveConsentLine).toHaveLength(3);
   });
 
   it("unthreaded → the settings line, no consent", async () => {
@@ -244,13 +264,30 @@ describe("handle — thread", () => {
     expect(rb.threadLoom).not.toHaveBeenCalled();
   });
 
-  it("nothing missing → threadLoom() and the honest network line", async () => {
+  it("nothing missing → a consent turn carrying the network line, and NOTHING reaches the network", async () => {
+    // The one step in an offline-and-yours computer that touches the network
+    // was the one with no card. It asks first now.
     const rb = rebirth({
       threadStatus: vi.fn().mockResolvedValue(threadStatus({ threaded: false, needsNetwork: true })),
     });
     const turn = await handle("thread the loom", [], makeDeps({ rebirth: rb }));
-    expect(rb.threadLoom).toHaveBeenCalledTimes(1);
-    expect(turn).toEqual({ kind: "reply", text: "threading the loom — this needs the network once" });
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "thread_consent",
+      line: "threading needs the network once — after that LOOM weaves offline",
+    });
+    expect(rb.threadLoom).not.toHaveBeenCalled();
+  });
+
+  it("the consent line is the one Settings already shows — one wording, no drift", () => {
+    const organJs = settingsFiles.find((f) => f.name === "organ.js")!.content;
+    expect(organJs).toContain(LINE_THREAD_CONSENT);
+  });
+
+  it("the line spoken after the owner agrees is the one the Companion restates", () => {
+    // Companion.rebirth.test.tsx mocks this module and restates the constant;
+    // this pins it so the two cannot drift apart unnoticed.
+    expect(LINE_THREADING).toBe("threading the loom — this needs the network once");
   });
 });
 
@@ -278,6 +315,14 @@ describe("handle — generation_return", () => {
       sha: SHA_B,
       line: "return to generation 9b8c7d — LOOM will close and return",
     });
+  });
+
+  it("dev → the return consent says what dev actually does, not close-and-return", async () => {
+    const rb = rebirth({ identity: vi.fn().mockResolvedValue(identity({ mode: "dev" })) });
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rb }));
+    expect(turn.kind === "consent" && turn.line).toBe(
+      "return to generation 9b8c7d — in dev the body stays; the genome moves to generation/9b8c7d9",
+    );
   });
 
   it("no previous generation → says so", async () => {

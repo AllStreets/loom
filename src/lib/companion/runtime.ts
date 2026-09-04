@@ -2,39 +2,41 @@ import { compile } from "../compiler/compile";
 import type { BuildResult } from "../loom/build";
 import {
   kernelIdentity,
-  threadLoom,
   threadStatus,
   type Generation,
   type Identity,
   type Msg,
   type ThreadStatus,
 } from "../core";
-import { reweaveReadiness, type Readiness } from "../loom/reweave";
+import { reweaveReadiness, swapSupported, type Readiness } from "../loom/reweave";
 import { listGenerations } from "../loom/generations";
 import { COMPANION_SYSTEM, windowMessages } from "./persona";
 import { buildCatalog, helpText } from "../shuttle/catalog";
 
 /**
- * The body's seams (Phase 23 — Rebirth). Every one is a read or a ceremony
- * the Rust core already guards; the runtime only composes the sentence.
- * `commitsAhead` is how many genome commits the running generation lacks —
- * null when nobody can count (the default), and the consent line then simply
- * omits the count rather than inventing one.
+ * The body's seams (Phase 23 — Rebirth). Every one is a READ; nothing here
+ * moves the body. The runtime composes the sentence the owner reads, and the
+ * Companion carries the owner's answer to the protected orchestration.
+ *
+ * `commitsAhead` used to live here, hardwired to null: no command could ever
+ * count, so the consent line could never say "from 4 commits" and the spec's
+ * own example was unreachable. The parameter is gone rather than kept as a
+ * promise the code cannot keep — a `genome_ahead` Rust command would bring
+ * the count (and the line) back honestly.
  */
 export type RebirthDeps = {
   readiness: () => Promise<Readiness>;
-  commitsAhead: () => Promise<number | null>;
+  /** Is the binary swap implemented on this machine? See `swapSupported`. */
+  canSwap: () => boolean;
   threadStatus: () => Promise<ThreadStatus>;
-  threadLoom: () => Promise<void>;
   identity: () => Promise<Identity>;
   generations: () => Promise<Generation[]>;
 };
 
 const REBIRTH_DEFAULTS: RebirthDeps = {
   readiness: () => reweaveReadiness(),
-  commitsAhead: async () => null,
+  canSwap: () => swapSupported(),
   threadStatus,
-  threadLoom,
   identity: kernelIdentity,
   generations: listGenerations,
 };
@@ -57,6 +59,7 @@ export type CompanionDeps = {
  */
 export type ConsentTurn =
   | { kind: "consent"; consent: "reweave_consent"; line: string }
+  | { kind: "consent"; consent: "thread_consent"; line: string }
   | { kind: "consent"; consent: "generation_return_consent"; sha: string; line: string };
 
 export type CompanionTurn =
@@ -71,17 +74,54 @@ export type CompanionTurn =
 // ── Copy law (docs/BRAND.md): fact — hinge — remedy, lowercase, no exclamation ──
 
 const short = (sha: string) => sha.slice(0, 6);
+/** The branch a returned-to generation lands on is `generation/<sha7>`. */
+const sha7 = (sha: string) => sha.slice(0, 7);
 
 export const LINE_THREADING = "threading the loom — this needs the network once";
 export const LINE_NO_PREVIOUS = "there is no previous generation to return to";
+/**
+ * The third consent turn. Threading is the one step in an offline-and-yours
+ * computer that reaches the network, so the owner reads that fact BEFORE the
+ * fetch, not after it started. Word for word the line Settings already shows
+ * beside THREAD THE LOOM — one wording, enforced by a drift test.
+ */
+export const LINE_THREAD_CONSENT =
+  "threading needs the network once — after that LOOM weaves offline";
 export const missingToolLine = (tool: string, install: string) =>
   `the loom can't be threaded yet — ${tool} is missing: ${install}`;
-export const reweaveConsentLine = (genomeSha: string, commits: number | null) =>
-  commits === null
-    ? `weave generation ${short(genomeSha)} — LOOM will close and return`
-    : `weave generation ${short(genomeSha)} from ${commits} ${commits === 1 ? "commit" : "commits"} — LOOM will close and return`;
-export const returnConsentLine = (sha: string) =>
-  `return to generation ${short(sha)} — LOOM will close and return`;
+
+/**
+ * What a weave will actually do, said before it is agreed to. Three endings,
+ * because there are three truths:
+ *   - packaged on macOS — the swap happens: LOOM closes and returns;
+ *   - dev — `tauri dev` owns the binary, so the body stays (Settings' sentence);
+ *   - packaged elsewhere — `platform.rs` has no swap yet: the build and the
+ *     ledger still work, the body does not change.
+ */
+export const reweaveConsentLine = (
+  genomeSha: string,
+  mode: Identity["mode"],
+  canSwap: boolean,
+) => {
+  const head = `weave generation ${short(genomeSha)}`;
+  if (mode === "dev") return `${head} — in dev the body stays; restart tauri dev to become it`;
+  if (!canSwap) {
+    return `${head} — the swap is macOS-only in this generation; the build and the ledger still work, the body stays`;
+  }
+  return `${head} — LOOM will close and return`;
+};
+
+/** The same three truths for a return to a kept generation. */
+export const returnConsentLine = (sha: string, mode: Identity["mode"], canSwap: boolean) => {
+  const head = `return to generation ${short(sha)}`;
+  if (mode === "dev") {
+    return `${head} — in dev the body stays; the genome moves to generation/${sha7(sha)}`;
+  }
+  if (!canSwap) {
+    return `${head} — the swap is macOS-only in this generation; the genome moves, the body stays`;
+  }
+  return `${head} — LOOM will close and return`;
+};
 export const identityLine = (id: Identity) =>
   `generation ${id.generation === null ? "unwoven" : short(id.generation)} · ${id.mode} · ${id.threaded ? "threaded" : "not threaded"}`;
 
@@ -103,19 +143,24 @@ export async function handle(
       // presses REWEAVE in the Companion.
       const ready = await body.readiness();
       if (!ready.ok) return { kind: "reply", text: ready.reason };
-      const commits = await body.commitsAhead();
-      return { kind: "consent", consent: "reweave_consent", line: reweaveConsentLine(ready.genomeSha, commits) };
+      return {
+        kind: "consent",
+        consent: "reweave_consent",
+        line: reweaveConsentLine(ready.genomeSha, ready.mode, body.canSwap()),
+      };
     }
 
     case "thread": {
+      // Threading is the ceremony that reaches the network — once. It gets a
+      // card like the other two acts on the body, and the card carries the
+      // network line, so the owner reads it before anything is fetched.
       const status = await body.threadStatus();
       const missingName = status.missing[0];
       if (missingName !== undefined) {
         const tool = status.tools.find((t) => t.name === missingName);
         return { kind: "reply", text: missingToolLine(missingName, tool?.install ?? "see Settings") };
       }
-      await body.threadLoom();
-      return { kind: "reply", text: LINE_THREADING };
+      return { kind: "consent", consent: "thread_consent", line: LINE_THREAD_CONSENT };
     }
 
     case "identity": {
@@ -126,11 +171,12 @@ export async function handle(
     case "generation_return": {
       const previous = (await body.generations()).find((g) => g.isPrevious);
       if (!previous) return { kind: "reply", text: LINE_NO_PREVIOUS };
+      const id = await body.identity();
       return {
         kind: "consent",
         consent: "generation_return_consent",
         sha: previous.sha,
-        line: returnConsentLine(previous.sha),
+        line: returnConsentLine(previous.sha, id.mode, body.canSwap()),
       };
     }
 

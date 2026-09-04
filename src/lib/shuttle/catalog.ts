@@ -138,7 +138,7 @@ function systemEntries(ctx: CatalogCtx): CatalogEntry[] {
   // happens; thread and identity are a ceremony and a read.
   const rebirth: [string, readonly string[], string][] = [
     ["system-reweave", REWEAVE_PHRASES, "weave a new generation from the genome — asks first"],
-    ["system-thread", THREAD_PHRASES, "find the machine's tools and warm the build — network once"],
+    ["system-thread", THREAD_PHRASES, "find the machine's tools and warm the build — asks first, network once"],
     ["system-identity", IDENTITY_PHRASES, "generation · mode · threaded"],
     ["system-generation-return", GENERATION_RETURN_PHRASES, "become the previous body again — asks first"],
   ];

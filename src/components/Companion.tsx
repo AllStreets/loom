@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelDiscard, kernelIdentity, type OrganFile, type Msg, type ChatOpts } from "../lib/core";
+import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelDiscard, kernelIdentity, threadLoom, type OrganFile, type Msg, type ChatOpts } from "../lib/core";
 import { startReweave } from "../lib/loom/reweave";
 import { returnToGeneration } from "../lib/loom/generations";
 import { draftKernelEdit, resolveSelfEditTarget, type KernelBuildEvent } from "../lib/loom/kernelBuild";
 import type { KernelReviewProposal } from "./chrome/KernelDiff";
+import ConsentPanel, { type ConsentKind } from "./chrome/ConsentCard";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
-import { handle, type CompanionTurn } from "../lib/companion/runtime";
+import { handle, LINE_THREADING, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
 import { getSetting, setSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
@@ -62,11 +63,13 @@ type SelfEditBlockedCard = {
 /**
  * A consent card (Phase 23 — Rebirth): the body changes only after the owner
  * presses the affirmative. `settled` remembers the choice so the actions
- * vanish and nothing can start twice.
+ * vanish; the invariant that nothing starts twice is held by a ref (see
+ * `settledConsents`), because two clicks inside one batched React tick both
+ * read the same stale `settled: null`.
  */
 type ConsentCard = {
   kind: "consent";
-  consent: "reweave_consent" | "generation_return_consent";
+  consent: ConsentKind;
   sha?: string;
   line: string;
   settled: null | "confirmed" | "declined";
@@ -583,6 +586,11 @@ function SelfEditBlockedView() {
   );
 }
 
+/**
+ * The conversation's wrapper around the shared consent card — the same card
+ * chrome renders when an ORGAN asks (see chrome/BodyRequest.tsx), so there is
+ * one surface for "may I change the body" no matter who asked.
+ */
 function ConsentCardView({
   item,
   onChoose,
@@ -590,69 +598,15 @@ function ConsentCardView({
   item: ConsentCard;
   onChoose: (id: string, confirmed: boolean) => void;
 }) {
-  const affirmative = item.consent === "reweave_consent" ? "REWEAVE" : "RETURN";
-  const label = item.consent === "reweave_consent" ? "reweave" : "generations";
-  const actionStyle: React.CSSProperties = {
-    fontFamily: "var(--f-mono)",
-    fontSize: 11,
-    letterSpacing: ".12em",
-    textTransform: "uppercase",
-    padding: "6px 12px",
-    borderRadius: 4,
-    cursor: "pointer",
-    background: "transparent",
-  };
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
       <CyanDot />
-      <div
-        data-testid={`consent-${item.consent}`}
-        style={{
-          flex: 1,
-          background: "var(--accent-soft)",
-          border: "1px solid rgba(34,211,238,0.22)",
-          borderRadius: 8,
-          padding: "12px 14px",
-        }}
-      >
-        <div
-          style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10,
-            letterSpacing: ".14em",
-            textTransform: "uppercase",
-            color: "var(--accent)",
-            marginBottom: 6,
-          }}
-        >
-          {label}
-        </div>
-        <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5, marginBottom: 10 }}>
-          {item.line}
-        </div>
-        {item.settled === null ? (
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => onChoose(item.id, true)}
-              style={{ ...actionStyle, color: "var(--accent)", border: "1px solid var(--accent)" }}
-            >
-              {affirmative}
-            </button>
-            <button
-              type="button"
-              onClick={() => onChoose(item.id, false)}
-              style={{ ...actionStyle, color: "var(--t3)", border: "1px solid var(--line)" }}
-            >
-              NOT NOW
-            </button>
-          </div>
-        ) : (
-          <div style={{ ...monoSmall, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".12em", fontSize: 10 }}>
-            {item.settled === "confirmed" ? affirmative : "not now"}
-          </div>
-        )}
-      </div>
+      <ConsentPanel
+        consent={item.consent}
+        line={item.line}
+        settled={item.settled}
+        onChoose={(confirmed) => onChoose(item.id, confirmed)}
+      />
     </div>
   );
 }
@@ -724,6 +678,11 @@ export default function Companion() {
 
   // Each active review card gets a resolve fn keyed by its card id
   const reviewResolvers = useRef<Map<string, (approved: boolean) => void>>(new Map());
+
+  // Consent card ids whose answer has already been taken. A ref, not state:
+  // the "nothing starts twice" guard has to be true synchronously, and two
+  // clicks in one batched tick would both read the same stale `settled: null`.
+  const settledConsents = useRef<Set<string>>(new Set());
 
   // Ref for the active event-log card id (so we can append to it)
   const activeLogId = useRef<string | null>(null);
@@ -1170,10 +1129,18 @@ export default function Companion() {
    * affirmative can never fire twice; only then does the protected
    * orchestration run. A refusal is spoken as its own calm line — the
    * companion never pretends a weave began.
+   *
+   * The "settles first" guard is a REF, not the rendered card: `settled` lives
+   * in state, and two clicks inside one batched React tick both read the same
+   * stale `null` and both start a weave. The ref is read and written in the
+   * same synchronous breath as the call, so the second click finds the id
+   * already spent.
    */
   function chooseConsent(id: string, confirmed: boolean) {
+    if (settledConsents.current.has(id)) return;
     const card = items.find((i): i is ConsentCard => i.kind === "consent" && i.id === id);
     if (!card || card.settled !== null) return;
+    settledConsents.current.add(id);
     setItems((prev) =>
       prev.map((i) =>
         i.kind === "consent" && i.id === id
@@ -1187,6 +1154,9 @@ export default function Companion() {
         if (card.consent === "reweave_consent") {
           const out = await startReweave();
           if (!out.ok) appendItem({ kind: "bubble", role: "assistant", text: out.reason, id: nextId() });
+        } else if (card.consent === "thread_consent") {
+          await threadLoom();
+          appendItem({ kind: "bubble", role: "assistant", text: LINE_THREADING, id: nextId() });
         } else if (card.sha) {
           await returnToGeneration(card.sha);
         }
