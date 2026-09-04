@@ -309,8 +309,22 @@ pub fn cancel_with(state: &ReweaveState) -> Result<(), LoomError> {
     Ok(())
 }
 
-fn short(sha: &str) -> &str {
-    &sha[..7.min(sha.len())]
+fn short(sha: &str) -> String {
+    // CHAR boundaries, not bytes. `sha` reaches this from `generations_return`,
+    // which takes its argument straight from the webview — a byte slice at 7
+    // panicked the command on any multi-byte input.
+    sha.chars().take(7).collect()
+}
+
+/// A sha is 7–40 lowercase hex characters and nothing else.
+///
+/// `generations_return` takes this string from the webview and it becomes a
+/// path component (`generations/<sha>/loom`, whose `argv[0]` is spawned) and a
+/// git start-point. `checked_cwd` constrains a cwd, never an argv[0]; git's own
+/// ref validation is what refuses `..` today, and that is a coincidence rather
+/// than a wall. This is the wall.
+fn is_sha(s: &str) -> bool {
+    (7..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
 }
 
 // ── The job ───────────────────────────────────────────────────────────────────
@@ -666,6 +680,11 @@ pub fn generations_return(app: tauri::AppHandle, sha: String) -> Result<(), Loom
         (Mode::Packaged, Some(l)) => l,
         _ => return Err(LoomError::Unsupported(platform::UNSUPPORTED_SWAP.into())),
     };
+    if !is_sha(&sha) {
+        return Err(LoomError::Parse(
+            "that is not a generation — a generation is named by its sha".into(),
+        ));
+    }
     let current = generations::read(&home).current;
     check_return(generations::shelved_whole(&home, &sha), current.as_deref(), &sha)?;
     if !JOB.try_take() {
@@ -679,6 +698,38 @@ pub fn generations_return(app: tauri::AppHandle, sha: String) -> Result<(), Loom
 
 #[cfg(test)]
 mod tests {
+    /// `short` byte-sliced, so any multi-byte sha panicked the command that
+    /// takes its argument straight from the webview.
+    #[test]
+    fn short_never_panics_on_a_non_ascii_sha() {
+        assert_eq!(short("日本語日本語"), "日本語日本語");
+        assert_eq!(short("abcdef0123456789"), "abcdef0");
+        assert_eq!(short("abc"), "abc");
+        assert_eq!(short(""), "");
+    }
+
+    /// A generation is named by its sha. Anything else is refused before it can
+    /// become a path component whose `argv[0]` gets spawned, or a git
+    /// start-point.
+    #[test]
+    fn only_a_sha_names_a_generation() {
+        assert!(is_sha("abc1234"));
+        assert!(is_sha(&"a".repeat(40)));
+        for junk in [
+            "",
+            "abc12",                          // too short
+            &"a".repeat(41),                  // too long
+            "../../../../tmp/evil",           // traversal
+            "ABC1234",                        // uppercase
+            "main",                           // a ref name
+            "abc123g",                        // not hex
+            "日本語日本語日本",
+            "abc1234\n",
+        ] {
+            assert!(!is_sha(junk), "must refuse {junk:?}");
+        }
+    }
+
     use super::*;
     use crate::generations;
     use std::collections::HashMap;

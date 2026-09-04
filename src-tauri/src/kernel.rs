@@ -99,6 +99,19 @@ const PROTECTED_PREFIXES: &[&str] = &[
     // and returns bodies; a self-edit here could weave without consent.
     "src/lib/loom/reweave",           // reweave orchestration (+ tests)
     "src/lib/loom/generations",       // generations orchestration (+ tests)
+    // Round-1 review: the rule is "anything that implements a wall", and these
+    // implement the walls around the body. `api` holds the `need()` grant seam
+    // every organ power passes through; `budgets` meters it; `validate` decides
+    // which powers a manifest may declare AND supplies the label the owner
+    // reads on the permission card; `chrome/reweave` is the only surface
+    // carrying CANCEL before the point of return; the settings seed is the only
+    // one offering the generations list — the road home. Protecting one caller
+    // of the orchestration above and not the others was the gap.
+    "src/lib/organs/api",             // the power grant seam (+ tests)
+    "src/lib/organs/budgets",         // the meter on that seam (+ tests)
+    "src/lib/loom/validate",          // manifest wall + the owner-facing labels
+    "src/components/chrome/reweave",  // the reweave card — CANCEL lives here
+    "src/organs/seeds/settings",      // the generations list: the road home
 ];
 
 /// tsconfig*.json — matched by name pattern (tsconfig.json, tsconfig.node.json…).
@@ -255,6 +268,29 @@ pub fn is_editable(rel: &str) -> bool {
 }
 
 // ── Source-repo resolution ────────────────────────────────────────────────────
+
+/// Re-check the whitelist against where a path ACTUALLY landed.
+///
+/// `is_editable` judges the path as spelled. Canonicalization then resolves
+/// symlinks — so a link inside the repo named `src/lib/foo.ts` pointing at
+/// `src-tauri/src/kernel.rs` would pass the spelled check and be written
+/// through to a protected file. The tree holds no symlinks today (`git
+/// ls-files -s` shows none), but that is an unstated invariant the whole
+/// whitelist rests on, so we re-derive the repo-relative path from the
+/// canonical one and judge THAT too. Deny wins, as everywhere else.
+fn assert_lands_editable(root: &Path, canon: &Path, rel: &str) -> Result<(), LoomError> {
+    let landed = canon
+        .strip_prefix(root)
+        .map_err(|_| LoomError::Parse(format!("path escapes source repo: {rel}")))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    if !is_editable(&landed) {
+        return Err(LoomError::Parse(format!(
+            "{rel} resolves to {landed}, which is not editable"
+        )));
+    }
+    Ok(())
+}
 
 /// Resolve the SOURCE repo root in DEV mode: the `override_opt` setting if a
 /// non-empty value is supplied, else the process cwd. Canonicalized, asserted
@@ -923,6 +959,7 @@ pub fn kernel_read(
     if !canon.starts_with(&root) {
         return Err(LoomError::Parse(format!("path escapes source repo: {norm}")));
     }
+    assert_lands_editable(&root, &canon, &norm)?;
     std::fs::read_to_string(&canon).map_err(|e| LoomError::NotFound(format!("read {norm}: {e}")))
 }
 
@@ -1401,6 +1438,7 @@ fn apply_inner(prop: &Proposal, message: &str) -> Result<(String, String), LoomE
         if !canon.starts_with(root) {
             return Err(LoomError::Parse(format!("path escapes source repo: {rel}")));
         }
+        assert_lands_editable(root, &canon, rel)?;
         let content = std::fs::read_to_string(&canon)
             .map_err(|e| LoomError::NotFound(format!("read {rel}: {e}")))?;
         let next = apply_exact_unique(&content, search, replace)?;
@@ -2098,9 +2136,41 @@ mod tests {
             "package-lock.json", // dependency lock
             "vite.config.ts",    // constructs the frontend build
         ];
+        // A symlink inside the repo, spelled as an editable path, must not be
+        // writable through to a protected file. The tree holds no symlinks —
+        // this proves the wall rather than the absence.
+        {
+            let (_d, root) = init_repo();
+            std::fs::create_dir_all(root.join("src/lib")).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(
+                root.join("src-tauri/src/kernel.rs"),
+                root.join("src/lib/innocent.ts"),
+            )
+            .unwrap();
+            std::fs::create_dir_all(root.join("src-tauri/src")).unwrap();
+            std::fs::write(root.join("src-tauri/src/kernel.rs"), "// the walls\n").unwrap();
+            let canon = root.join("src/lib/innocent.ts").canonicalize().unwrap();
+            assert!(
+                assert_lands_editable(&root, &canon, "src/lib/innocent.ts").is_err(),
+                "a link that lands on the safety core must be refused"
+            );
+            // The ordinary case still passes.
+            std::fs::write(root.join("src/lib/real.ts"), "export {}\n").unwrap();
+            let canon = root.join("src/lib/real.ts").canonicalize().unwrap();
+            assert!(assert_lands_editable(&root, &canon, "src/lib/real.ts").is_ok());
+        }
+
         // Phase 23 sweep: the protected TS orchestration prefixes and
         // `.cargo/config.toml` at any depth.
         for f in [
+            "src/lib/organs/api.ts",
+            "src/lib/organs/api.test.ts",
+            "src/lib/organs/budgets.ts",
+            "src/lib/loom/validate.ts",
+            "src/components/chrome/Reweave.tsx",
+            "src/components/chrome/Reweave.test.tsx",
+            "src/organs/seeds/settings.ts",
             "src/lib/loom/reweave.ts",
             "src/lib/loom/reweave.test.ts",
             "src/lib/loom/generations.ts",
