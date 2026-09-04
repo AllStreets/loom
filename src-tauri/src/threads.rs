@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::error::LoomError;
-use crate::loomhome::Home;
+use crate::loomhome::{Home, Mode};
 
 // ── The tool table ────────────────────────────────────────────────────────────
 
@@ -433,6 +433,36 @@ fn tail_of(text: &str) -> Vec<String> {
     lines[skip..].iter().map(|l| l.to_string()).collect()
 }
 
+/// Where the ceremony works, per mode (spec §Modes).
+///
+/// Dev is the checkout LOOM is running from — `resolve_source_repo_at`
+/// canonicalizes it and asserts it is a git work dir. Packaged is
+/// `loomhome/source`, named rather than resolved: on the first threading it
+/// does not exist yet — seed is the step that creates it — and a resolution
+/// that canonicalizes would refuse the ceremony before it could start.
+///
+/// `loomhome/source` in dev is nobody's: seed never writes it, so binding it
+/// for both modes made every dev threading die in `checked_cwd` and left
+/// `threaded` false forever — and with it every reweave the spec calls "how
+/// CI and the owner prove it".
+pub fn ceremony_source(home: &Home, mode: Mode) -> Result<PathBuf, LoomError> {
+    match mode {
+        Mode::Packaged => Ok(home.source()),
+        Mode::Dev => crate::kernel::resolve_source_repo_at(mode, None, Some(home)),
+    }
+}
+
+/// The allowed root for every spawn in the ceremony. Packaged: loomhome,
+/// which contains the source and the vendor and target dirs. Dev: the
+/// checkout itself — it lives wherever the owner keeps it, and a root that
+/// does not contain the cwd refuses every spawn.
+fn ceremony_root(home: &Home, mode: Mode, source: &Path) -> PathBuf {
+    match mode {
+        Mode::Packaged => home.root.clone(),
+        Mode::Dev => source.to_path_buf(),
+    }
+}
+
 /// The vendored-source replacement written after `cargo vendor`. PROTECTED
 /// in the genome (kernel.rs) — a self-edit here could point cargo anywhere.
 fn cargo_config(vendor: &Path) -> String {
@@ -444,6 +474,8 @@ fn cargo_config(vendor: &Path) -> String {
 
 /// The ceremony, factored so a test can stage fake tools in a tempdir.
 ///
+/// - `source` is the genome to work in: the checkout in dev, `loomhome/source`
+///   in packaged mode (`ceremony_source`).
 /// - `tools(name)` resolves a tool to its absolute path (`tool_path` in the
 ///   app; a closure over fakes in tests).
 /// - `exe` is the running executable, shelved as generation 0 at register.
@@ -456,7 +488,8 @@ fn cargo_config(vendor: &Path) -> String {
 /// event has already been emitted by then.
 pub fn run_ceremony(
     home: &Home,
-    mode: crate::loomhome::Mode,
+    mode: Mode,
+    source: &Path,
     tools: &dyn Fn(&str) -> Option<PathBuf>,
     exe: &Path,
     bundle: Option<&Path>,
@@ -469,7 +502,7 @@ pub fn run_ceremony(
         tools: vec![],
         steps: ThreadSteps::default(),
     });
-    match ceremony_steps(home, mode, tools, exe, bundle, emit, &mut t) {
+    match ceremony_steps(home, mode, source, tools, exe, bundle, emit, &mut t) {
         Ok(()) => {
             emit("done", "the loom is threaded — it weaves offline from here.", &[]);
             Ok(())
@@ -510,9 +543,11 @@ fn step_failed(what: &str, out: &crate::exec::ExecOut) -> Failed {
     Failed { err: LoomError::Parse(format!("{what} failed (exit {})", out.code)), tail }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ceremony_steps(
     home: &Home,
-    mode: crate::loomhome::Mode,
+    mode: Mode,
+    source: &Path,
     tools: &dyn Fn(&str) -> Option<PathBuf>,
     exe: &Path,
     bundle: Option<&Path>,
@@ -520,10 +555,9 @@ fn ceremony_steps(
     t: &mut Threads,
 ) -> Result<(), Failed> {
     use crate::exec::{run_checked_env, run_job_stream, JOB};
-    use crate::loomhome::Mode;
 
-    let root = home.root.clone();
-    let source = home.source();
+    let root = ceremony_root(home, mode, source);
+    let source = source.to_path_buf();
     let core = source.join("src-tauri");
     let sha = crate::loomhome::genome_sha();
     let none: &[String] = &[];
@@ -698,13 +732,22 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
     }
     let mode = crate::loomhome::mode();
     let bundle = match mode {
-        crate::loomhome::Mode::Packaged => home.genome_bundle_resource(&app).ok(),
-        crate::loomhome::Mode::Dev => None,
+        Mode::Packaged => home.genome_bundle_resource(&app).ok(),
+        Mode::Dev => None,
     };
-    let exe = std::env::current_exe().map_err(|e| {
-        crate::exec::JOB.release();
-        LoomError::NotFound(format!("current exe: {e}"))
-    })?;
+    let started = (|| {
+        let source = ceremony_source(&home, mode)?;
+        let exe = std::env::current_exe()
+            .map_err(|e| LoomError::NotFound(format!("current exe: {e}")))?;
+        Ok::<(PathBuf, PathBuf), LoomError>((source, exe))
+    })();
+    let (source, exe) = match started {
+        Ok(pair) => pair,
+        Err(e) => {
+            crate::exec::JOB.release();
+            return Err(e);
+        }
+    };
     std::thread::spawn(move || {
         let tools = |name: &str| tool_path(&home, name);
         let mut emit = |step: &str, detail: &str, tail: &[String]| {
@@ -713,7 +756,7 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
                 ThreadEvent { step: step.into(), detail: detail.into(), tail: tail.to_vec() },
             );
         };
-        let _ = run_ceremony(&home, mode, &tools, &exe, bundle.as_deref(), &mut emit);
+        let _ = run_ceremony(&home, mode, &source, &tools, &exe, bundle.as_deref(), &mut emit);
         crate::exec::JOB.release();
     });
     Ok(())
@@ -981,6 +1024,10 @@ mod tests {
     struct Stage {
         _dir: tempfile::TempDir,
         home: Home,
+        /// The dev checkout — where the owner keeps it, NOT under loomhome.
+        /// `loomhome/source` is seed's work, and seed runs in packaged mode
+        /// only; a fixture that pre-creates it hides that dev has no source.
+        source: PathBuf,
         log: PathBuf,
         markers: PathBuf,
         npm: PathBuf,
@@ -1008,7 +1055,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("loom");
         let home = Home::at(root.clone());
-        std::fs::create_dir_all(home.source().join("src-tauri")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let source = dir.path().join("checkout");
+        std::fs::create_dir_all(source.join("src-tauri")).unwrap();
         let log = dir.path().join("calls.log");
         let markers = dir.path().join("markers");
         std::fs::create_dir_all(&markers).unwrap();
@@ -1017,7 +1066,7 @@ mod tests {
         let cargo = fake_tool(&bin, "cargo", &log, &markers, cargo_extra);
         let exe = dir.path().join("loom-body");
         std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
-        Stage { _dir: dir, home, log, markers, npm, cargo, exe }
+        Stage { _dir: dir, home, source, log, markers, npm, cargo, exe }
     }
 
     #[cfg(unix)]
@@ -1037,7 +1086,8 @@ mod tests {
             let tools = self.tools();
             let res = run_ceremony(
                 &self.home,
-                crate::loomhome::Mode::Dev,
+                Mode::Dev,
+                &self.source,
                 &tools,
                 &self.exe,
                 None,
@@ -1101,6 +1151,13 @@ fi"#;
             .expect("a warm event carries a 3-line tail");
         assert_eq!(warm_tail, vec!["Compiling b", "Compiling c", "Compiling d"]);
 
+        // Dev works in the checkout; loomhome/source is seed's, and seed
+        // does not run in dev. Nothing may have created it.
+        assert!(
+            !st.home.source().exists(),
+            "dev threading must never look for a source under loomhome"
+        );
+
         // Stamped: every marker, threaded, sha + time recorded.
         let t = read(&st.home).unwrap();
         assert!(t.threaded);
@@ -1119,6 +1176,22 @@ fi"#;
         let meta: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(st.home.generation_meta(sha)).unwrap()).unwrap();
         assert_eq!(meta["reason"], "threaded");
+    }
+
+    #[test]
+    fn the_source_and_the_root_are_resolved_per_mode() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        // Packaged names loomhome/source without asking whether it exists —
+        // on the first threading it does not, seed is what creates it.
+        assert!(!home.source().exists());
+        assert_eq!(ceremony_source(&home, Mode::Packaged).unwrap(), home.source());
+        // Packaged spawns are contained by loomhome, which holds the source.
+        assert_eq!(ceremony_root(&home, Mode::Packaged, &home.source()), home.root);
+        // Dev's checkout lives wherever the owner keeps it, so the allowed
+        // root is the checkout — loomhome would refuse every spawn.
+        let checkout = d.path().join("checkout");
+        assert_eq!(ceremony_root(&home, Mode::Dev, &checkout), checkout);
     }
 
     #[cfg(unix)]
@@ -1177,7 +1250,7 @@ fi"#;
         let st = stage("", CARGO_BUILD_FAKE);
         let (res, _) = st.run();
         assert!(res.is_ok(), "{res:?}");
-        let cfg = std::fs::read_to_string(st.home.source().join(".cargo").join("config.toml")).unwrap();
+        let cfg = std::fs::read_to_string(st.source.join(".cargo").join("config.toml")).unwrap();
         let expected = format!(
             "[source.crates-io]\nreplace-with = \"vendored\"\n[source.vendored]\ndirectory = \"{}\"\n[net]\noffline = true\n",
             st.home.vendor().display()
@@ -1194,7 +1267,8 @@ fi"#;
         let none = |_: &str| None::<PathBuf>;
         let res = run_ceremony(
             &st.home,
-            crate::loomhome::Mode::Dev,
+            Mode::Dev,
+            &st.source,
             &none,
             &st.exe,
             None,
