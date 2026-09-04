@@ -297,6 +297,7 @@ impl Slot {
         self.lock().1 = None;
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn pid(&self) -> Option<u32> {
         self.lock().1
     }
@@ -379,6 +380,11 @@ impl Drop for SlotGuard<'_> {
 /// runs, instead of only at the end. Same containment, group kill, timeout
 /// and ring-capped capture. For the long steps whose progress the owner
 /// watches (a cargo build's "Compiling x/y" tail).
+/// Streaming with no job slot. Every production caller owns a job and uses
+/// `run_job_stream`; this is the same runner without the registration, kept as
+/// the honest base case and exercised by the tests that pin streaming, timeout
+/// and containment behaviour on their own.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn run_checked_env_stream(
     argv: &[&str],
     cwd: &Path,

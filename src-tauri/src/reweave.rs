@@ -595,7 +595,15 @@ pub fn releases_the_slot(fin: &Result<Finish, LoomError>) -> bool {
 
 /// Spawn the job thread; the slot is already ours. Releases it at the end —
 /// except on the handover, which keeps it until the app exits.
-fn spawn_job(app: tauri::AppHandle, home: Home, mode: Mode, source: PathBuf, layout: Option<AppLayout>, kind: Kind) {
+fn spawn_job(
+    app: tauri::AppHandle,
+    home: Home,
+    mode: Mode,
+    source: PathBuf,
+    layout: Option<AppLayout>,
+    kind: Kind,
+    guard: crate::exec::SlotGuard<'static>,
+) {
     use tauri::Emitter;
     ACTIVE.store(true, Ordering::SeqCst);
     std::thread::spawn(move || {
@@ -615,14 +623,21 @@ fn spawn_job(app: tauri::AppHandle, home: Home, mode: Mode, source: PathBuf, lay
         let fin = run_job(&ctx, kind, &mut ExecRunner, &mut emit);
         ACTIVE.store(false, Ordering::SeqCst);
         if releases_the_slot(&fin) {
-            JOB.release();
+            drop(guard);
         } else {
             // The card has its line; the warden is waiting for this pid. The
-            // slot is NOT given back: nothing may start a second swap over
-            // the one already armed in the seconds before we exit.
+            // slot is NOT given back: nothing may start a second swap over the
+            // one already armed in the seconds before we exit. Forgetting the
+            // guard is how "held until the process dies" is spelled — process
+            // exit is the release.
+            std::mem::forget(guard);
             std::thread::sleep(RELAUNCH_GRACE);
             app.exit(0);
         }
+        // A panic anywhere in run_job unwinds THROUGH the guard, so the slot
+        // comes back and LOOM can be asked to weave again. Before the guard,
+        // a panicking weave wedged every later threading and reweave until
+        // the app was restarted.
     });
 }
 
@@ -631,19 +646,14 @@ fn spawn_job(app: tauri::AppHandle, home: Home, mode: Mode, source: PathBuf, lay
 #[tauri::command]
 pub fn reweave_start(app: tauri::AppHandle, force: bool) -> Result<(), LoomError> {
     let (home, mode, source, layout) = ctx_for(&app)?;
-    if !JOB.try_take() {
-        return Err(LoomError::Parse(IN_FLIGHT.into()));
-    }
-    let checked = (|| {
-        let head = kernel::head_sha(&source)?;
-        let current = generations::read(&home).current;
-        check_start(loomhome::read_threaded(&home), mode, &head, current.as_deref(), force)
-    })();
-    if let Err(e) = checked {
-        JOB.release();
-        return Err(e);
-    }
-    spawn_job(app, home, mode, source, layout, Kind::Weave);
+    let guard = crate::exec::SlotGuard::take(&JOB)
+        .ok_or_else(|| LoomError::Parse(IN_FLIGHT.into()))?;
+    // Every early return from here drops the guard, so a refused precondition
+    // can never leave the slot held.
+    let head = kernel::head_sha(&source)?;
+    let current = generations::read(&home).current;
+    check_start(loomhome::read_threaded(&home), mode, &head, current.as_deref(), force)?;
+    spawn_job(app, home, mode, source, layout, Kind::Weave, guard);
     Ok(())
 }
 
@@ -687,10 +697,9 @@ pub fn generations_return(app: tauri::AppHandle, sha: String) -> Result<(), Loom
     }
     let current = generations::read(&home).current;
     check_return(generations::shelved_whole(&home, &sha), current.as_deref(), &sha)?;
-    if !JOB.try_take() {
-        return Err(LoomError::Parse(IN_FLIGHT.into()));
-    }
-    spawn_job(app, home, mode, source, Some(layout), Kind::Return { sha });
+    let guard = crate::exec::SlotGuard::take(&JOB)
+        .ok_or_else(|| LoomError::Parse(IN_FLIGHT.into()))?;
+    spawn_job(app, home, mode, source, Some(layout), Kind::Return { sha }, guard);
     Ok(())
 }
 
