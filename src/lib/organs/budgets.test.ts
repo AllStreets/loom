@@ -10,10 +10,13 @@ function fixedClock(start = 0) {
 }
 
 describe("POWER_BUDGETS", () => {
-  it("declares the two budgeted powers with the spec limits", () => {
-    expect(Object.keys(POWER_BUDGETS).sort()).toEqual(["notify", "voice"]);
+  it("declares the three budgeted powers with the spec limits", () => {
+    expect(Object.keys(POWER_BUDGETS).sort()).toEqual(["notify", "self", "voice"]);
     expect(POWER_BUDGETS.voice).toEqual({ capacity: 1, windowMs: 30_000 });
     expect(POWER_BUDGETS.notify).toEqual({ capacity: 6, windowMs: 3_600_000 });
+    // self actions (thread · reweave · returnTo) each close or rebuild LOOM —
+    // a runaway organ gets three a minute, not a loop.
+    expect(POWER_BUDGETS.self).toEqual({ capacity: 3, windowMs: 60_000 });
   });
 });
 

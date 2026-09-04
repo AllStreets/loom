@@ -224,6 +224,51 @@ pub struct Identity {
     pub generation: Option<String>,
     pub threaded: bool,
     pub loomhome: String,
+    /// Bytes on disk under loomhome (vendor + warm target run to several GB).
+    /// A bounded walk — see `loomhome_bytes` — so the number is honest, never
+    /// a hang.
+    pub loomhome_bytes: u64,
+}
+
+/// The most directory entries `loomhome_bytes` will visit. A warm cargo
+/// target holds tens of thousands of files; this cap keeps `kernel_identity`
+/// bounded even if something pathological grows under loomhome. Past the cap
+/// the number under-reports — Settings says "uses" not "is exactly".
+pub const LOOMHOME_WALK_CAP: usize = 200_000;
+
+/// Sum the sizes of regular files under `root`, iteratively, skipping symlinks
+/// (never followed — a link out of loomhome must not count or loop) and
+/// stopping after `LOOMHOME_WALK_CAP` entries. A missing root is 0.
+pub fn loomhome_bytes(root: &Path) -> u64 {
+    walk_bytes(root, LOOMHOME_WALK_CAP)
+}
+
+fn walk_bytes(root: &Path, cap: usize) -> u64 {
+    let mut total: u64 = 0;
+    let mut seen: usize = 0;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > cap {
+                return total;
+            }
+            // symlink_metadata never follows the link (DirEntry::metadata
+            // may, depending on the platform).
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
+            let ft = meta.file_type();
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    total
 }
 
 /// The ledger's `current`, read minimally as JSON. The full `Ledger` type
@@ -256,11 +301,12 @@ pub fn identity(home: &Home) -> Identity {
         generation: read_generation(home),
         threaded: read_threaded(home),
         loomhome: home.root.to_string_lossy().into_owned(),
+        loomhome_bytes: loomhome_bytes(&home.root),
     }
 }
 
-/// `{ mode, genomeSha, generation, threaded, loomhome }` — read by the
-/// Settings organ and the Shuttle ("which generation is this").
+/// `{ mode, genomeSha, generation, threaded, loomhome, loomhomeBytes }` —
+/// read by the Settings organ and the Shuttle ("which generation is this").
 #[tauri::command]
 pub fn kernel_identity(app: tauri::AppHandle) -> Result<Identity, LoomError> {
     let home = Home::from_app(&app)?;
@@ -312,8 +358,11 @@ mod tests {
             generation: Some("deadbeef".into()),
             threaded: true,
             loomhome: "/tmp/loom".into(),
+            loomhome_bytes: 1_234,
         };
         let v = serde_json::to_value(&id).unwrap();
+        assert_eq!(v["loomhomeBytes"], 1_234);
+        assert!(v.get("loomhome_bytes").is_none(), "snake_case must not leak");
         assert_eq!(v["mode"], "packaged");
         assert_eq!(v["genomeSha"], "deadbeef");
         assert_eq!(v["generation"], "deadbeef");
@@ -358,6 +407,48 @@ mod tests {
             s == "unknown" || (s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())),
             "got {s}"
         );
+    }
+
+    // ── loomhome_bytes ───────────────────────────────────────────────────────
+
+    #[test]
+    fn loomhome_bytes_sums_regular_files_and_skips_symlinks() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("home");
+        std::fs::create_dir_all(root.join("vendor").join("deep")).unwrap();
+        std::fs::write(root.join("a.bin"), vec![0u8; 100]).unwrap();
+        std::fs::write(root.join("vendor").join("b.bin"), vec![0u8; 250]).unwrap();
+        std::fs::write(root.join("vendor").join("deep").join("c.bin"), vec![0u8; 50]).unwrap();
+        // A symlink to a big file OUTSIDE the root must not be followed or counted.
+        let outside = d.path().join("outside.bin");
+        std::fs::write(&outside, vec![0u8; 10_000]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, root.join("link.bin")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(d.path(), root.join("loop")).unwrap();
+        assert_eq!(loomhome_bytes(&root), 400);
+        let h = Home::at(root);
+        assert_eq!(identity(&h).loomhome_bytes, 400);
+    }
+
+    #[test]
+    fn loomhome_bytes_of_a_missing_root_is_zero() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(loomhome_bytes(&d.path().join("absent")), 0);
+    }
+
+    #[test]
+    fn loomhome_bytes_walk_is_bounded() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().to_path_buf();
+        for i in 0..20 {
+            std::fs::write(root.join(format!("f{i}")), vec![0u8; 10]).unwrap();
+        }
+        // With a cap of 5 entries the walk stops early and under-reports —
+        // honestly bounded, never unbounded.
+        let capped = walk_bytes(&root, 5);
+        assert!(capped <= 50, "capped walk counted {capped}");
+        assert_eq!(walk_bytes(&root, 1_000), 200);
     }
 
     // ── seed_source ──────────────────────────────────────────────────────────

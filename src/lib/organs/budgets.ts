@@ -17,6 +17,7 @@ export type BucketSpec = { capacity: number; windowMs: number };
 export const POWER_BUDGETS = {
   voice: { capacity: 1, windowMs: 30_000 },        // 1 utterance / 30s
   notify: { capacity: 6, windowMs: 3_600_000 },    // 6 notices / hour
+  self: { capacity: 3, windowMs: 60_000 },         // 3 body actions (thread · reweave · return) / minute
 } as const satisfies Record<string, BucketSpec>;
 
 export type BudgetedPower = keyof typeof POWER_BUDGETS;

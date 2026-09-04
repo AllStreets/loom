@@ -7,6 +7,7 @@ const MANIFEST = JSON.stringify({
   description: "Voice, appearance, and building preferences.",
   version: 1,
   permissions: ["settings"],
+  powers: ["self"],
 });
 
 const ORGAN_JS = `export default {
@@ -33,6 +34,7 @@ const ORGAN_JS = `export default {
     sidebar.style.borderRight = "1px solid rgba(255,255,255,.08)";
 
     var NAV_ITEMS = [
+      { label: "LOOM", page: "loom", action: "page-loom" },
       { label: "Voice", page: "voice", action: "page-voice" },
       { label: "Models", page: "models", action: "page-models" },
       { label: "Appearance", page: "appearance", action: "page-appearance" },
@@ -149,6 +151,426 @@ const ORGAN_JS = `export default {
     content.style.padding = "12px 16px";
 
     var pages = {};
+
+    // ========================================================================
+    // PAGE: LOOM — the body, the genome, the tools (Rebirth)
+    // ========================================================================
+    var self = loom.self;
+    var loomPage = document.createElement("div");
+    loomPage.dataset.testid = "loom-page";
+    pages["loom"] = loomPage;
+
+    loomPage.appendChild(ui.heading("LOOM", "the body, the genome, and the tools that weave them."));
+
+    function sha7(s) { return s ? String(s).slice(0, 7) : "none"; }
+    function gbOf(bytes) { return (Number(bytes || 0) / 1e9).toFixed(1); }
+    function relTime(iso) {
+      var then = Date.parse(iso);
+      if (isNaN(then)) return "at an unknown time";
+      var ms = Date.now() - then;
+      if (ms < 60000) return "just now";
+      if (ms < 3600000) return Math.floor(ms / 60000) + "m ago";
+      if (ms < 86400000) return Math.floor(ms / 3600000) + "h ago";
+      return Math.floor(ms / 86400000) + "d ago";
+    }
+    function monoLabel(text, color) {
+      var s = document.createElement("span");
+      s.style.fontFamily = "monospace";
+      s.style.fontSize = "11px";
+      s.style.letterSpacing = ".08em";
+      s.style.textTransform = "uppercase";
+      s.style.color = color || ui.tokens.t3;
+      s.textContent = text;
+      return s;
+    }
+    function quiet(text, color) {
+      var d = document.createElement("div");
+      d.style.fontSize = "12px";
+      d.style.lineHeight = "1.5";
+      d.style.color = color || ui.tokens.t3;
+      d.textContent = text;
+      return d;
+    }
+    function selfReason(err) {
+      var m = String(err && err.message || err);
+      if (m.indexOf('permission "self"') !== -1 || !self) return "the self power isn't granted — approve it in the organ's POWERS row";
+      if (m.indexOf("desktop shell") !== -1) return "this surface needs the desktop shell";
+      return m.replace(/^(http|timeout|parse|git|not found|unsupported): */i, "");
+    }
+    function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+    // -- identity -----------------------------------------------------------------
+    var identityBlock = document.createElement("div");
+    identityBlock.dataset.testid = "loom-identity";
+    identityBlock.style.marginTop = "10px";
+    identityBlock.style.marginBottom = "12px";
+    identityBlock.appendChild(quiet("reading the body."));
+    loomPage.appendChild(identityBlock);
+
+    // -- reweave (shown when threaded and the genome is ahead of the body) --------
+    var reweaveWrap = document.createElement("div");
+    reweaveWrap.style.marginBottom = "18px";
+    var reweaveBtn = ui.button("REWEAVE", { variant: "primary", action: "self-reweave" });
+    var reweaveConfirm = document.createElement("div");
+    reweaveConfirm.dataset.testid = "loom-reweave-confirm";
+    reweaveConfirm.style.display = "none";
+    reweaveConfirm.style.gap = "8px";
+    reweaveConfirm.style.alignItems = "center";
+    reweaveConfirm.style.flexWrap = "wrap";
+    var reweaveConsent = document.createElement("span");
+    reweaveConsent.style.fontSize = "12px";
+    reweaveConsent.style.color = ui.tokens.t2;
+    var reweaveGo = ui.button("WEAVE", { variant: "primary", action: "self-reweave-confirm" });
+    var reweaveKeep = ui.button("KEEP", { variant: "ghost", action: "self-reweave-keep" });
+    reweaveConfirm.appendChild(reweaveConsent);
+    reweaveConfirm.appendChild(reweaveGo);
+    reweaveConfirm.appendChild(reweaveKeep);
+    var reweaveNote = quiet("");
+    reweaveNote.dataset.testid = "loom-reweave-note";
+    reweaveNote.style.marginTop = "6px";
+    reweaveWrap.appendChild(reweaveConfirm);
+    reweaveWrap.appendChild(reweaveNote);
+    loomPage.appendChild(reweaveWrap);
+
+    var currentIdentity = null;
+
+    reweaveBtn.addEventListener("click", function() {
+      if (!currentIdentity) return;
+      var target = sha7(currentIdentity.genomeSha);
+      reweaveConsent.textContent = currentIdentity.mode === "dev"
+        ? "weave generation " + target + " — in dev the body stays; restart tauri dev to become it"
+        : "weave generation " + target + " — LOOM will close and return";
+      reweaveBtn.style.display = "none";
+      reweaveConfirm.style.display = "flex";
+    });
+    reweaveKeep.addEventListener("click", function() {
+      reweaveConfirm.style.display = "none";
+      reweaveBtn.style.display = "";
+    });
+    reweaveGo.addEventListener("click", function() {
+      reweaveGo.disabled = true;
+      reweaveNote.textContent = "";
+      Promise.resolve().then(function() { return self.reweave(); }).then(function(result) {
+        reweaveGo.disabled = false;
+        reweaveConfirm.style.display = "none";
+        if (result && result.ok) {
+          reweaveNote.style.color = ui.tokens.t2;
+          reweaveNote.textContent = "the weave has started — the reweave card carries the rail.";
+        } else {
+          reweaveBtn.style.display = "";
+          reweaveNote.style.color = ui.tokens.warn;
+          reweaveNote.textContent = (result && result.reason) || "the weave could not start — try again from Settings";
+        }
+      }).catch(function(err) {
+        reweaveGo.disabled = false;
+        reweaveConfirm.style.display = "none";
+        reweaveBtn.style.display = "";
+        reweaveNote.style.color = ui.tokens.warn;
+        reweaveNote.textContent = selfReason(err);
+      });
+    });
+
+    // -- threads: the tool table + THREAD THE LOOM --------------------------------
+    loomPage.appendChild(ui.section("Threads"));
+
+    var toolsWrap = document.createElement("div");
+    toolsWrap.dataset.testid = "loom-tools";
+    toolsWrap.style.marginBottom = "12px";
+    toolsWrap.appendChild(quiet("looking for the tools."));
+    loomPage.appendChild(toolsWrap);
+
+    var threadWrap = document.createElement("div");
+    threadWrap.style.display = "none";
+    threadWrap.style.marginBottom = "18px";
+    var threadBtn = ui.button("THREAD THE LOOM", { variant: "primary", action: "self-thread" });
+    var threadNet = quiet("threading needs the network once — after that LOOM weaves offline.");
+    threadNet.style.marginTop = "6px";
+    var threadLog = document.createElement("div");
+    threadLog.dataset.testid = "loom-thread-log";
+    threadLog.style.display = "none";
+    threadLog.style.marginTop = "10px";
+    threadLog.style.padding = "8px 10px";
+    threadLog.style.borderRadius = "8px";
+    threadLog.style.border = "1px solid rgba(255,255,255,.08)";
+    threadLog.style.fontFamily = "monospace";
+    threadLog.style.fontSize = "11px";
+    threadLog.style.lineHeight = "1.6";
+    threadLog.style.maxHeight = "180px";
+    threadLog.style.overflowY = "auto";
+    threadWrap.appendChild(threadNet);
+    threadWrap.appendChild(threadLog);
+    loomPage.appendChild(threadWrap);
+
+    function logLine(text, color) {
+      threadLog.style.display = "block";
+      var line = document.createElement("div");
+      line.style.color = color || ui.tokens.t2;
+      line.textContent = text;
+      threadLog.appendChild(line);
+      threadLog.scrollTop = threadLog.scrollHeight;
+    }
+    function onThreadEvent(e) {
+      var step = String(e && e.step || "").toUpperCase();
+      var detail = String(e && e.detail || "");
+      var color = e && e.step === "failed" ? ui.tokens.warn : e && e.step === "done" ? ui.tokens.go : ui.tokens.t2;
+      logLine(step + " · " + detail, color);
+      var tail = (e && e.tail) || [];
+      for (var i = 0; i < tail.length; i++) logLine("  " + tail[i], ui.tokens.t3);
+    }
+
+    threadBtn.addEventListener("click", function() {
+      threadBtn.disabled = true;
+      clear(threadLog);
+      Promise.resolve().then(function() { return self.thread(onThreadEvent); }).then(function() {
+        threadBtn.disabled = false;
+        refreshLoomPage();
+      }).catch(function(err) {
+        threadBtn.disabled = false;
+        logLine(selfReason(err), ui.tokens.warn);
+      });
+    });
+
+    function renderTools(status) {
+      clear(toolsWrap);
+      var tools = (status && status.tools) || [];
+      var drifted = (status && status.drifted) || [];
+      var grid = document.createElement("div");
+      grid.style.display = "grid";
+      grid.style.marginTop = "8px";
+      grid.style.gridTemplateColumns = "88px minmax(90px, 1fr) minmax(0, 2fr)";
+      grid.style.columnGap = "12px";
+      grid.style.rowGap = "5px";
+      grid.style.alignItems = "baseline";
+      grid.appendChild(monoLabel("tool"));
+      grid.appendChild(monoLabel("version"));
+      grid.appendChild(monoLabel("path"));
+      for (var i = 0; i < tools.length; i++) {
+        var t = tools[i];
+        var present = !!t.path;
+        var row = document.createElement("div");
+        row.style.display = "contents";
+        row.dataset.testid = "loom-tool-" + t.name;
+        var nameEl = document.createElement("span");
+        nameEl.style.fontFamily = "monospace";
+        nameEl.style.fontSize = "12.5px";
+        nameEl.style.color = present ? ui.tokens.t1 : ui.tokens.warn;
+        nameEl.textContent = t.name;
+        var verEl = document.createElement("span");
+        verEl.style.fontSize = "12.5px";
+        verEl.style.color = present ? ui.tokens.t2 : ui.tokens.warn;
+        verEl.textContent = present ? (t.version || "present") : "missing";
+        if (present && drifted.indexOf(t.name) !== -1) verEl.textContent += " · changed since threading";
+        var pathEl = document.createElement("span");
+        pathEl.style.fontSize = "12px";
+        pathEl.style.fontFamily = "monospace";
+        pathEl.style.wordBreak = "break-all";
+        if (present) {
+          pathEl.style.color = ui.tokens.t3;
+          pathEl.textContent = t.path;
+        } else {
+          pathEl.dataset.testid = "loom-tool-install";
+          pathEl.style.color = ui.tokens.warn;
+          pathEl.textContent = t.install || "install it, then thread again";
+        }
+        row.appendChild(nameEl);
+        row.appendChild(verEl);
+        row.appendChild(pathEl);
+        grid.appendChild(row);
+      }
+      toolsWrap.appendChild(grid);
+      if (tools.length === 0) toolsWrap.appendChild(quiet("no tools reported yet."));
+    }
+
+    // -- generations --------------------------------------------------------------
+    loomPage.appendChild(ui.section("Generations"));
+    var gensWrap = document.createElement("div");
+    gensWrap.dataset.testid = "loom-generations";
+    gensWrap.style.marginTop = "4px";
+    gensWrap.style.marginBottom = "18px";
+    gensWrap.appendChild(quiet("reading the shelf."));
+    loomPage.appendChild(gensWrap);
+
+    function renderGenerations(list) {
+      clear(gensWrap);
+      if (!list || list.length === 0) {
+        gensWrap.appendChild(quiet("no generations yet — the first reweave weaves one."));
+        return;
+      }
+      for (var i = 0; i < list.length; i++) {
+        (function(g) {
+          var short = sha7(g.sha);
+          var row = document.createElement("div");
+          row.dataset.testid = "loom-generation-" + short;
+          row.style.padding = "7px 0";
+          row.style.borderBottom = "1px solid rgba(255,255,255,.06)";
+          var line = document.createElement("div");
+          line.style.display = "flex";
+          line.style.alignItems = "center";
+          line.style.gap = "10px";
+          line.style.flexWrap = "wrap";
+          var shaEl = document.createElement("span");
+          shaEl.style.fontFamily = "monospace";
+          shaEl.style.fontSize = "12.5px";
+          shaEl.style.color = g.isCurrent ? ui.tokens.accent : ui.tokens.t1;
+          shaEl.textContent = short;
+          line.appendChild(shaEl);
+          if (g.isCurrent) line.appendChild(ui.badge("CURRENT", "accent"));
+          else if (g.isPrevious) line.appendChild(ui.badge("PREVIOUS", "go"));
+          var desc = document.createElement("span");
+          desc.style.fontSize = "12px";
+          desc.style.color = ui.tokens.t2;
+          desc.style.flex = "1";
+          desc.style.minWidth = "0";
+          desc.textContent = "woven " + relTime(g.wovenAt) + " · " + (g.reason || "reweave") + " · " + (g.commitSubject || "unknown");
+          line.appendChild(desc);
+          row.appendChild(line);
+          if (!g.isCurrent) {
+            var ret = ui.button("RETURN", { variant: "ghost", action: "self-return-" + short });
+            ret.style.padding = "4px 10px";
+            ret.style.fontSize = "12px";
+            line.appendChild(ret);
+            var strip = document.createElement("div");
+            strip.dataset.testid = "loom-return-confirm";
+            strip.style.display = "none";
+            strip.style.gap = "8px";
+            strip.style.alignItems = "center";
+            strip.style.flexWrap = "wrap";
+            strip.style.marginTop = "6px";
+            var consent = document.createElement("span");
+            consent.style.fontSize = "12px";
+            consent.style.color = ui.tokens.t2;
+            var go = ui.button("RETURN", { variant: "primary", action: "self-return-confirm-" + short });
+            go.style.padding = "4px 10px";
+            go.style.fontSize = "12px";
+            var keep = ui.button("KEEP", { variant: "ghost", action: "self-return-keep-" + short });
+            keep.style.padding = "4px 10px";
+            keep.style.fontSize = "12px";
+            var note = quiet("");
+            note.style.marginTop = "4px";
+            strip.appendChild(consent);
+            strip.appendChild(go);
+            strip.appendChild(keep);
+            row.appendChild(strip);
+            row.appendChild(note);
+            ret.addEventListener("click", function() {
+              consent.textContent = currentIdentity && currentIdentity.mode === "dev"
+                ? "return to generation " + short + " — in dev the body stays; the genome moves to generation/" + short
+                : "return to generation " + short + " — LOOM will close and return";
+              strip.style.display = "flex";
+              ret.style.display = "none";
+            });
+            keep.addEventListener("click", function() {
+              strip.style.display = "none";
+              ret.style.display = "";
+            });
+            go.addEventListener("click", function() {
+              go.disabled = true;
+              note.textContent = "";
+              Promise.resolve().then(function() { return self.returnTo(g.sha); }).then(function() {
+                go.disabled = false;
+                strip.style.display = "none";
+                note.style.color = ui.tokens.t2;
+                note.textContent = "returning to " + short + " — the reweave card carries the rail.";
+              }).catch(function(err) {
+                go.disabled = false;
+                strip.style.display = "none";
+                ret.style.display = "";
+                note.style.color = ui.tokens.warn;
+                note.textContent = selfReason(err);
+              });
+            });
+          }
+          gensWrap.appendChild(row);
+        })(list[i]);
+      }
+    }
+
+    // -- reweave preference + storage ---------------------------------------------
+    loomPage.appendChild(ui.section("Reweave"));
+
+    var AUTO_KEY = "kernel.autoReweave";
+    function readAuto() {
+      try {
+        var v = settings.get(AUTO_KEY);
+        return v === "on" || v === "true" || v === "1";
+      } catch (e) {
+        return false;
+      }
+    }
+    var autoNote = quiet("");
+    autoNote.style.marginTop = "6px";
+    function writeAuto(on) {
+      autoNote.textContent = "";
+      try {
+        settings.set(AUTO_KEY, on ? "on" : "off");
+      } catch (e) {
+        try {
+          settings.set(AUTO_KEY, on ? "true" : "false");
+        } catch (e2) {
+          autoNote.style.color = ui.tokens.warn;
+          autoNote.textContent = "the preference could not be kept — " + String(e2 && e2.message || e2);
+        }
+      }
+    }
+    var autoToggle = ui.toggle("reweave automatically after an approved core edit — LOOM will close and return each time", readAuto(), writeAuto);
+    autoToggle.dataset.action = "self-autoreweave";
+    autoToggle.style.marginTop = "8px";
+    loomPage.appendChild(autoToggle);
+    loomPage.appendChild(autoNote);
+
+    var storageLine = quiet("measuring loomhome.");
+    storageLine.dataset.testid = "loom-storage";
+    storageLine.style.marginTop = "12px";
+    loomPage.appendChild(storageLine);
+
+    // -- fill ---------------------------------------------------------------------
+    function renderIdentity(id) {
+      clear(identityBlock);
+      identityBlock.appendChild(ui.keyval([
+        ["mode", id.mode],
+        ["generation", sha7(id.generation)],
+        ["genome", sha7(id.genomeSha)],
+        ["threaded", id.threaded ? "yes" : "no"],
+      ]));
+      // The actions exist only when they mean something: no REWEAVE button to
+      // press when there is nothing to weave, no THREAD button once threaded.
+      var ahead = id.threaded && id.generation !== id.genomeSha;
+      if (ahead && !reweaveBtn.parentNode) reweaveWrap.insertBefore(reweaveBtn, reweaveConfirm);
+      if (!ahead && reweaveBtn.parentNode) reweaveWrap.removeChild(reweaveBtn);
+      reweaveBtn.style.display = "";
+      reweaveConfirm.style.display = "none";
+      reweaveNote.style.color = ui.tokens.t3;
+      reweaveNote.textContent = ahead ? "" : id.threaded
+        ? "the body matches the genome — nothing new to weave."
+        : "thread the loom before the first weave.";
+      if (!id.threaded && !threadBtn.parentNode) threadWrap.insertBefore(threadBtn, threadNet);
+      if (id.threaded && threadBtn.parentNode) threadWrap.removeChild(threadBtn);
+      threadWrap.style.display = id.threaded ? "none" : "block";
+      storageLine.textContent = "loomhome uses " + gbOf(id.loomhomeBytes) + " GB (vendor + warm build)";
+    }
+
+    function refreshLoomPage() {
+      if (!self) {
+        clear(identityBlock);
+        identityBlock.appendChild(quiet(selfReason(null), ui.tokens.warn));
+        return;
+      }
+      Promise.resolve().then(function() { return self.identity(); }).then(function(id) {
+        currentIdentity = id;
+        renderIdentity(id);
+      }).catch(function(err) {
+        clear(identityBlock);
+        identityBlock.appendChild(quiet(selfReason(err), ui.tokens.warn));
+      });
+      Promise.resolve().then(function() { return self.threads(); }).then(renderTools).catch(function(err) {
+        clear(toolsWrap);
+        toolsWrap.appendChild(quiet(selfReason(err), ui.tokens.warn));
+      });
+      Promise.resolve().then(function() { return self.generations(); }).then(renderGenerations).catch(function(err) {
+        clear(gensWrap);
+        gensWrap.appendChild(quiet(selfReason(err), ui.tokens.warn));
+      });
+    }
 
     // ========================================================================
     // PAGE: Voice
@@ -755,7 +1177,8 @@ const ORGAN_JS = `export default {
     refreshInitBtns(settings.get("cockpit.initiative") || "on");
     refreshReviewBtns(settings.get("loom.reviewBeforeSave") || "0");
     refreshStatus();
-    showPage("voice");
+    refreshLoomPage();
+    showPage("loom");
   }
 };`;
 
@@ -924,6 +1347,52 @@ const TEST_JS = `export const tests = [
       assert(onBtn !== null, "initiative-on button exists");
       onBtn.click();
       assert(loom.settings.get("cockpit.initiative") === "on", "initiative-on sets cockpit.initiative to on");
+    },
+  },
+  {
+    name: "LOOM page is first in the nav and shows the threaded dev identity",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var navBtns = el.querySelectorAll('[data-action^="page-"]');
+      assert(navBtns[0].getAttribute("data-action") === "page-loom", "LOOM is the first nav item");
+      var page = el.querySelector('[data-testid="loom-page"]');
+      assert(page !== null && page.style.display !== "none", "LOOM page is shown at open");
+      var id = el.querySelector('[data-testid="loom-identity"]');
+      assert(id.textContent.indexOf("dev") !== -1, "identity names the mode");
+      assert(id.textContent.indexOf("a1b2c3d") !== -1, "identity shows the genome sha7");
+    },
+  },
+  {
+    name: "no THREAD or REWEAVE action when the body matches the genome",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      assert(el.querySelector('[data-action="self-thread"]') === null, "no THREAD action when threaded");
+      var rw = el.querySelector('[data-action="self-reweave"]');
+      assert(rw === null || rw.style.display === "none", "no REWEAVE when nothing new");
+      var tools = el.querySelector('[data-testid="loom-tools"]');
+      assert(tools.textContent.indexOf("/usr/bin/git") !== -1, "tool table lists git's path");
+      assert(el.querySelector('[data-testid="loom-tool-install"]') === null, "no install line when every tool is present");
+      assert(el.querySelector('[data-testid="loom-generations"]').textContent.indexOf("no generations yet") !== -1, "empty shelf says so");
+    },
+  },
+  {
+    name: "autoReweave toggle writes kernel.autoReweave",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var toggle = el.querySelector('[data-action="self-autoreweave"]');
+      assert(toggle !== null, "autoReweave toggle exists");
+      toggle.click();
+      assert(loom.settings.get("kernel.autoReweave") === "on", "toggle on writes on");
+      toggle.click();
+      assert(loom.settings.get("kernel.autoReweave") === "off", "toggle off writes off");
+    },
+  },
+  {
+    name: "storage line is honest about loomhome",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var line = el.querySelector('[data-testid="loom-storage"]');
+      assert(line.textContent === "loomhome uses 0.0 GB (vendor + warm build)", "storage line (got: " + line.textContent + ")");
     },
   },
   {

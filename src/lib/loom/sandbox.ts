@@ -55,6 +55,28 @@ const freshLoom = () => {
     { sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", message: "feat(organ): first weave" },
     { sha: "b2c3d4e5f60718293a4b5c6d7e8f901234567890", message: "fix(organ): calm the edge case" },
   ];
+  // self — a threaded dev body whose generation matches its genome: no
+  // ceremony to run, nothing new to weave, an empty shelf. Every tool present.
+  var SELF_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+  var SELF_TOOLS = ["git", "cargo", "rustc", "node", "npm", "cmake", "clang", "codesign"];
+  var selfApi = { returned: [] };
+  selfApi.identity = async function() {
+    return { mode: "dev", genomeSha: SELF_SHA, generation: SELF_SHA, threaded: true, loomhome: "/sandbox/loom", loomhomeBytes: 0 };
+  };
+  selfApi.threads = async function() {
+    return {
+      threaded: true,
+      tools: SELF_TOOLS.map(function(n) { return { name: n, path: "/usr/bin/" + n, version: n + " 1.0.0", requiredFor: "everything", install: "brew install " + n }; }),
+      missing: [],
+      drifted: [],
+      steps: { seed: true, deps: true, vendor: true, warm: true, register: true },
+      needsNetwork: false,
+    };
+  };
+  selfApi.generations = async function() { return []; };
+  selfApi.thread = async function(onEvent) { if (onEvent) onEvent({ step: "done", detail: "the loom is threaded", tail: [] }); };
+  selfApi.reweave = async function() { return { ok: false, reason: "nothing new to weave — the body already matches the genome" }; };
+  selfApi.returnTo = async function(sha) { selfApi.returned.push(String(sha)); };
   return {
     storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },
     model: { chat: async () => "(model unavailable in sandbox)" },
@@ -65,6 +87,7 @@ const freshLoom = () => {
     },
     voice: voiceApi,
     pulse: pulseApi,
+    self: selfApi,
     settings: {
       get: function(k) { return settingsMap.has(k) ? settingsMap.get(k) : ""; },
       set: function(k, v) { settingsMap.set(k, v); },
@@ -74,7 +97,7 @@ const freshLoom = () => {
       voiceStatus: async function() { return { ready: false, whisper: false, voices: [], missing_bytes_hint: null }; },
       setup: async function() {},
       models: async function() {
-        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/;
+        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\\-\\/]*(:[A-Za-z0-9._\\-]+)?$/;
         var DEFS = [
           { role: "builder",   def: "qwen3-coder:30b-a3b-q4_K_M", present: true  },
           { role: "companion", def: "gpt-oss:20b",                 present: true  },
@@ -89,7 +112,7 @@ const freshLoom = () => {
       setModel: async function(role, tag) {
         var validRoles = ["builder", "companion", "rewriter"];
         if (validRoles.indexOf(role) === -1) { return { ok: false, error: "unknown role" }; }
-        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/;
+        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\\-\\/]*(:[A-Za-z0-9._\\-]+)?$/;
         if (tag !== "" && (!tagRe.test(tag) || tag.length > 128)) { return { ok: false, error: "invalid tag" }; }
         settingsMap.set("model." + role, tag);
         return { ok: true };

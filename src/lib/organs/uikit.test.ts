@@ -754,3 +754,70 @@ describe("KIT_TOKENS single-source parity", () => {
     expect(api.ui.tokens).toEqual(KIT_TOKENS);
   });
 });
+
+// ── sandbox `self` mock — deterministic, offline ───────────────────────────────
+
+type HarnessLoom = {
+  self: {
+    identity(): Promise<{ mode: string; genomeSha: string; generation: string | null; threaded: boolean; loomhome: string; loomhomeBytes: number }>;
+    threads(): Promise<{ threaded: boolean; tools: { name: string; path: string | null; version: string | null; install: string }[]; missing: string[] }>;
+    generations(): Promise<unknown[]>;
+    thread(onEvent?: (e: { step: string; detail: string; tail: string[] }) => void): Promise<void>;
+    reweave(): Promise<{ ok: boolean; reason?: string }>;
+    returnTo(sha: string): Promise<void>;
+    returned: string[];
+  };
+};
+
+/** Evaluate the harness's own `freshLoom` factory outside the iframe. */
+function harnessLoom(): HarnessLoom {
+  const src = buildHarnessSrc(
+    { manifest: "{}", code: "export default {render(){}}", tests: "export const tests = []" },
+    "self-mock",
+  );
+  const a = src.indexOf("const freshLoom = ");
+  const b = src.indexOf("const mockLoom = freshLoom();");
+  expect(a).toBeGreaterThan(0);
+  expect(b).toBeGreaterThan(a);
+  const factory = new Function("makeUi", src.slice(a, b) + "\nreturn freshLoom();");
+  return factory(() => ({})) as HarnessLoom;
+}
+
+describe("sandbox self mock", () => {
+  it("identity is a threaded dev body whose generation matches its genome", async () => {
+    const id = await harnessLoom().self.identity();
+    expect(id.mode).toBe("dev");
+    expect(id.threaded).toBe(true);
+    expect(id.genomeSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(id.generation).toBe(id.genomeSha);
+    expect(typeof id.loomhomeBytes).toBe("number");
+    // Deterministic across fresh looms.
+    expect(await harnessLoom().self.identity()).toEqual(id);
+  });
+
+  it("threads reports every tool present with a path and a version", async () => {
+    const t = await harnessLoom().self.threads();
+    expect(t.threaded).toBe(true);
+    expect(t.missing).toEqual([]);
+    const names = t.tools.map((x) => x.name);
+    for (const n of ["git", "cargo", "rustc", "node", "npm", "cmake", "clang", "codesign"]) expect(names).toContain(n);
+    for (const tool of t.tools) {
+      expect(tool.path).toBeTruthy();
+      expect(tool.version).toBeTruthy();
+      expect(typeof tool.install).toBe("string");
+    }
+  });
+
+  it("generations is empty; thread() reports done; reweave says nothing new; returnTo records", async () => {
+    const loom = harnessLoom();
+    expect(await loom.self.generations()).toEqual([]);
+    const steps: string[] = [];
+    await loom.self.thread((e) => steps.push(e.step));
+    expect(steps[steps.length - 1]).toBe("done");
+    const r = await loom.self.reweave();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/nothing new to weave/);
+    await loom.self.returnTo("abc");
+    expect(loom.self.returned).toEqual(["abc"]);
+  });
+});

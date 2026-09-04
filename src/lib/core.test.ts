@@ -181,10 +181,11 @@ describe("kernel self-edit wrappers", () => {
   });
 
   it("kernelIdentity invokes kernel_identity with no args and returns the camelCase identity", async () => {
-    invoke.mockResolvedValue({ mode: "packaged", genomeSha: "deadbeef", generation: "deadbeef", threaded: true, loomhome: "/x/loom" });
+    invoke.mockResolvedValue({ mode: "packaged", genomeSha: "deadbeef", generation: "deadbeef", threaded: true, loomhome: "/x/loom", loomhomeBytes: 2_300_000_000 });
     const id = await kernelIdentity();
     expect(invoke).toHaveBeenCalledWith("kernel_identity");
     expect(id.mode).toBe("packaged");
+    expect(id.loomhomeBytes).toBe(2_300_000_000);
     expect(id.genomeSha).toBe("deadbeef");
     expect(id.generation).toBe("deadbeef");
     expect(id.threaded).toBe(true);

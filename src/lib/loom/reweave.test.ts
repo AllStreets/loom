@@ -41,6 +41,7 @@ const identity = (over: Partial<Identity> = {}): Identity => ({
   generation: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   threaded: true,
   loomhome: "/home/loom",
+  loomhomeBytes: 0,
   ...over,
 });
 

@@ -1,4 +1,6 @@
-import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, timelineLog as coreTimelineLog, FLEET_DEFAULTS, type Msg, type VoiceStatus, type Commit } from "../core";
+import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, timelineLog as coreTimelineLog, kernelIdentity, threadStatus as coreThreadStatus, threadLoom as coreThreadLoom, THREAD_EVENT, FLEET_DEFAULTS, type Msg, type VoiceStatus, type Commit, type Identity, type ThreadStatus, type ThreadEvent, type Generation } from "../core";
+import { listGenerations, returnToGeneration } from "../loom/generations";
+import { startReweave as loomStartReweave, type StartResult } from "../loom/reweave";
 import { getSetting, setSetting, isValidModelTag, VOICE_IDS, VOICE_LABELS, resetAllSettings as resetAllSettingsFn } from "../voice/settings";
 import { startRecording } from "../voice/recorder";
 import { playWav } from "../voice/player";
@@ -34,6 +36,28 @@ export type LoomSettingsApi = {
   resetAll(): Promise<void>;
 };
 
+/**
+ * The `self` power (Rebirth): LOOM's own body, read and moved. Reads are
+ * free; the three actions each close or rebuild LOOM and share one budget.
+ * Every call sits behind `need("self")` — the Settings seed declares it, the
+ * owner approves it, nothing else is taught to ask.
+ */
+export type LoomSelfApi = {
+  /** `{ mode, genomeSha, generation, threaded, loomhome, loomhomeBytes }`. */
+  identity(): Promise<Identity>;
+  /** The tool table, what is missing, what drifted. */
+  threads(): Promise<ThreadStatus>;
+  /** Every kept generation, newest first. */
+  generations(): Promise<Generation[]>;
+  /** Run the one-time ceremony; `onEvent` gets every `loom-thread` line.
+   *  Resolves on `done`, rejects with the detail on `failed`. */
+  thread(onEvent?: (e: ThreadEvent) => void): Promise<void>;
+  /** Start a reweave through the protected orchestration — `{ ok }` or the calm reason. */
+  reweave(): Promise<StartResult>;
+  /** Become `sha` again. LOOM will close and return. */
+  returnTo(sha: string): Promise<void>;
+};
+
 export type LoomApi = {
   storage: { get<T>(k: string, fallback: T): T; set(k: string, v: unknown): void; del(k: string): void };
   model: { chat(messages: Msg[]): Promise<string> };
@@ -41,6 +65,7 @@ export type LoomApi = {
   /** Notify power — glass toast via the `loom-notify` event. Old organs may still call it with one arg. */
   notify: (title: string, body?: string) => void;
   settings: LoomSettingsApi;
+  self: LoomSelfApi;
   timeline: { log(n?: number): Promise<Commit[]> };
   voice: { say(text: string): Promise<void> };
   pulse: { every(ms: number, fn: () => void): () => void };
@@ -61,6 +86,14 @@ export type ApiDeps = {
   listenProgress?: (cb: (pct: number) => void) => Promise<() => void>;
   fleetStatus?: typeof fleetStatus;
   resetAllSettings?: () => void;
+  // self power seams
+  identity?: typeof kernelIdentity;
+  threadStatus?: typeof coreThreadStatus;
+  generationsList?: typeof listGenerations;
+  threadLoom?: typeof coreThreadLoom;
+  listenThread?: (cb: (e: ThreadEvent) => void) => Promise<() => void>;
+  startReweave?: () => Promise<StartResult>;
+  returnTo?: typeof returnToGeneration;
 };
 
 // ── Pulse registry — live intervals per organ, cleared on unmount/delete ──────
@@ -171,6 +204,18 @@ export function makeLoomApi(
     return unlisten;
   });
 
+  // self power seams — the protected orchestration modules by default.
+  const _identity = deps.identity ?? kernelIdentity;
+  const _threadStatus = deps.threadStatus ?? coreThreadStatus;
+  const _generationsList = deps.generationsList ?? listGenerations;
+  const _threadLoom = deps.threadLoom ?? coreThreadLoom;
+  const _startReweave = deps.startReweave ?? (() => loomStartReweave());
+  const _returnTo = deps.returnTo ?? returnToGeneration;
+  const _listenThread = deps.listenThread ?? (async (cb: (e: ThreadEvent) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<ThreadEvent>(THREAD_EVENT, (e) => { cb(e.payload); });
+  });
+
   return {
     storage: {
       get(k, fallback) {
@@ -217,6 +262,54 @@ export function makeLoomApi(
         const capped = String(text).slice(0, 300);
         const raw = await _ttsSpeak(capped, getSetting("voice.default"));
         await _playWav(new Uint8Array(raw));
+      },
+    },
+    self: {
+      async identity() {
+        need("self");
+        return _identity();
+      },
+      async threads() {
+        need("self");
+        return _threadStatus();
+      },
+      async generations() {
+        need("self");
+        return _generationsList();
+      },
+      async thread(onEvent) {
+        need("self");
+        spend("self");
+        // Listen BEFORE starting so the first line is never missed; settle on
+        // the ceremony's own terminal step; always let go of the listener.
+        let settle: { resolve: () => void; reject: (e: Error) => void } | null = null;
+        const finished = new Promise<void>((resolve, reject) => { settle = { resolve, reject }; });
+        const unlisten = await _listenThread((e) => {
+          try { onEvent?.(e); } catch { /* an organ's handler must never stop the ceremony */ }
+          if (e.step === "done") settle?.resolve();
+          else if (e.step === "failed") settle?.reject(new Error(e.detail));
+        });
+        try {
+          await _threadLoom();
+        } catch (err) {
+          unlisten();
+          throw err;
+        }
+        try {
+          await finished;
+        } finally {
+          unlisten();
+        }
+      },
+      async reweave() {
+        need("self");
+        spend("self");
+        return _startReweave();
+      },
+      async returnTo(sha) {
+        need("self");
+        spend("self");
+        return _returnTo(String(sha));
       },
     },
     pulse: {

@@ -185,6 +185,8 @@ export type Identity = {
   generation: string | null;
   threaded: boolean;
   loomhome: string;
+  /** Bytes on disk under loomhome (vendor + warm target) — a bounded walk, honest not exact. */
+  loomhomeBytes: number;
 };
 
 /** Read by the Settings organ and the Shuttle ("which generation is this"). */

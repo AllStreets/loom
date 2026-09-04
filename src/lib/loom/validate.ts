@@ -4,9 +4,20 @@ export type { OrganFilesIn };
 
 export type OrganManifest = { id: string; name: string; description: string; version: number; permissions: string[]; powers?: string[] };
 
-/** The six organ powers — the only capabilities a manifest may request. */
+/** The four organ powers the model is taught — what a built organ may request. */
 export const POWERS = ["timeline", "voice", "notify", "pulse"] as const;
-export type Power = (typeof POWERS)[number];
+
+/**
+ * Kernel powers (Rebirth): capabilities of LOOM's own body — read its
+ * identity, thread the loom, reweave, return to a generation. The Settings
+ * seed declares `self`; the prompts never teach it, so a built organ does
+ * not learn to ask for it. Any manifest that does declare it still passes
+ * through the owner's permission card, and `need("self")` gates every call.
+ */
+export const KERNEL_POWERS = ["self"] as const;
+export type Power = (typeof POWERS)[number] | (typeof KERNEL_POWERS)[number];
+
+const ALL_POWERS: readonly string[] = [...POWERS, ...KERNEL_POWERS];
 
 /** Plain-language labels for the permission card and the POWERS row. */
 export const POWER_LABELS: Record<Power, string> = {
@@ -14,6 +25,7 @@ export const POWER_LABELS: Record<Power, string> = {
   voice: "speak aloud",
   notify: "notify you",
   pulse: "run on a schedule (up to every 30s)",
+  self: "read LOOM's identity, thread the loom, reweave, and return to a generation",
 };
 
 const ID_RE = /^[a-z0-9-]{1,32}$/;
@@ -45,7 +57,7 @@ export function manifestGuard(manifestRaw: string, expectedId?: string):
   if (man.powers !== undefined && man.powers !== null) {
     if (!Array.isArray(man.powers)) return { ok: false, error: "powers must be an array" };
     for (const p of man.powers) {
-      if (!(POWERS as readonly string[]).includes(p)) return { ok: false, error: `unknown power: ${String(p)}` };
+      if (!ALL_POWERS.includes(p)) return { ok: false, error: `unknown power: ${String(p)}` };
     }
   }
   if (legacyNotify) {

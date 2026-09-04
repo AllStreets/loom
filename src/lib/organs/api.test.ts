@@ -301,3 +301,99 @@ describe("makeLoomApi settings.resetAll", () => {
     expect(called).toBe(true);
   });
 });
+
+// ── power: self (Rebirth — Settings → LOOM) ────────────────────────────────────
+
+const IDENTITY = {
+  mode: "packaged" as const,
+  genomeSha: "a".repeat(40),
+  generation: "b".repeat(40),
+  threaded: true,
+  loomhome: "/home/loom",
+  loomhomeBytes: 1_000,
+};
+
+type TEvent = { step: string; detail: string; tail: string[] };
+
+describe("power: self", () => {
+  it("every read and action throws without the self grant", async () => {
+    const api = makeLoomApi("x", ["settings"]);
+    await expect(api.self.identity()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.threads()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.generations()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.thread()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.reweave()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.returnTo("abc")).rejects.toThrow(/permission "self" not granted/);
+  });
+
+  it("identity / threads / generations read through their deps", async () => {
+    const identity = vi.fn().mockResolvedValue(IDENTITY);
+    const threadStatus = vi.fn().mockResolvedValue({ threaded: true, tools: [], missing: [], drifted: [], steps: { seed: true, deps: true, vendor: true, warm: true, register: true }, needsNetwork: false });
+    const generationsList = vi.fn().mockResolvedValue([]);
+    const api = makeLoomApi("x", ["self"], { identity, threadStatus, generationsList });
+    await expect(api.self.identity()).resolves.toEqual(IDENTITY);
+    await expect(api.self.threads()).resolves.toMatchObject({ threaded: true });
+    await expect(api.self.generations()).resolves.toEqual([]);
+  });
+
+  it("thread() listens before it starts, streams loom-thread events, resolves on done, and unlistens", async () => {
+    const order: string[] = [];
+    let emit: ((e: TEvent) => void) | null = null;
+    const unlisten = vi.fn(() => { order.push("unlisten"); });
+    const listenThread = vi.fn(async (cb: (e: TEvent) => void) => { order.push("listen"); emit = cb; return unlisten; });
+    const threadLoom = vi.fn(async () => { order.push("start"); });
+    const api = makeLoomApi("x", ["self"], { listenThread, threadLoom, ledger: makeLedger(() => 0) });
+    const seen: string[] = [];
+    const done = api.self.thread((e) => seen.push(e.step + ":" + e.detail));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(["listen", "start"]);
+    emit!({ step: "seed", detail: "cloning the genome", tail: [] });
+    emit!({ step: "done", detail: "the loom is threaded", tail: [] });
+    await expect(done).resolves.toBeUndefined();
+    expect(seen).toEqual(["seed:cloning the genome", "done:the loom is threaded"]);
+    expect(order).toEqual(["listen", "start", "unlisten"]);
+  });
+
+  it("thread() rejects with the failure detail when the ceremony fails", async () => {
+    let emit: ((e: TEvent) => void) | null = null;
+    const listenThread = vi.fn(async (cb: (e: TEvent) => void) => { emit = cb; return () => {}; });
+    const threadLoom = vi.fn(async () => {});
+    const api = makeLoomApi("x", ["self"], { listenThread, threadLoom, ledger: makeLedger(() => 0) });
+    const done = api.self.thread();
+    await new Promise((r) => setTimeout(r, 0));
+    emit!({ step: "failed", detail: "threading needs the network once — after that LOOM weaves offline.", tail: [] });
+    await expect(done).rejects.toThrow(/needs the network once/);
+  });
+
+  it("thread() unlistens and rejects when the core refuses to start", async () => {
+    const unlisten = vi.fn();
+    const listenThread = vi.fn(async () => unlisten);
+    const threadLoom = vi.fn().mockRejectedValue(new Error("parse: a weave is already under way"));
+    const api = makeLoomApi("x", ["self"], { listenThread, threadLoom, ledger: makeLedger(() => 0) });
+    await expect(api.self.thread()).rejects.toThrow(/already under way/);
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  it("reweave() returns the orchestration's StartResult; returnTo(sha) hands the sha through", async () => {
+    const startReweave = vi.fn().mockResolvedValue({ ok: false, reason: "nothing new to weave — the body already matches the genome" });
+    const returnTo = vi.fn().mockResolvedValue(undefined);
+    const api = makeLoomApi("x", ["self"], { startReweave, returnTo, ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).resolves.toEqual({ ok: false, reason: expect.stringMatching(/nothing new/) });
+    expect(startReweave).toHaveBeenCalledTimes(1);
+    await api.self.returnTo("c".repeat(40));
+    expect(returnTo).toHaveBeenCalledWith("c".repeat(40));
+  });
+
+  it("budget: three self actions a minute, then the calm budget error", async () => {
+    let now = 0;
+    const returnTo = vi.fn().mockResolvedValue(undefined);
+    const startReweave = vi.fn().mockResolvedValue({ ok: true });
+    const api = makeLoomApi("x", ["self"], { returnTo, startReweave, ledger: makeLedger(() => now) });
+    await api.self.returnTo("a");
+    await api.self.reweave();
+    await api.self.returnTo("b");
+    await expect(api.self.reweave()).rejects.toThrow(/"self" budget spent/);
+    now = 60_000;
+    await expect(api.self.reweave()).resolves.toEqual({ ok: true });
+  });
+});

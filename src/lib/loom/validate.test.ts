@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { manifestGuard } from "./validate";
+import { manifestGuard, POWERS, KERNEL_POWERS, POWER_LABELS } from "./validate";
 import { buildHarnessSrc } from "./sandbox";
 
 describe("manifestGuard", () => {
@@ -195,5 +195,20 @@ describe("renderProbe", () => {
     expect(result.error).toBeUndefined();
 
     sandboxRunSpy.mockRestore();
+  });
+});
+
+describe("kernel powers (Rebirth)", () => {
+  it("self is a kernel power, not one of the model-facing POWERS", () => {
+    expect(KERNEL_POWERS).toEqual(["self"]);
+    expect(POWERS as readonly string[]).not.toContain("self");
+    expect(POWER_LABELS.self).toMatch(/reweave/);
+  });
+
+  it("manifestGuard accepts powers: [\"self\"] alongside a model power", () => {
+    const raw = JSON.stringify({ id: "settings", name: "Settings", description: "d", version: 1, permissions: ["settings"], powers: ["self", "notify"] });
+    const r = manifestGuard(raw, "settings");
+    expect(r.ok, r.ok ? "" : (r as { ok: false; error: string }).error).toBe(true);
+    if (r.ok) expect(r.manifest.powers).toEqual(["self", "notify"]);
   });
 });
