@@ -34,6 +34,7 @@ import {
   REASON_IN_FLIGHT,
   reweaveReadiness,
   shouldAutoReweave,
+  swapSupported,
 } from "./reweave";
 
 const identity = (over: Partial<Identity> = {}): Identity => ({
@@ -160,12 +161,14 @@ describe("reweaveReadiness — the dry run the companion asks before consent", (
     expect(await reweaveReadiness({ identity: id })).toEqual({ ok: false, reason: REASON_NOTHING_NEW });
   });
 
-  it("head ahead → ok with generation and genomeSha; nothing is started", async () => {
+  it("head ahead → ok with generation, genomeSha and mode; nothing is started", async () => {
     const id = vi.fn(async () => identity());
     expect(await reweaveReadiness({ identity: id })).toEqual({
       ok: true,
       generation: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       genomeSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      // the consent line needs this: in dev nothing is swapped
+      mode: "packaged",
     });
     expect(core.reweaveStart).not.toHaveBeenCalled();
   });
@@ -270,6 +273,23 @@ describe("stations", () => {
     expect(stationIndex("done")).toBe(-1);
     expect(stationIndex("failed")).toBe(-1);
     expect(stationIndex("cancelled")).toBe(-1);
+  });
+});
+
+// ── swapSupported — what the consent line may promise about the swap ─────────
+
+describe("swapSupported", () => {
+  it("says no on the platforms platform.rs has no swap for", () => {
+    expect(swapSupported("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe(false);
+    expect(swapSupported("Mozilla/5.0 (X11; Linux x86_64)")).toBe(false);
+  });
+
+  it("says yes on macOS", () => {
+    expect(swapSupported("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe(true);
+  });
+
+  it("an agent it cannot read never SHRINKS the truth — Rust still has the last word", () => {
+    expect(swapSupported("")).toBe(true);
   });
 });
 

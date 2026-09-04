@@ -34,6 +34,10 @@ const mockHandle = vi.fn<
 >();
 vi.mock("../lib/companion/runtime", () => ({
   handle: (...args: Parameters<typeof mockHandle>) => mockHandle(...args),
+  // The real constant, restated: importOriginal would pull the whole rebirth
+  // dep graph (generations, reweave) through mocks this file keeps minimal.
+  // A drift here fails the assertion below, which is the point.
+  LINE_THREADING: "threading the loom — this needs the network once",
 }));
 
 const reweave = vi.hoisted(() => ({ startReweave: vi.fn() }));
@@ -138,6 +142,61 @@ describe("Companion — consent turns", () => {
     expect(reweave.startReweave).not.toHaveBeenCalled();
     expect(generations.returnToGeneration).not.toHaveBeenCalled();
     expect(screen.getByTestId("consent-reweave_consent")).toHaveTextContent(/not now/i);
+  });
+});
+
+describe("Companion — the thread consent (the one step that reaches the network)", () => {
+  it("THREAD runs the ceremony; the card asks first and the network is never touched before", async () => {
+    mockHandle.mockResolvedValue({
+      kind: "consent",
+      consent: "thread_consent",
+      line: "threading needs the network once — after that LOOM weaves offline",
+    });
+    render(<Companion />);
+    await submit("thread the loom");
+
+    const card = await screen.findByTestId("consent-thread_consent");
+    expect(card).toHaveTextContent("threading needs the network once — after that LOOM weaves offline");
+    expect(invokeMock.mock.calls.some((c) => c[0] === "thread_loom")).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "THREAD" }));
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.some((c) => c[0] === "thread_loom")).toBe(true),
+    );
+    expect(await screen.findByText("threading the loom — this needs the network once")).toBeInTheDocument();
+  });
+
+  it("NOT NOW never reaches the network", async () => {
+    mockHandle.mockResolvedValue({
+      kind: "consent",
+      consent: "thread_consent",
+      line: "threading needs the network once — after that LOOM weaves offline",
+    });
+    render(<Companion />);
+    await submit("thread the loom");
+    await userEvent.click(await screen.findByRole("button", { name: "NOT NOW" }));
+    expect(invokeMock.mock.calls.some((c) => c[0] === "thread_loom")).toBe(false);
+  });
+});
+
+describe("Companion — nothing starts twice", () => {
+  it("two clicks inside one batched tick start exactly one weave", async () => {
+    mockHandle.mockResolvedValue({
+      kind: "consent",
+      consent: "reweave_consent",
+      line: "weave generation 3f2a1c — LOOM will close and return",
+    });
+    render(<Companion />);
+    await submit("reweave yourself");
+    const btn = await screen.findByRole("button", { name: "REWEAVE" });
+    // Both clicks land before React flushes the settle — exactly the case the
+    // card's doc comment claims to hold.
+    await act(async () => {
+      btn.click();
+      btn.click();
+    });
+    await waitFor(() => expect(reweave.startReweave).toHaveBeenCalledTimes(1));
+    expect(reweave.startReweave).toHaveBeenCalledTimes(1);
   });
 });
 
