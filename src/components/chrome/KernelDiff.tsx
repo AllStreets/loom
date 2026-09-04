@@ -27,8 +27,16 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { kernelApply, kernelApprove, kernelDiscard, type KernelApplied } from "../../lib/core";
+import {
+  kernelApply,
+  kernelApprove,
+  kernelDiscard,
+  kernelIdentity,
+  type Identity,
+  type KernelApplied,
+} from "../../lib/core";
 import { applyKernelEdit, discardKernelEdit } from "../../lib/loom/kernelBuild";
+import { startReweave } from "../../lib/loom/reweave";
 
 /** z 2000 — the permission-modal tier: the only surfaces allowed to block. */
 const KERNEL_DIFF_Z = 2000;
@@ -54,6 +62,15 @@ export type KernelReviewProposal = {
 /** True when any target path is a Rust-core file (src-tauri/…​.rs). */
 function pathsTouchCore(paths: string[]): boolean {
   return paths.some((p) => p.startsWith("src-tauri/") && p.endsWith(".rs"));
+}
+
+/**
+ * Is this the CORE? Trust the pipeline's flag, but never let it downgrade the
+ * framing below what the target paths themselves imply — a Rust-core path
+ * always reads as the heavier framing.
+ */
+function coreOf(p: KernelReviewProposal): boolean {
+  return p.isCore === true || pathsTouchCore(p.targetPaths);
 }
 
 /**
@@ -98,11 +115,51 @@ function lineStyle(kind: DiffLineKind): React.CSSProperties {
   }
 }
 
-export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi }) {
+/**
+ * What the card reports after an apply (Phase 23): the shell reads `mode` to
+ * decide whether `kernel.autoReweave` should start the weave on its own.
+ */
+export type KernelAppliedInfo = { mode: Identity["mode"]; isCore: boolean; sha: string };
+
+export type KernelDiffProps = {
+  api?: KernelDiffApi;
+  /** Who this binary is — defaults to `kernelIdentity`; unreachable → dev framing. */
+  identity?: () => Promise<Identity>;
+  /** The REWEAVE seam — defaults to the protected `startReweave`. */
+  reweave?: () => Promise<unknown>;
+  /** Fires once per successful apply, after the note lands. */
+  onApplied?: (info: KernelAppliedInfo) => void;
+};
+
+export default function KernelDiff({
+  api = DEFAULT_API,
+  identity = kernelIdentity,
+  reweave = () => startReweave(),
+  onApplied,
+}: KernelDiffProps) {
   const rm = useReducedMotion() ?? false;
   const [proposal, setProposal] = useState<KernelReviewProposal | null>(null);
   const [busy, setBusy] = useState(false);
   const [applied, setApplied] = useState(false);
+  // Packaged mode (Phase 23): nothing hot-reloads — a TS edit is bundled into
+  // dist and a Rust edit into the binary, so every applied edit is "woven into
+  // source" until a reweave. Unreachable identity (browser dev) reads as dev.
+  const [mode, setMode] = useState<Identity["mode"]>("dev");
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const id = await identity();
+        if (live && id && (id.mode === "packaged" || id.mode === "dev")) setMode(id.mode);
+      } catch {
+        // no shell — the dev framing stands.
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [identity]);
 
   useEffect(() => {
     function onReview(ev: Event) {
@@ -127,11 +184,14 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
     setBusy(true);
     try {
       const message = proposal.request.slice(0, 72);
-      await applyKernelEdit(proposal.worktreeId, message, api.apply, api.approve);
-      // The change is committed to the live tree; Vite HMR hot-reloads it.
-      // Show the calm note briefly, then close.
+      const result = await applyKernelEdit(proposal.worktreeId, message, api.apply, api.approve);
+      // The change is committed to the live tree. In dev Vite HMR hot-reloads
+      // it — show the calm note briefly, then close. In packaged mode nothing
+      // reloads: the note offers REWEAVE and the card waits for the owner.
       setApplied(true);
-      setTimeout(reset, 2400);
+      if (mode === "packaged") setBusy(false);
+      else setTimeout(reset, 2400);
+      onApplied?.({ mode, isCore: coreOf(proposal), sha: result?.sha ?? "" });
     } catch {
       // A late apply failure (approve set the flags but apply threw). The live
       // tree was NOT written (apply_inner runs after the gate), but the isolated
@@ -162,9 +222,19 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
   // Is this the CORE? Trust the pipeline's flag, but never let it downgrade the
   // framing below what the target paths themselves imply — a Rust-core path
   // always reads as the heavier "restart to load," never the TS "reloading."
-  const isCore = proposal
-    ? proposal.isCore === true || pathsTouchCore(proposal.targetPaths)
-    : false;
+  const isCore = proposal ? coreOf(proposal) : false;
+  const packaged = mode === "packaged";
+
+  async function reweaveNow() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await reweave();
+    } catch {
+      // the reweave card or Settings will say why — this card only asked.
+    }
+    reset();
+  }
 
   return (
     <AnimatePresence>
@@ -247,9 +317,9 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
                   lineHeight: 1.5,
                 }}
               >
-                this edits the RUST CORE — the native binary LOOM runs inside. it
-                does not hot-reload: approving commits it, but it takes effect only
-                after you RESTART LOOM.
+                {packaged
+                  ? "this edits the RUST CORE — the native binary LOOM runs inside. approving weaves it into the source; LOOM becomes it only after a REWEAVE you approve, which closes LOOM and returns it."
+                  : "this edits the RUST CORE — the native binary LOOM runs inside. it does not hot-reload: approving commits it, but it takes effect only after you RESTART LOOM."}
               </div>
             )}
 
@@ -277,9 +347,13 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
 
             {/* Reassurance line — the walls it already passed. */}
             <div style={{ color: "var(--t2)", fontSize: 12.5, marginBottom: 12, lineHeight: 1.5 }}>
-              {isCore
-                ? "this edit was compiled and tested in isolation (cargo check + test) — the live tree is untouched until you approve. approving commits it; restart LOOM to load the core."
-                : "this edit was type-checked and tested in isolation — the live tree is untouched until you approve. approving commits it and reloads."}
+              {packaged
+                ? isCore
+                  ? "this edit was compiled and tested in isolation (cargo check + test) — the source is untouched until you approve. approving weaves it into the source; reweave to become it."
+                  : "this edit was type-checked and tested in isolation — the source is untouched until you approve. approving weaves it into the source; reweave to become it."
+                : isCore
+                  ? "this edit was compiled and tested in isolation (cargo check + test) — the live tree is untouched until you approve. approving commits it; restart LOOM to load the core."
+                  : "this edit was type-checked and tested in isolation — the live tree is untouched until you approve. approving commits it and reloads."}
             </div>
 
             {/* The diff — monospace, added/removed tinted via tokens. */}
@@ -323,7 +397,55 @@ export default function KernelDiff({ api = DEFAULT_API }: { api?: KernelDiffApi 
                 data-testid="kernel-diff-applied"
                 style={{ color: "var(--go)", fontSize: 13, marginTop: 12, fontWeight: 600 }}
               >
-                {isCore ? "changed — restart LOOM to load the core." : "changed — reloading."}
+                {packaged
+                  ? "woven into source — reweave to become it"
+                  : isCore
+                    ? "changed — restart LOOM to load the core."
+                    : "changed — reloading."}
+              </div>
+            )}
+
+            {/* Packaged (Phase 23): the edit is in the genome, not the body.
+                REWEAVE starts the build job; the reweave card takes over. */}
+            {applied && packaged && (
+              <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                <button
+                  data-testid="kernel-diff-reweave"
+                  onClick={reweaveNow}
+                  disabled={busy}
+                  style={{
+                    background: "var(--accent)",
+                    color: "var(--bg)",
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "8px 20px",
+                    fontFamily: "var(--f-mono)",
+                    fontSize: 11,
+                    letterSpacing: ".14em",
+                    textTransform: "uppercase",
+                    fontWeight: 700,
+                    cursor: busy ? "not-allowed" : "pointer",
+                    opacity: busy ? 0.6 : 1,
+                  }}
+                >
+                  REWEAVE
+                </button>
+                <button
+                  data-testid="kernel-diff-later"
+                  onClick={reset}
+                  disabled={busy}
+                  style={{
+                    background: "none",
+                    color: "var(--t3)",
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "8px 12px",
+                    fontSize: 13,
+                    cursor: busy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  later
+                </button>
               </div>
             )}
 

@@ -21,24 +21,29 @@ const RECOVERY_Z = 1550;
 
 export default function RecoveryNotice() {
   const rm = useReducedMotion() ?? false;
-  const [sha, setSha] = useState<string | null>(null);
+  const [notice, setNotice] = useState<RecoveryDetail | null>(null);
 
   useEffect(() => {
     function onRecovered(ev: Event) {
       const detail = (ev as CustomEvent<RecoveryDetail>).detail;
       if (!detail?.sha) return;
       // Only one at a time — a live card ignores further events.
-      setSha((prev) => prev ?? detail.sha);
+      setNotice((prev) => prev ?? detail);
     }
     window.addEventListener(RECOVERY_EVENT, onRecovered);
     return () => window.removeEventListener(RECOVERY_EVENT, onRecovered);
   }, []);
 
-  const sha7 = sha ? sha.slice(0, 7) : "";
+  const sha7 = notice ? notice.sha.slice(0, 7) : "";
+  // Phase 23: the warden put the previous body back. The sentence names both
+  // shas — the one that couldn't be born and the one LOOM came home to.
+  const gen = notice?.generation;
+  const failed7 = gen ? gen.failedSha.slice(0, 7) : "";
+  const prev7 = gen ? gen.prevSha.slice(0, 7) : sha7;
 
   return (
     <AnimatePresence>
-      {sha && (
+      {notice && (
         <motion.div
           data-testid="recovery-notice"
           initial={rm ? false : { opacity: 0, y: 16 }}
@@ -78,21 +83,41 @@ export default function RecoveryNotice() {
             >
               came home
             </div>
-            <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}>
-              an edit didn't hold — LOOM came home to{" "}
-              <span
-                data-testid="recovery-sha"
-                style={{ fontFamily: "var(--f-mono)", color: "var(--accent)" }}
-              >
-                {sha7}
-              </span>
-              .
+            <div
+              data-testid="recovery-body"
+              style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}
+            >
+              {gen ? (
+                <>
+                  {"LOOM tried to become "}
+                  <span style={{ fontFamily: "var(--f-mono)", color: "var(--t2)" }}>{failed7}</span>
+                  {" and couldn't — it came home to "}
+                  <span
+                    data-testid="recovery-sha"
+                    style={{ fontFamily: "var(--f-mono)", color: "var(--accent)" }}
+                  >
+                    {prev7}
+                  </span>
+                  {". The failed weave is kept under generations."}
+                </>
+              ) : (
+                <>
+                  {"an edit didn't hold — LOOM came home to "}
+                  <span
+                    data-testid="recovery-sha"
+                    style={{ fontFamily: "var(--f-mono)", color: "var(--accent)" }}
+                  >
+                    {sha7}
+                  </span>
+                  .
+                </>
+              )}
             </div>
           </div>
           <button
             data-testid="recovery-dismiss"
             title="dismiss"
-            onClick={() => setSha(null)}
+            onClick={() => setNotice(null)}
             style={{
               background: "none",
               border: "none",

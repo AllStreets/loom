@@ -47,7 +47,8 @@ export type SettingsKey =
   | "model.rewriter"
   | "cockpit.tapestry"
   | "cockpit.chatMin"
-  | "cockpit.initiative";
+  | "cockpit.initiative"
+  | "kernel.autoReweave";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "voice.default",
@@ -60,6 +61,7 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "cockpit.tapestry",
   "cockpit.chatMin",
   "cockpit.initiative",
+  "kernel.autoReweave",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
@@ -74,6 +76,7 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "cockpit.tapestry": ["on", "off"],
   "cockpit.chatMin": ["on", "off"],
   "cockpit.initiative": ["on", "off"],
+  "kernel.autoReweave": ["on", "off"],
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -91,6 +94,9 @@ const DEFAULTS: Record<SettingsKey, string> = {
   // Default ON — initiative is the vision; the toggle honors the house rule
   // that any active surface must be silenceable.
   "cockpit.initiative": "on",
+  // Default OFF — a reweave closes LOOM and returns it; the owner opts in to
+  // that happening on its own after every approved core edit (Phase 23).
+  "kernel.autoReweave": "off",
 };
 
 // Legacy key the orb's detectTier reads

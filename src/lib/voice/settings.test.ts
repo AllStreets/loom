@@ -30,10 +30,11 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("cockpit.tapestry");
     expect(SETTINGS_KEYS).toContain("cockpit.chatMin");
     expect(SETTINGS_KEYS).toContain("cockpit.initiative");
+    expect(SETTINGS_KEYS).toContain("kernel.autoReweave");
     for (const retired of ["model.cloudBuilder", "cockpit.deck", "cockpit.interact", "cockpit.watchOpen", "terminal.symbols"]) {
       expect(SETTINGS_KEYS).not.toContain(retired);
     }
-    expect(SETTINGS_KEYS).toHaveLength(10);
+    expect(SETTINGS_KEYS).toHaveLength(11);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -100,6 +101,24 @@ describe("cockpit.tapestry setting", () => {
     expect(SETTINGS_KEYS).not.toContain("cockpit.constellation");
     expect(() => getSetting("cockpit.constellation")).toThrow(/Unknown settings key/);
     expect(() => setSetting("cockpit.constellation", "on")).toThrow(/Unknown settings key/);
+  });
+});
+
+describe("kernel.autoReweave setting (Rebirth)", () => {
+  it("defaults to off — a reweave closes LOOM, so it is opt-in", () => {
+    expect(getSetting("kernel.autoReweave")).toBe("off");
+  });
+
+  it("accepts 'on' and 'off'", () => {
+    setSetting("kernel.autoReweave", "on");
+    expect(getSetting("kernel.autoReweave")).toBe("on");
+    setSetting("kernel.autoReweave", "off");
+    expect(getSetting("kernel.autoReweave")).toBe("off");
+  });
+
+  it("rejects anything else", () => {
+    expect(() => setSetting("kernel.autoReweave", "true")).toThrow(/Invalid value/);
+    expect(() => setSetting("kernel.autoReweave", "1")).toThrow(/Invalid value/);
   });
 });
 

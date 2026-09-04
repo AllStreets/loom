@@ -48,6 +48,43 @@ describe("runBootCheck", () => {
   });
 });
 
+describe("runBootCheck — a healed generation (Rebirth)", () => {
+  it("dispatches the generation detail when the check result carries healedGeneration", async () => {
+    const check = vi.fn(async () => ({
+      rolledBackTo: null,
+      rollbackFailed: false,
+      healedGeneration: { failedSha: "3f2a1c9deadbeef", prevSha: "8b91e0abcdef", reason: "crashed" },
+    }));
+    const details: unknown[] = [];
+    const listener = (e: Event) => details.push((e as CustomEvent).detail);
+    window.addEventListener(RECOVERY_EVENT, listener);
+
+    const sha = await runBootCheck(check);
+
+    expect(sha).toBe("8b91e0abcdef");
+    expect(details).toEqual([
+      {
+        sha: "8b91e0abcdef",
+        generation: { failedSha: "3f2a1c9deadbeef", prevSha: "8b91e0abcdef", reason: "crashed" },
+      },
+    ]);
+    window.removeEventListener(RECOVERY_EVENT, listener);
+  });
+
+  it("a null healedGeneration is the plain path", async () => {
+    const check = vi.fn(async () => ({
+      rolledBackTo: null,
+      rollbackFailed: false,
+      healedGeneration: null,
+    }));
+    const listener = vi.fn();
+    window.addEventListener(RECOVERY_EVENT, listener);
+    await expect(runBootCheck(check)).resolves.toBeNull();
+    expect(listener).not.toHaveBeenCalled();
+    window.removeEventListener(RECOVERY_EVENT, listener);
+  });
+});
+
 describe("markBootOk", () => {
   it("calls the boot-ok beacon on a clean boot", async () => {
     const ok = vi.fn(async () => {});

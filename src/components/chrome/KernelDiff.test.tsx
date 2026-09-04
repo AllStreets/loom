@@ -224,3 +224,116 @@ describe("KernelDiff", () => {
     expect(screen.getByTestId("kernel-diff-target")).toHaveTextContent("src/lib/loom/moods.ts");
   });
 });
+
+// ── Phase 23 (Rebirth): packaged framing ──────────────────────────────────────
+
+const PACKAGED = async () => ({
+  mode: "packaged" as const,
+  genomeSha: "3f2a1c9deadbeef",
+  generation: "8b91e0abcdef",
+  threaded: true,
+  loomhome: "/tmp/loomhome",
+});
+const DEV = async () => ({
+  mode: "dev" as const,
+  genomeSha: "3f2a1c9deadbeef",
+  generation: null,
+  threaded: false,
+  loomhome: "/tmp/loomhome",
+});
+
+describe("KernelDiff — packaged framing (Rebirth)", () => {
+  it("packaged: the applied outcome reads 'woven into source — reweave to become it' with a REWEAVE button", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    const reweave = vi.fn(async () => ({ ok: true as const }));
+    render(<KernelDiff api={api} identity={PACKAGED} reweave={reweave} />);
+    act(() => dispatchReview(sampleProposal()));
+    // let the identity resolve
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+
+    expect(screen.getByTestId("kernel-diff-applied")).toHaveTextContent(
+      "woven into source — reweave to become it",
+    );
+    expect(screen.getByTestId("kernel-diff-applied")).not.toHaveTextContent(/reloading|restart/i);
+    const btn = screen.getByTestId("kernel-diff-reweave");
+    expect(btn).toHaveTextContent("REWEAVE");
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+    expect(reweave).toHaveBeenCalledTimes(1);
+    // the card then closes (reset) — the reweave card takes over. AnimatePresence
+    // keeps a frozen snapshot of the exiting node in jsdom, so presence is not
+    // asserted here (the Discard test has the same shape).
+  });
+
+  it("packaged: a core edit also reads woven-into-source (no 'restart' framing) and the banner says reweave", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    render(<KernelDiff api={api} identity={PACKAGED} reweave={vi.fn(async () => ({ ok: true as const }))} />);
+    act(() =>
+      dispatchReview(sampleProposal({ targetPaths: ["src-tauri/src/moods.rs"], isCore: true })),
+    );
+    await act(async () => {});
+    expect(screen.getByTestId("kernel-diff-core-banner")).toHaveTextContent(/reweave/i);
+    expect(screen.getByTestId("kernel-diff-core-banner")).not.toHaveTextContent(/restart/i);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    expect(screen.getByTestId("kernel-diff-applied")).toHaveTextContent(
+      "woven into source — reweave to become it",
+    );
+    expect(screen.getByTestId("kernel-diff-reweave")).toBeInTheDocument();
+  });
+
+  it("dev: framing unchanged — no REWEAVE button, the reload note stands", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    render(<KernelDiff api={api} identity={DEV} reweave={vi.fn(async () => ({ ok: true as const }))} />);
+    act(() => dispatchReview(sampleProposal()));
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    expect(screen.getByTestId("kernel-diff-applied")).toHaveTextContent(/changed — reloading/i);
+    expect(screen.queryByTestId("kernel-diff-reweave")).not.toBeInTheDocument();
+  });
+
+  it("an unreachable identity (browser mode) falls back to the dev framing", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    const identity = vi.fn(async () => {
+      throw new Error("this surface needs the desktop shell");
+    });
+    render(<KernelDiff api={api} identity={identity} />);
+    act(() => dispatchReview(sampleProposal()));
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    expect(screen.getByTestId("kernel-diff-applied")).toHaveTextContent(/changed — reloading/i);
+  });
+
+  it("reports the applied outcome through onApplied with the mode (the autoReweave seam)", async () => {
+    const api = mockApi({
+      apply: vi.fn(async () => ({ sha: "abc1234", prevSha: "def5678" })),
+    });
+    const onApplied = vi.fn();
+    render(<KernelDiff api={api} identity={PACKAGED} onApplied={onApplied} />);
+    act(() => dispatchReview(sampleProposal({ targetPaths: ["src-tauri/src/moods.rs"] })));
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("kernel-diff-approve"));
+    });
+    expect(onApplied).toHaveBeenCalledWith({ mode: "packaged", isCore: true, sha: "abc1234" });
+  });
+});

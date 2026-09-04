@@ -51,7 +51,15 @@ export function bootHadError(): boolean {
   return bootErrored;
 }
 
-export type RecoveryDetail = { sha: string; failed?: boolean };
+/**
+ * `generation` (Phase 23): the warden healed a woven body that never confirmed
+ * its boot. `sha` is then the generation LOOM came home to (= `prevSha`).
+ */
+export type RecoveryDetail = {
+  sha: string;
+  failed?: boolean;
+  generation?: { failedSha: string; prevSha: string; reason: string };
+};
 
 /**
  * Early-boot guard. Returns the sha LOOM rolled back to (short or full — the
@@ -71,7 +79,17 @@ export async function runBootCheck(
     // test mock of core, or a packaged build with no command) is treated as
     // "no recovery guarantee here" rather than crashing boot.
     const fn = check ?? kernelBootCheck;
-    const { rolledBackTo, rollbackFailed } = await fn();
+    const { rolledBackTo, rollbackFailed, healedGeneration } = await fn();
+    // A healed generation (Phase 23) outranks a source rollback: the body
+    // itself was put back. The notice reads the generation variant.
+    if (healedGeneration && healedGeneration.prevSha) {
+      window.dispatchEvent(
+        new CustomEvent<RecoveryDetail>(RECOVERY_EVENT, {
+          detail: { sha: healedGeneration.prevSha, generation: healedGeneration },
+        }),
+      );
+      return healedGeneration.prevSha;
+    }
     if (rolledBackTo) {
       window.dispatchEvent(
         new CustomEvent<RecoveryDetail>(RECOVERY_EVENT, { detail: { sha: rolledBackTo } }),

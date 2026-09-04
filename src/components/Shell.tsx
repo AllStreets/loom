@@ -18,9 +18,11 @@ import Tapestry from './Tapestry';
 import LoomGlyph from './chrome/LoomGlyph';
 import Notices from './chrome/Notices';
 import Proposal from './chrome/Proposal';
-import KernelDiff from './chrome/KernelDiff';
+import KernelDiff, { type KernelAppliedInfo } from './chrome/KernelDiff';
+import Reweave from './chrome/Reweave';
 import RecoveryNotice from './chrome/recoveryNotice';
 import { runBootCheck, markBootOk } from '../lib/loom/recovery';
+import { startReweave } from '../lib/loom/reweave';
 import { mountInitiative } from '../lib/initiative/runtime';
 import Shuttle from './Shuttle';
 import ErrorBoundary from './ErrorBoundary';
@@ -106,6 +108,15 @@ export default function Shell() {
       if (t) clearTimeout(t);
     };
   }, []);
+
+  // ----- Auto-reweave (Phase 23) — after a packaged apply, if the owner opted
+  // in (`kernel.autoReweave`), start the weave without the REWEAVE click. The
+  // reweave card then carries the honest countdown; LOOM closes and returns.
+  function onKernelApplied(info: KernelAppliedInfo) {
+    if (info.mode !== 'packaged') return;
+    if (getSetting('kernel.autoReweave') !== 'on') return;
+    void startReweave();
+  }
 
   // ----- Boot migration — idempotent: deletes stored values for retired
   // settings keys (e.g. cockpit.constellation, the Cockpit's deck keys). -----
@@ -836,7 +847,14 @@ export default function Shell() {
           Appears ONLY on a validated loom-kernel-review event; Approve is the
           ONLY live-tree write in the whole self-edit surface. ── */}
       <ErrorBoundary zone="kernel-diff">
-        <KernelDiff />
+        <KernelDiff onApplied={onKernelApplied} />
+      </ErrorBoundary>
+
+      {/* ── Reweave: the five-station card (z 1700 — above the proposal, below
+          the permission modal). Present only while a weave is under way or
+          has just ended; fed by the protected reweave.ts subscription. ── */}
+      <ErrorBoundary zone="reweave">
+        <Reweave />
       </ErrorBoundary>
 
       {/* ── Minimized typing box: bottom-center glass pill — the mark and the

@@ -112,7 +112,16 @@ export type KernelValidation = {
   output: string;
 };
 export type KernelApplied = { sha: string; prevSha: string };
-export type KernelBootCheck = { rolledBackTo: string | null; rollbackFailed: boolean };
+/**
+ * `healedGeneration` (Phase 23): set when the warden (or the pre-main backstop)
+ * put the previous body back because a woven generation never confirmed its
+ * boot — the recovery record from `loomhome/recovery.json`, surfaced once.
+ */
+export type KernelBootCheck = {
+  rolledBackTo: string | null;
+  rollbackFailed: boolean;
+  healedGeneration?: { failedSha: string; prevSha: string; reason: string } | null;
+};
 
 /** Meta for the UI/prompt: resolved source-repo root + the protected carve-out. */
 export const kernelEditable = (sourceRepo?: string) =>

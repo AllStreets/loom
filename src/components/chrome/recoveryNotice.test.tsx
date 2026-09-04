@@ -62,3 +62,42 @@ describe("RecoveryNotice", () => {
     expect(screen.getByTestId("recovery-sha")).toHaveTextContent("1111111");
   });
 });
+
+// ── Phase 23 (Rebirth): the healed-generation variant ─────────────────────────
+
+describe("RecoveryNotice — a generation that couldn't be born", () => {
+  function heal(failedSha: string, prevSha: string, reason = "crashed") {
+    window.dispatchEvent(
+      new CustomEvent(RECOVERY_EVENT, {
+        detail: { sha: prevSha, generation: { failedSha, prevSha, reason } },
+      }),
+    );
+  }
+
+  it("speaks the healed-generation copy exactly, with 7-char shas", () => {
+    render(<RecoveryNotice />);
+    act(() => heal("3f2a1c9deadbeef", "8b91e0abcdef"));
+    expect(screen.getByTestId("recovery-body")).toHaveTextContent(
+      "LOOM tried to become 3f2a1c9 and couldn't — it came home to 8b91e0a. The failed weave is kept under generations.",
+    );
+    expect(screen.getByTestId("recovery-sha")).toHaveTextContent("8b91e0a");
+    expect(screen.queryByText(/an edit didn't hold/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("recovery-notice").textContent).not.toMatch(/!/);
+  });
+
+  it("the plain edit variant is unchanged when no generation rides the event", () => {
+    render(<RecoveryNotice />);
+    act(() => recover("deadbeef1234567"));
+    expect(screen.getByText(/an edit didn't hold/i)).toBeInTheDocument();
+    expect(screen.queryByText(/tried to become/i)).not.toBeInTheDocument();
+  });
+
+  it("dismiss clears the generation notice", async () => {
+    render(<RecoveryNotice />);
+    act(() => heal("3f2a1c9deadbeef", "8b91e0abcdef", "never confirmed"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("recovery-dismiss"));
+    });
+    expect(screen.queryByTestId("recovery-notice")).not.toBeInTheDocument();
+  });
+});
