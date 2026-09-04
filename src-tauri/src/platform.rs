@@ -97,10 +97,8 @@ pub enum Step {
     Codesign { path: PathBuf },
     /// Sentinel `{ status: "applied", armedBy: "reweave" }`.
     WriteSentinel { applied: String, prev: String },
-    /// Sentinel `{ status: "healed" }` — written by the warden after a heal.
-    /// Constructed only by warden.rs (Task 10); until it lands, the tests
-    /// below are its only author.
-    #[allow(dead_code)]
+    /// Sentinel `{ status: "healed" }` — written by the warden (and the
+    /// pre-main backstop) after a heal.
     WriteSentinelHealed { failed: String, prev: String },
     /// Ledger `{ current, previous, confirmed: false }`.
     WriteLedger { current: String, previous: String },

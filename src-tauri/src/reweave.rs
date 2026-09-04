@@ -45,6 +45,7 @@ use crate::kernel;
 use crate::loomhome::{self, Home, Mode};
 use crate::platform::{self, AppLayout, Step};
 use crate::threads;
+use crate::warden;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -346,22 +347,6 @@ pub enum Finish {
     Relaunching { warden_pid: u32 },
 }
 
-/// The warden's job file (spec §Reweave step 5), camelCase. Task 10's
-/// `warden::Job` is the reader; this is the writer's copy of the shape and
-/// moves into `warden.rs` when that lands.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WardenJob {
-    old_pid: u32,
-    app_path: PathBuf,
-    exe_path: PathBuf,
-    new_sha: String,
-    prev_sha: String,
-    loomhome: PathBuf,
-    timeout_secs: u64,
-    relaunch_only: bool,
-}
-
 /// A stage's failure: the sentence for the card plus the typed error for
 /// the caller.
 struct Failed {
@@ -489,7 +474,7 @@ fn job_steps(
 
     // 5 · relaunch — the previous generation guards the birth.
     p.stage("relaunch", false);
-    let job = WardenJob {
+    let job = warden::Job {
         old_pid: ctx.old_pid,
         app_path: layout.app_path.clone(),
         exe_path: layout.exe_path.clone(),
@@ -498,6 +483,7 @@ fn job_steps(
         loomhome: home.root.clone(),
         timeout_secs: WARDEN_TIMEOUT_SECS,
         relaunch_only: false,
+        warden_pid: None,
     };
     let after_swap = "the new body is in place — the next launch guards itself";
     threads::write_json_atomic(&home.warden_json(), &job)

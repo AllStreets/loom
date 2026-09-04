@@ -26,8 +26,10 @@
 //! against the shared loomhome `target/` in packaged mode.
 
 use crate::error::LoomError;
-use crate::exec::{run_checked, run_checked_env, ExecOut};
+use crate::exec::{run_checked, run_checked_env, run_detached, ExecOut};
 use crate::loomhome::{mode, Home, Mode};
+use crate::platform::AppLayout;
+use crate::{generations, platform, threads, warden};
 use git2::Repository;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -131,6 +133,7 @@ const PROTECTED_RUST: &[&str] = &[
     "src-tauri/src/loomhome.rs", // identity + every path the reweave reads/writes
     "src-tauri/src/threads.rs",  // tool discovery + the threading ceremony (spawns tools)
     "src-tauri/src/reweave.rs",  // the build job — assets, core, stage, swap, relaunch
+    "src-tauri/src/warden.rs",   // the birth guard — argv dispatch, watch, heal
     "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA — a generation's own name
     "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
 ];
@@ -572,7 +575,9 @@ fn sentinel_path(app: &tauri::AppHandle) -> Result<PathBuf, LoomError> {
     Ok(dir.join("kernel-boot.json"))
 }
 
-fn read_sentinel(path: &Path) -> Option<Sentinel> {
+/// The sentinel at `path`, or `None` when absent or torn. `pub(crate)` for
+/// the warden, which reads the app_data sentinel by path (no AppHandle).
+pub(crate) fn read_sentinel(path: &Path) -> Option<Sentinel> {
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
 }
@@ -623,7 +628,7 @@ pub struct ApplyOut {
     pub prev_sha: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Debug)]
 pub struct BootCheckOut {
     #[serde(rename = "rolledBackTo")]
     pub rolled_back_to: Option<String>,
@@ -633,6 +638,27 @@ pub struct BootCheckOut {
     /// The shell surfaces this so the user isn't silently stranded.
     #[serde(rename = "rollbackFailed")]
     pub rollback_failed: bool,
+    /// Phase 23: the warden (or the pre-main backstop) healed a woven body
+    /// that never confirmed its boot. Read from `loomhome/recovery.json` and
+    /// surfaced EXACTLY ONCE — the record is deleted as it is reported.
+    #[serde(rename = "healedGeneration")]
+    pub healed_generation: Option<HealedGeneration>,
+}
+
+/// `healedGeneration` — the warden's recovery record without its log tail.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HealedGeneration {
+    pub failed_sha: String,
+    pub prev_sha: String,
+    /// `"crashed"` | `"never confirmed"`.
+    pub reason: String,
+}
+
+impl From<warden::Recovery> for HealedGeneration {
+    fn from(r: warden::Recovery) -> Self {
+        HealedGeneration { failed_sha: r.failed_sha, prev_sha: r.prev_sha, reason: r.reason }
+    }
 }
 
 /// The full protected list surfaced to the UI/prompt (concrete + prefixes +
@@ -1420,11 +1446,8 @@ fn rollback_to(root: &Path, sha: &str) -> Result<(), LoomError> {
 #[tauri::command]
 pub fn kernel_boot_ok(app: tauri::AppHandle) -> Result<(), LoomError> {
     let sp = sentinel_path(&app)?;
-    // Clear the app_data sentinel (TS flow): this boot held.
-    if let Some(mut s) = read_sentinel(&sp) {
-        s.status = "ok".into();
-        write_sentinel(&sp, &s)?;
-    }
+    let home = Home::from_app(&app).ok();
+    boot_ok_at(&sp, home.as_ref())?;
     // Clear the source-relative mirror (Rust flow) to `healed`: for a Rust edit
     // this fires on the NEXT launch (no hot-reload), confirming the applied edit
     // booted cleanly so the guard/pre-main hook will NOT roll it back. Best
@@ -1432,6 +1455,27 @@ pub fn kernel_boot_ok(app: tauri::AppHandle) -> Result<(), LoomError> {
     // the sentinel's own source_root (or, for a healthy launch with no app_data
     // sentinel, the mirror in cwd if present).
     clear_mirror_healed(&app);
+    Ok(())
+}
+
+/// The app-independent core of `kernel_boot_ok`: the app_data sentinel goes
+/// `ok` (this boot held) and, Phase 23, a ledger that exists is marked
+/// `confirmed: true` — the warden reads the sentinel, the owner reads the
+/// ledger. No ledger is ever invented here: a dev LOOM has none.
+fn boot_ok_at(sp: &Path, home: Option<&Home>) -> Result<(), LoomError> {
+    if let Some(mut s) = read_sentinel(sp) {
+        s.status = "ok".into();
+        write_sentinel(sp, &s)?;
+    }
+    if let Some(home) = home {
+        if home.ledger_json().is_file() {
+            let mut ledger = generations::read(home);
+            if !ledger.confirmed {
+                ledger.confirmed = true;
+                generations::write(home, &ledger)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1491,9 +1535,189 @@ fn clear_mirror_healed(app: &tauri::AppHandle) {
 /// Reducing visibility blocks any external re-export path; same-crate calls from
 /// an editable module remain bounded by human diff-review of the applied diff.
 pub(crate) fn preboot_heal() {
-    // No panics: guard the whole body.
-    let Ok(cwd) = std::env::current_dir() else { return };
-    preboot_heal_at(&cwd);
+    match mode() {
+        Mode::Dev => {
+            // No panics: guard the whole body.
+            let Ok(cwd) = std::env::current_dir() else { return };
+            preboot_heal_at(&cwd);
+        }
+        Mode::Packaged => preboot_heal_packaged(),
+    }
+}
+
+/// What the pre-main hook does with a sentinel (round-1 Marrow review's
+/// ownership rule, extended by Phase 23's `armedBy: "reweave"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// First sighting of a new body/edit: mark it `booting`, let it try.
+    Arm,
+    /// Second sighting, nobody else owns it: bring it home.
+    Heal,
+    /// Not ours — a live guard or warden owns it, or there is nothing to do.
+    Leave,
+}
+
+/// PURE: the pre-main decision table. `warden_alive` is whether
+/// `warden.json` names a pid that is still running.
+///
+/// - `applied` armed by `reweave` → Arm (either mode: the first sighting of a
+///   woven body). Any other `applied` → Arm in dev (Phase 22's guard-absent
+///   arm), Leave in packaged (a source-only apply boots nothing until a
+///   reweave; `boot_check` judges it).
+/// - `booting` armed by `guard` → Leave: the Node guard owns its live attempt.
+/// - `booting` armed by `reweave` → Leave while the warden lives (it owns the
+///   birth); Heal in packaged mode when no warden is alive (the backstop);
+///   Leave in dev (nothing was swapped).
+/// - `booting` armed by `premain` or unarmed → Heal in dev (Phase 22's
+///   backstop), Leave in packaged.
+/// - everything else (`pending`, `ok`, `healed`, `rollback-failed`, unknown)
+///   → Leave.
+pub fn decide(status: &str, armed_by: Option<&str>, warden_alive: bool, mode: Mode) -> Action {
+    match (status, armed_by, mode) {
+        ("applied", Some("reweave"), _) => Action::Arm,
+        ("applied", _, Mode::Dev) => Action::Arm,
+        ("applied", _, Mode::Packaged) => Action::Leave,
+        ("booting", Some("guard"), _) => Action::Leave,
+        ("booting", Some("reweave"), Mode::Packaged) => {
+            if warden_alive { Action::Leave } else { Action::Heal }
+        }
+        ("booting", Some("reweave"), Mode::Dev) => Action::Leave,
+        ("booting", _, Mode::Dev) => Action::Heal,
+        ("booting", _, Mode::Packaged) => Action::Leave,
+        _ => Action::Leave,
+    }
+}
+
+/// The bundle identifier from `tauri.conf.json`, which names the app_data
+/// dir. Pre-main has no AppHandle to ask, so the packaged loomhome is
+/// resolved from this (a unit test pins it to the config file).
+const APP_IDENTIFIER: &str = "com.connorevans.loom";
+
+/// The packaged loomhome — `~/Library/Application Support/<identifier>/loom`,
+/// exactly what `Home::from_app` resolves once Tauri is up — but only if it
+/// already exists (a first launch has nothing to heal). macOS only: the swap
+/// that could leave a sentinel here is macOS-only.
+fn packaged_home_under(user_home: &Path) -> Option<Home> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let root = user_home
+        .join("Library/Application Support")
+        .join(APP_IDENTIFIER)
+        .join("loom");
+    root.is_dir().then(|| Home::at(root))
+}
+
+/// What the packaged backstop did — returned, not acted on, so the loop is
+/// testable; `preboot_heal_packaged` turns it into the exit.
+#[derive(Debug)]
+pub(crate) enum Backstop {
+    Left,
+    Armed,
+    /// Healed in-process; `warden` is the previous body spawned with a
+    /// relaunch-only job (or why it could not be).
+    Healed { warden: Result<u32, LoomError> },
+    HealFailed(LoomError),
+}
+
+/// PRE-MAIN BACKSTOP, packaged (spec §The warden, "when no warden is alive").
+/// A `booting` armed by `reweave` seen with no live warden pid is a woven
+/// body that never confirmed and nobody is guarding: heal it here, exactly as
+/// the warden would, then hand the relaunch to the previous body and exit —
+/// this process IS the unconfirmed body, and it never reaches the Tauri
+/// builder. Panic-free / best-effort throughout.
+fn preboot_heal_packaged() {
+    let Some(user_home) = std::env::var_os("HOME") else { return };
+    let Some(home) = packaged_home_under(Path::new(&user_home)) else { return };
+    let layout = platform::app_layout().ok();
+    let tools = |name: &str| threads::tool_path(&home, name);
+    let alive = |pid: u32| warden::pid_alive(pid);
+    match preboot_heal_packaged_in(&home, layout.as_ref(), &alive, &tools) {
+        Backstop::Left | Backstop::Armed => {}
+        Backstop::Healed { warden: Ok(pid) } => {
+            eprintln!("[kernel] pre-main heal: a woven body never confirmed — LOOM came home; the previous generation (pid {pid}) reopens it");
+            std::process::exit(0);
+        }
+        Backstop::Healed { warden: Err(e) } => {
+            eprintln!("[kernel] pre-main heal: LOOM came home, but the previous body could not be started as the warden — {e}; reopening directly");
+            if let Some(l) = layout {
+                let mut world = warden::RealWorld::new(&home);
+                let _ = warden::World::open_app(&mut world, &l.app_path);
+            }
+            std::process::exit(0);
+        }
+        Backstop::HealFailed(e) => {
+            // The sentinel is `rollback-failed`: no loop. Boot on and let the
+            // notice say what happened.
+            eprintln!("[kernel] pre-main heal: a woven body never confirmed AND the heal failed — {e}");
+        }
+    }
+}
+
+/// The app-independent core of the packaged backstop. `layout` is this
+/// process's bundle (falls back to the warden job's paths); `pid_alive` and
+/// `tools` are injected so the table runs against a fake app in a tempdir.
+fn preboot_heal_packaged_in(
+    home: &Home,
+    layout: Option<&AppLayout>,
+    pid_alive: &dyn Fn(u32) -> bool,
+    tools: &dyn Fn(&str) -> Option<PathBuf>,
+) -> Backstop {
+    let sp = home.sentinel_json();
+    let Some(mut s) = read_sentinel(&sp) else { return Backstop::Left };
+    let job: Option<warden::Job> = std::fs::read_to_string(home.warden_json())
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    let warden_alive = job
+        .as_ref()
+        .and_then(|j| j.warden_pid)
+        .map(pid_alive)
+        .unwrap_or(false);
+
+    match decide(&s.status, s.armed_by.as_deref(), warden_alive, Mode::Packaged) {
+        Action::Leave => Backstop::Left,
+        Action::Arm => {
+            // First sighting of the woven body: let it try. The warden keeps
+            // ownership (`armedBy` stays `reweave`).
+            s.status = "booting".into();
+            let _ = write_sentinel(&sp, &s);
+            Backstop::Armed
+        }
+        Action::Heal => {
+            let layout = match (layout, &job) {
+                (Some(l), _) => l.clone(),
+                (None, Some(j)) => AppLayout { app_path: j.app_path.clone(), exe_path: j.exe_path.clone() },
+                (None, None) => {
+                    return Backstop::HealFailed(LoomError::NotFound(
+                        "the app bundle — neither current_exe nor warden.json names it".into(),
+                    ))
+                }
+            };
+            let (new_sha, prev_sha) = (s.applied_sha.clone(), s.prev_sha.clone());
+            if let Err(e) = warden::heal(home, &layout, &new_sha, &prev_sha, warden::REASON_NEVER_CONFIRMED, tools) {
+                return Backstop::HealFailed(e);
+            }
+            // The previous body — proven, and now the file on disk — reopens
+            // the app once this process has left.
+            let relaunch = warden::Job {
+                old_pid: std::process::id(),
+                app_path: layout.app_path.clone(),
+                exe_path: layout.exe_path.clone(),
+                new_sha,
+                prev_sha: prev_sha.clone(),
+                loomhome: home.root.clone(),
+                timeout_secs: job.as_ref().map(|j| j.timeout_secs).unwrap_or(90),
+                relaunch_only: true,
+                warden_pid: None,
+            };
+            let warden = threads::write_json_atomic(&home.warden_json(), &relaunch).and_then(|()| {
+                let exe = home.generation_exe(&prev_sha).to_string_lossy().into_owned();
+                let job_path = home.warden_json().to_string_lossy().into_owned();
+                run_detached(&[&exe, "--warden", &job_path], &home.root, &home.root)
+            });
+            Backstop::Healed { warden }
+        }
+    }
 }
 
 /// The app-independent core of the pre-main heal, parameterized on the repo the
@@ -1511,8 +1735,13 @@ fn preboot_heal_at(cwd: &Path) {
         cwd.to_path_buf()
     };
 
-    match (s.status.as_str(), s.armed_by.as_deref()) {
-        ("applied", _) => {
+    // The mirror never carries a warden: `warden_alive` is false here. The
+    // rows: `applied` → Arm; `booting`/`guard` → Leave (the Node pre-compile
+    // guard armed THIS live attempt and is watching it — never touch the boot
+    // the guard armed for confirmation, Finding 2); `booting`/premain-or-legacy
+    // → Heal; terminal → Leave.
+    match decide(&s.status, s.armed_by.as_deref(), false, Mode::Dev) {
+        Action::Arm => {
             // Guard-absent arm: first unconfirmed sighting and the Node guard did
             // NOT arm it (else it would already be `booting`/`guard`). Let it try
             // to boot, recording that WE (pre-main) armed it so a
@@ -1521,12 +1750,8 @@ fn preboot_heal_at(cwd: &Path) {
             s.armed_by = Some("premain".into());
             let _ = write_sentinel(&mp, &s);
         }
-        ("booting", Some("guard")) => {
-            // The Node pre-compile guard armed THIS live attempt this session and
-            // is watching it. NEVER touch it — this is the boot the guard armed
-            // for confirmation. No reset, no rewrite (Finding 2).
-        }
-        ("booting", _) => {
+        Action::Leave => {}
+        Action::Heal => {
             // Guard-absent backstop: we armed it last time (armedBy=="premain",
             // or a legacy mirror with no armedBy) and it never confirmed a
             // healthy boot. Roll the source back to the last-good sha and mark
@@ -1550,7 +1775,6 @@ fn preboot_heal_at(cwd: &Path) {
                 );
             }
         }
-        _ => { /* healed / ok / rollback-failed / unknown → no-op */ }
     }
 }
 
@@ -1559,9 +1783,36 @@ pub fn kernel_boot_check(
     app: tauri::AppHandle,
     source_repo: Option<String>,
 ) -> Result<BootCheckOut, LoomError> {
-    let sp = sentinel_path(&app)?;
-    let home = Home::from_app(&app)?;
-    decide_boot_in(&sp, mode(), source_repo.as_deref(), Some(&home))
+    boot_check_app(&app, source_repo.as_deref(), true)
+}
+
+/// `surface_recovery`: whether to report (and thereby consume) the warden's
+/// recovery record. The shell's command does; the Rust-side setup check
+/// (`boot_recover`) does not — the record is for the owner, and it is
+/// surfaced exactly once.
+fn boot_check_app(
+    app: &tauri::AppHandle,
+    source_repo: Option<&str>,
+    surface_recovery: bool,
+) -> Result<BootCheckOut, LoomError> {
+    let sp = sentinel_path(app)?;
+    let home = Home::from_app(app)?;
+    boot_check_in(&sp, mode(), source_repo, Some(&home), surface_recovery)
+}
+
+/// `decide_boot_in` plus, Phase 23, the healed-generation record.
+fn boot_check_in(
+    sp: &Path,
+    mode: Mode,
+    source_repo_override: Option<&str>,
+    home: Option<&Home>,
+    surface_recovery: bool,
+) -> Result<BootCheckOut, LoomError> {
+    let mut out = decide_boot_in(sp, mode, source_repo_override, home)?;
+    if surface_recovery {
+        out.healed_generation = home.and_then(warden::take_recovery).map(HealedGeneration::from);
+    }
+    Ok(out)
 }
 
 /// Dev-mode entry for the tests: no loomhome, the override/cwd fallback.
@@ -1584,6 +1835,7 @@ fn decide_boot_in(
         return Ok(BootCheckOut {
             rolled_back_to: None,
             rollback_failed: false,
+            healed_generation: None,
         });
     };
     if !is_unconfirmed(&s.status) {
@@ -1595,6 +1847,19 @@ fn decide_boot_in(
         return Ok(BootCheckOut {
             rolled_back_to: None,
             rollback_failed: false,
+            healed_generation: None,
+        });
+    }
+    if s.armed_by.as_deref() == Some("reweave") {
+        // Phase 23: a sentinel armed by the reweave is a BODY's birth, not a
+        // source edit's. The warden (or the pre-main backstop) owns it; the
+        // genome it was woven from must not be rolled back, and the sentinel
+        // the warden is watching must not be removed. `kernel_boot_ok`
+        // resolves it to `ok`.
+        return Ok(BootCheckOut {
+            rolled_back_to: None,
+            rollback_failed: false,
+            healed_generation: None,
         });
     }
 
@@ -1615,6 +1880,7 @@ fn decide_boot_in(
             Ok(BootCheckOut {
                 rolled_back_to: Some(s.prev_sha),
                 rollback_failed: false,
+            healed_generation: None,
             })
         }
         Err(_) => {
@@ -1632,6 +1898,7 @@ fn decide_boot_in(
             Ok(BootCheckOut {
                 rolled_back_to: None,
                 rollback_failed: true,
+            healed_generation: None,
             })
         }
     }
@@ -1641,7 +1908,7 @@ fn decide_boot_in(
 /// Option so a sentinel/repo hiccup can't block boot — the guarantee is "undo a
 /// broken edit if we safely can", not "refuse to start".
 pub fn boot_recover(app: &tauri::AppHandle) -> Option<String> {
-    match kernel_boot_check(app.clone(), None) {
+    match boot_check_app(app, None, false) {
         Ok(b) => {
             if b.rollback_failed {
                 eprintln!(
@@ -1798,6 +2065,7 @@ mod tests {
             "src-tauri/src/loomhome.rs", // identity + every loomhome path
             "src-tauri/src/threads.rs",  // tool discovery + threading (spawns tools)
             "src-tauri/src/reweave.rs",  // the build job — swaps the body, spawns the warden
+            "src-tauri/src/warden.rs",   // the birth guard — heals a body that never confirmed
             "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA into the binary
             "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
             "src-tauri/capabilities/default.json",
@@ -1817,7 +2085,7 @@ mod tests {
         // Every one of them is NAMED in a protected set (explicit, enumerable —
         // the `kernel_editable` meta lists it for the model), not just
         // implicitly outside the whitelist.
-        for f in ["src-tauri/src/platform.rs", "src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/src/threads.rs", "src-tauri/src/reweave.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
+        for f in ["src-tauri/src/platform.rs", "src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/src/threads.rs", "src-tauri/src/reweave.rs", "src-tauri/src/warden.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
             assert!(PROTECTED_RUST.contains(&f), "{f} must be in PROTECTED_RUST");
         }
         for f in ["package.json", "package-lock.json", "vite.config.ts", "scripts/genome-bundle.mjs"] {
@@ -2886,6 +3154,366 @@ mod tests {
             if !dir.pop() {
                 return None;
             }
+        }
+    }
+
+    // ── Phase 23 (Rebirth): the warden's sentinel rows + the packaged backstop ──
+
+    #[test]
+    fn decide_table() {
+        use Action::*;
+        let statuses = ["pending", "applied", "booting", "ok", "healed", "rollback-failed", "garbage"];
+        let arms = [Some("guard"), Some("premain"), Some("reweave"), None];
+        for status in statuses {
+            for armed in arms {
+                for alive in [true, false] {
+                    for mode in [Mode::Dev, Mode::Packaged] {
+                        let got = decide(status, armed, alive, mode);
+                        let want = match (status, armed, alive, mode) {
+                            // A reweave-armed `applied` is the first sighting of
+                            // a new body: arm it, in either mode.
+                            ("applied", Some("reweave"), _, _) => Arm,
+                            // Dev: any other `applied` is armed by pre-main
+                            // (guard-absent arm, Phase 22).
+                            ("applied", _, _, Mode::Dev) => Arm,
+                            // Packaged: a source-only apply boots nothing until
+                            // a reweave — pre-main leaves it to boot_check.
+                            ("applied", _, _, Mode::Packaged) => Leave,
+                            // The guard owns its live attempt, always.
+                            ("booting", Some("guard"), _, _) => Leave,
+                            // THE OWNERSHIP RULE: a live warden owns the birth.
+                            ("booting", Some("reweave"), true, _) => Leave,
+                            // No warden alive, packaged: pre-main is the backstop.
+                            ("booting", Some("reweave"), false, Mode::Packaged) => Heal,
+                            // Dev never swapped a body — nothing to heal.
+                            ("booting", Some("reweave"), false, Mode::Dev) => Leave,
+                            // Dev, premain/legacy: the Phase 22 source backstop.
+                            ("booting", _, _, Mode::Dev) => Heal,
+                            // Packaged, not reweave-armed: not pre-main's.
+                            ("booting", _, _, Mode::Packaged) => Leave,
+                            // pending / ok / healed / rollback-failed / unknown.
+                            _ => Leave,
+                        };
+                        assert_eq!(got, want, "status={status} armedBy={armed:?} alive={alive} mode={mode:?}");
+                    }
+                }
+            }
+        }
+        // The two rows the spec names outright.
+        assert_eq!(decide("booting", Some("reweave"), true, Mode::Packaged), Leave);
+        assert_eq!(decide("booting", Some("reweave"), false, Mode::Packaged), Heal);
+    }
+
+    #[test]
+    fn packaged_home_matches_tauri_identifier() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], APP_IDENTIFIER, "the pre-main home must follow tauri.conf.json");
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("Library/Application Support").join(APP_IDENTIFIER).join("loom");
+        assert!(packaged_home_under(d.path()).is_none(), "no loomhome yet → no home");
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(packaged_home_under(d.path()).unwrap().root, root);
+    }
+
+    fn app_sentinel(home: &Home, status: &str, armed_by: Option<&str>) {
+        write_sentinel_at(
+            &home.sentinel_json(),
+            &Sentinel {
+                prev_sha: "aaa111".into(),
+                applied_sha: "bbb222".into(),
+                status: status.into(),
+                source_root: home.source().to_string_lossy().into_owned(),
+                armed_by: armed_by.map(str::to_string),
+            },
+        )
+        .unwrap();
+    }
+
+    fn app_sentinel_status(home: &Home) -> Option<String> {
+        read_sentinel(&home.sentinel_json()).map(|s| s.status)
+    }
+
+    #[test]
+    fn boot_ok_confirms_ledger() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let sp = home.sentinel_json();
+        // No ledger, no sentinel: a plain boot confirms nothing and writes nothing.
+        boot_ok_at(&sp, Some(&home)).unwrap();
+        assert!(!home.ledger_json().exists(), "boot_ok must not invent a ledger");
+        assert!(!sp.exists());
+        // A ledger left unconfirmed by the swap, a sentinel armed by reweave.
+        crate::generations::write(
+            &home,
+            &crate::generations::Ledger {
+                current: Some("bbb222".into()),
+                previous: Some("aaa111".into()),
+                kept: vec!["aaa111".into(), "bbb222".into()],
+                keep: 3,
+                confirmed: false,
+            },
+        )
+        .unwrap();
+        app_sentinel(&home, "booting", Some("reweave"));
+        boot_ok_at(&sp, Some(&home)).unwrap();
+        let ledger = crate::generations::read(&home);
+        assert!(ledger.confirmed, "a good boot confirms the running generation");
+        assert_eq!(ledger.current.as_deref(), Some("bbb222"), "nothing else moves");
+        assert_eq!(ledger.kept.len(), 2);
+        assert_eq!(app_sentinel_status(&home).as_deref(), Some("ok"));
+        // Dev-style call with no home: still marks the sentinel, touches no ledger.
+        app_sentinel(&home, "pending", None);
+        boot_ok_at(&sp, None).unwrap();
+        assert_eq!(app_sentinel_status(&home).as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn boot_check_surfaces_healed_generation_once() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let sp = home.sentinel_json();
+        // The warden left a sentinel `healed` and a recovery record.
+        app_sentinel(&home, "healed", Some("reweave"));
+        crate::threads::write_json_atomic(
+            &home.recovery_json(),
+            &crate::warden::Recovery {
+                failed_sha: "bbb222".into(),
+                prev_sha: "aaa111".into(),
+                reason: "crashed".into(),
+                log_tail: vec!["Compiling loom".into()],
+            },
+        )
+        .unwrap();
+        // The Rust-side setup check does NOT consume the record (the shell has
+        // not asked yet).
+        let quiet = boot_check_in(&sp, Mode::Packaged, None, Some(&home), false).unwrap();
+        assert!(quiet.healed_generation.is_none());
+        assert!(home.recovery_json().exists());
+        // The shell's check surfaces it, camelCase, without the log tail — and
+        // clears it.
+        let out = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        let hg = out.healed_generation.clone().expect("the healed generation");
+        assert_eq!(hg.failed_sha, "bbb222");
+        assert_eq!(hg.prev_sha, "aaa111");
+        assert_eq!(hg.reason, "crashed");
+        assert!(out.rolled_back_to.is_none() && !out.rollback_failed, "healed is terminal: no source rollback");
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["healedGeneration"]["failedSha"], "bbb222");
+        assert_eq!(v["healedGeneration"]["prevSha"], "aaa111");
+        assert!(v["healedGeneration"].get("logTail").is_none());
+        assert!(!home.recovery_json().exists(), "surfaced exactly once");
+        let again = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        assert!(again.healed_generation.is_none());
+        assert!(serde_json::to_value(&again).unwrap()["healedGeneration"].is_null());
+    }
+
+    #[test]
+    fn boot_check_leaves_reweave_armed_sentinel_alone() {
+        // The new body's setup runs boot_check while its sentinel is
+        // `booting`/`reweave` — the warden owns that birth. A source rollback
+        // here would undo the genome the body was woven from and delete the
+        // sentinel the warden is watching.
+        let (_dir, root) = init_repo();
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let sp = home.sentinel_json();
+        let head = head_sha(&root).unwrap();
+        write_sentinel_at(
+            &sp,
+            &Sentinel {
+                prev_sha: "0".repeat(40),
+                applied_sha: head.clone(),
+                status: "booting".into(),
+                source_root: root.to_string_lossy().into_owned(),
+                armed_by: Some("reweave".into()),
+            },
+        )
+        .unwrap();
+        let out = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        assert!(out.rolled_back_to.is_none() && !out.rollback_failed);
+        assert_eq!(app_sentinel_status(&home).as_deref(), Some("booting"), "untouched");
+        assert_eq!(head_sha(&root).unwrap(), head, "the genome is untouched");
+    }
+
+    /// A fake `.app` + shelved previous body (an executable script, so the
+    /// backstop can actually spawn it as the warden) + a fake codesign.
+    struct PackagedFx {
+        _dir: tempfile::TempDir,
+        home: Home,
+        layout: crate::platform::AppLayout,
+        codesign: PathBuf,
+    }
+
+    impl PackagedFx {
+        fn tools(&self) -> impl Fn(&str) -> Option<PathBuf> + '_ {
+            move |n: &str| (n == "codesign").then(|| self.codesign.clone())
+        }
+        fn exe(&self) -> String {
+            fs::read_to_string(&self.layout.exe_path).unwrap()
+        }
+    }
+
+    fn packaged_fx() -> PackagedFx {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let home = Home::at(root.join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let app_path = root.join("LOOM.app");
+        let exe_path = app_path.join("Contents/MacOS/loom");
+        fs::create_dir_all(exe_path.parent().unwrap()).unwrap();
+        fs::write(&exe_path, "new body").unwrap();
+        let prev = home.generation_exe("aaa111");
+        fs::create_dir_all(prev.parent().unwrap()).unwrap();
+        fs::write(&prev, "#!/bin/sh\n# old body\nexit 0\n").unwrap();
+        fs::set_permissions(&prev, fs::Permissions::from_mode(0o755)).unwrap();
+        let codesign = root.join("bin/codesign");
+        fs::create_dir_all(codesign.parent().unwrap()).unwrap();
+        fs::write(&codesign, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&codesign, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::generations::write(
+            &home,
+            &crate::generations::Ledger {
+                current: Some("bbb222".into()),
+                previous: Some("aaa111".into()),
+                kept: vec!["aaa111".into(), "bbb222".into()],
+                keep: 3,
+                confirmed: false,
+            },
+        )
+        .unwrap();
+        PackagedFx { _dir: dir, home, layout: crate::platform::AppLayout { app_path, exe_path }, codesign }
+    }
+
+    fn warden_file(home: &Home, warden_pid: Option<u32>) {
+        crate::threads::write_json_atomic(
+            &home.warden_json(),
+            &crate::warden::Job {
+                old_pid: 1,
+                app_path: PathBuf::from("/x/LOOM.app"),
+                exe_path: PathBuf::from("/x/LOOM.app/Contents/MacOS/loom"),
+                new_sha: "bbb222".into(),
+                prev_sha: "aaa111".into(),
+                loomhome: home.root.clone(),
+                timeout_secs: 90,
+                relaunch_only: false,
+                warden_pid,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn preboot_packaged_arms_a_reweave_applied_and_keeps_the_owner() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "applied", Some("reweave"));
+        let alive = |_: u32| false;
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Armed
+        ));
+        let s = read_sentinel(&fx.home.sentinel_json()).unwrap();
+        assert_eq!(s.status, "booting");
+        assert_eq!(s.armed_by.as_deref(), Some("reweave"), "the warden still owns it");
+        assert_eq!(fx.exe(), "new body");
+        // A source-only apply (not reweave-armed) is not pre-main's business
+        // in packaged mode.
+        app_sentinel(&fx.home, "applied", None);
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Left
+        ));
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("applied"));
+    }
+
+    #[test]
+    fn preboot_packaged_leaves_a_booting_owned_by_a_live_warden() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave"));
+        warden_file(&fx.home, Some(777));
+        let alive = |pid: u32| pid == 777;
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Left
+        ));
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("booting"));
+        assert_eq!(fx.exe(), "new body");
+        assert!(!fx.home.recovery_json().exists());
+    }
+
+    #[test]
+    fn preboot_packaged_heals_a_booting_with_no_warden_and_relaunches_through_the_previous_body() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave"));
+        // The warden recorded its pid, then died.
+        warden_file(&fx.home, Some(777));
+        let alive = |_: u32| false;
+        let out = preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools());
+        let Backstop::Healed { warden } = out else { panic!("expected Healed, got {out:?}") };
+        assert!(warden.is_ok(), "the previous body was spawned as the warden: {warden:?}");
+        // Same heal as the warden's: body back, sentinel healed, ledger home, record.
+        assert_eq!(fx.exe(), "#!/bin/sh\n# old body\nexit 0\n");
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("healed"));
+        let ledger = crate::generations::read(&fx.home);
+        assert_eq!(ledger.current.as_deref(), Some("aaa111"));
+        assert_eq!(ledger.previous.as_deref(), Some("bbb222"));
+        let rec = crate::warden::read_recovery(&fx.home).unwrap();
+        assert_eq!((rec.failed_sha.as_str(), rec.prev_sha.as_str(), rec.reason.as_str()), ("bbb222", "aaa111", "never confirmed"));
+        // The warden's job is relaunch-only and waits for THIS process.
+        let job: crate::warden::Job =
+            serde_json::from_str(&fs::read_to_string(fx.home.warden_json()).unwrap()).unwrap();
+        assert!(job.relaunch_only);
+        assert_eq!(job.old_pid, std::process::id());
+        assert_eq!(job.app_path, fx.layout.app_path);
+        assert_eq!(job.exe_path, fx.layout.exe_path);
+        assert_eq!((job.new_sha.as_str(), job.prev_sha.as_str()), ("bbb222", "aaa111"));
+        // Without a warden.json at all (the warden never started), the same.
+        let fx2 = packaged_fx();
+        app_sentinel(&fx2.home, "booting", Some("reweave"));
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx2.home, Some(&fx2.layout), &alive, &fx2.tools()),
+            Backstop::Healed { .. }
+        ));
+        assert_eq!(app_sentinel_status(&fx2.home).as_deref(), Some("healed"));
+    }
+
+    #[test]
+    fn preboot_packaged_heal_failure_marks_rollback_failed_and_does_not_loop() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave"));
+        fs::remove_file(fx.home.generation_exe("aaa111")).unwrap();
+        let alive = |_: u32| false;
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::HealFailed(_)
+        ));
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("rollback-failed"));
+        assert_eq!(fx.exe(), "new body");
+        // A second start is a no-op.
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Left
+        ));
+    }
+
+    #[test]
+    fn preboot_packaged_ignores_absent_or_terminal_sentinels() {
+        let fx = packaged_fx();
+        let alive = |_: u32| false;
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Left
+        ));
+        for status in ["ok", "healed", "rollback-failed", "pending"] {
+            app_sentinel(&fx.home, status, Some("reweave"));
+            assert!(matches!(
+                preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+                Backstop::Left
+            ), "{status}");
+            assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some(status));
         }
     }
 }

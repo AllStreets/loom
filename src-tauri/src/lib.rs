@@ -11,9 +11,18 @@ mod generations;
 mod loomhome;
 mod threads;
 mod reweave;
+mod warden;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ARGV DISPATCH (Phase 23 / Rebirth). The VERY FIRST statement: when this
+    // body was started as the warden (`--warden <job>`), it runs the small
+    // loop in warden.rs — before preboot_heal, before Tauri — and exits with
+    // its verdict. It never constructs an app.
+    if let Some(code) = warden::dispatch(std::env::args()) {
+        std::process::exit(code)
+    }
+
     // PRE-MAIN HEAL (Phase 22 / Marrow — defense-in-depth backstop for the
     // recovery gap that Rust opens). This is the VERY FIRST statement of run(),
     // BEFORE `tauri::Builder::default()` and before ANY fallible or lazy init a
