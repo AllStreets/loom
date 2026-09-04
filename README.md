@@ -66,6 +66,12 @@ LOOM was built in phases, each a working, tested, reviewed milestone. The roadma
 
 **Rebirth (Phase 23).** The packaged LOOM rebuilds itself, offline. It carries its own **genome** — the full git history it was woven from, bundled into the app. **Threading** the loom is a one-time ceremony: LOOM finds the tools already on the machine (git · cargo · rustc · node · npm · cmake · clang · codesign), seeds the genome into its own home, vendors every crate, installs its node modules, and warms a build. That step needs the network once and says so. From then on, with the cable unplugged, a core edit travels the five walls and then a sixth: **reweave** — assets, core, stage, swap, relaunch — builds a new binary from the genome, shelves the running one as a **generation**, swaps the executable inside the bundle, and relaunches. The **warden** is the previous generation's own binary: it watches the new body's first boot and, if that boot never confirms, brings LOOM home to the last good generation and leaves an honest record. Any kept generation can be returned to from Settings or by voice. The Tapestry weaves each generation as a knot in the cloth.
 
+Round-1 review found that the packaged app had never been built or launched on
+this branch — it failed to compile, and once it compiled it died at startup on a
+missing library, in dev as well. Both are fixed and verified; the app builds,
+bundles, and runs. **The lesson is written into the house rhythm: build it and
+launch it before calling it shipped.**
+
 What CI proves: tool discovery and drift, the ceremony's steps and resumption, the swap plan as a pure enumerable list, the warden's decision table against a faked world, the ledger never pruning a live body, the sentinel's ownership rule, `--offline` on every cargo argv and `npx` on none, the protected set by enumeration. What only the owner can prove, and did in dev: a real reweave of a real body. Honest residuals: threading needs the network once; ad-hoc re-signing may make macOS ask for the microphone again; a generation that boots and paints is confirmed even if it misbehaves later — boot health is the wall, and Generations is the way back; loomhome is several gigabytes (vendor + warm build) and Settings shows the number; the swap is macOS-only in this generation.
 
 **Rebirth (Phase 23a).** The second excision. Four decks, the watch, the market engine, the cloud override, and every phrase, setting, power, and Rust command that served them are gone — migration-clean, tests green at every commit. One brain: the local fleet.

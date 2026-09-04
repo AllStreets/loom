@@ -103,6 +103,104 @@ Deferred (non-blocking) findings from the foundation branch reviews. None block 
 - **Mirror/JSON write atomicity** — every loomhome JSON (threads, ledger, reweave state, sentinel-at-path) is written temp-then-rename. (`threads::write_json_atomic`)
 - **Recovery record surfaced once** — `kernel_boot_check` reports `healedGeneration` from `recovery.json` and deletes it; the notice reads "LOOM tried to become … and couldn't — it came home to …".
 
+### Round-1 review (2026-09-04) — what it found, and what it left
+
+Four adversarial reviewers plus a real build. **Everything below the "resolved"
+line was fixed on-branch; these are the residuals that remain.**
+
+**The build and the launch were the biggest findings, and no reviewer could
+have read them out of the code.** `npm run tauri build` had never been run on
+this branch: it failed outright (Tauri defaults the macOS deployment target to
+10.13; whisper.cpp needs 10.15+), and once it built, the app died at launch
+because the TTS dylibs carry `@rpath` install names and nothing emitted an
+rpath — in dev too. Phase 23's whole premise is a packaged LOOM, and there had
+never been one. **Rule for every later phase: build it and launch it before
+calling it shipped.**
+
+- **The validation asymmetry (the open design decision).** Rust validation runs
+  `cargo test --no-run` because Marrow's round-1 review named executing
+  model-authored tests as RCE. TypeScript validation still *runs* vitest on the
+  model's own edit — a reviewer proved arbitrary code executes, pre-approval,
+  with the worktree now a sibling of the generation shelf. Moving the worktree
+  does not help: escaping code can use absolute paths. The honest options are
+  (a) typecheck-only for TS, matching Marrow and losing a wall the README
+  advertises, or (b) keep it and state the residual. **Currently (b), stated
+  here.** Owner's call.
+- **The kernel-edit whitelist assumes edited TS is not adversarial.** A reviewer
+  proposed moving `kernelBootOk` out of the editable `core.ts`; that is
+  cosmetic, because any edited module can invoke the command directly through
+  the Tauri bridge. The real statement is the one already made about organs: the
+  TS realm is honesty-enforcement, not a security boundary. A self-edit that
+  deliberately calls the confirm beacon defeats the boot-health veto. Closing it
+  needs a Rust-side proof the shell cannot forge.
+- **`genome_ahead`.** The consent line for an irreversible act names the
+  generation but not how much is changing; `commitsAhead` was hardwired to null
+  and has been removed rather than left as a promise the code could not keep. A
+  `git rev-list --count <generation>..HEAD` command in the source repo would
+  restore "weave generation 3f2a1c from 4 commits" honestly.
+- **A clean owner-quit inside the warden's confirmation window still reads as a
+  crash** after three consecutive empty process samples. Narrowed, not closed;
+  distinguishing intent needs a quit beacon from the shell.
+- **The unsigned-bundle window.** Death between the executable copy and the
+  re-sign leaves a bundle whose seal is stale. Mitigated (the copied body was
+  already ad-hoc signed as a Mach-O at the stage step, so the bundle re-sign is
+  a reseal), and closing it properly would mean spawning the warden before the
+  swap — a design change.
+- **A truncated *previous* body is still trusted by the heal.** `shelved_whole`
+  guards the return path but not the heal; making the heal refuse would turn a
+  bad heal into `rollback-failed`, which is arguably worse. Wants a decision.
+- **The sherpa archive is fetched over HTTP at build time** and cached in
+  `~/Library/Caches/sherpa-rs`, outside loomhome and purgeable by macOS.
+  Threading now records the path and `thread_status` reports it as drift when it
+  is gone, so an offline weave fails early and honestly — but the TS side does
+  not surface that drift yet (`ThreadStatus.sherpaCache` is inert in Settings).
+- **Inherited environment.** No spawn calls `env_clear`, so `RUSTFLAGS`,
+  `CARGO_HOME` and `NODE_OPTIONS` reach the compiler and the validator from
+  whatever launched LOOM. Outside the stated threat model, but an allowlist
+  would match the sovereignty claim.
+- **Validation and reweave contend on the shared cargo target dir**, so a
+  validation can queue behind a 30-minute weave and time out as an
+  infrastructure fault rather than a real failure.
+- **Voice models are already committed** in existing installs' organ timelines
+  (the pathspec fix stops future staging; it does not rewrite what is there).
+- **The genome bundle carries the repo's whole history**, including the deck
+  scratch removed on this branch. Untracking stops it reaching a fresh
+  checkout's working tree; the blobs remain in history.
+
+### Resolved in the round-1 review (2026-09-04)
+
+- The packaged app builds (`minimumSystemVersion` 11.0) and launches (rpaths for
+  the TTS dylibs, shipped as bundle frameworks).
+- A generation can no longer lie about its own name: `build.rs` watches the ref
+  HEAD resolves to, not just HEAD, so a commit on a branch actually reruns it.
+  The seed follows the bundle's own `genome.json` sha when the two disagree.
+- The swap arms every healer *before* it destroys the running body; the sentinel
+  is written atomically; the shelf copy is atomic and size-verified.
+- The warden no longer kills a window in use, no longer reads one missed process
+  sample as a crash, retries `open`, and guards only the birth it names.
+- The organ timeline stages `organs` only — it shares its work tree with
+  loomhome, and would have swept the vendored crates, the warm target and every
+  shelved binary into the timeline on the next organ write.
+- Threading works in dev (the source is resolved per mode), `npm` gets a PATH
+  carrying the recorded node, CANCEL reaches every ceremony step, and a
+  panicking job returns its slot.
+- The streaming runner's timeout fires even while a child keeps printing —
+  before this, reweave and threading had no timeout at all.
+- An organ may now only *ask* for a body change; shell-owned chrome asks the
+  owner and is the only caller of the orchestration. That chrome is protected,
+  as are the organ power seam, the manifest wall, the reweave card and the
+  settings seed.
+- `autoReweave` honours `isCore`; a refused weave is spoken rather than
+  swallowed; the point-of-return warning arrives while CANCEL still works; the
+  consent line tells the truth in dev and off macOS, reading `canSwap` from the
+  core instead of guessing from a user-agent string.
+- `generations_return` validates its sha before it becomes a path component or a
+  git start-point, and `short()` no longer panics on multi-byte input.
+- The whitelist is re-checked against where a path canonically lands, so a
+  symlink cannot be written through to the safety core.
+- The deck scratch that was compiled into the shipped binary — including a local
+  settings file with personal URLs — is out of `public/`.
+
 ### Phase-23 backlog (beyond Rebirth)
 
 - **Toolchain distribution** — LOOM only adopts tools already on the machine; a missing rustup/node/cmake is reported with its install line and threading stops. Installing them from inside the app (pinned versions, offline archives) is its own phase.
