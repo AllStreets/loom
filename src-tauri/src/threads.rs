@@ -21,9 +21,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::error::LoomError;
+use crate::exec::Slot;
 use crate::loomhome::{Home, Mode};
 
 // ── The tool table ────────────────────────────────────────────────────────────
@@ -439,6 +441,13 @@ pub const THREAD_EVENT: &str = "loom-thread";
 /// The one honest line about the network (spec §Threading, step 2).
 pub const NEEDS_NETWORK: &str = "threading needs the network once — after that LOOM weaves offline.";
 
+/// What a cancelled ceremony says. The step that was running stays unmarked,
+/// so the next `thread_loom` resumes from it.
+pub const CANCELLED: &str = "threading was cancelled — run it again to continue.";
+
+/// What `thread_cancel` says when threading is not the job in flight.
+pub const NOTHING_TO_CANCEL: &str = "nothing to cancel — the loom isn't being threaded";
+
 const DEPS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const VENDOR_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const ASSETS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -473,6 +482,51 @@ fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String, Str
     let path = npm_path_env(Path::new(&node))
         .ok_or_else(|| LoomError::NotFound(format!("node has no directory to lead PATH: {node}")))?;
     Ok((npm, path))
+}
+
+/// Every step of the ceremony runs through the slot-registering streamed
+/// runner. A spawn `thread_cancel` cannot reach is a stop button that does
+/// not stop — and `npm ci` and `cargo vendor` are the only two steps in the
+/// whole product that talk to the internet. Returns the tool's exit plus the
+/// last lines it printed, which the caller emits as the step's progress.
+#[allow(clippy::too_many_arguments)]
+fn run_step(
+    slot: &Slot,
+    step: &str,
+    detail: &str,
+    argv: &[&str],
+    cwd: &Path,
+    root: &Path,
+    timeout: Duration,
+    envs: &[(&str, &str)],
+    emit: &mut dyn FnMut(&str, &str, &[String]),
+) -> Result<(crate::exec::ExecOut, Vec<String>), LoomError> {
+    let mut tail: Vec<String> = Vec::new();
+    let mut last: Option<Instant> = None;
+    let out = crate::exec::run_job_stream(slot, argv, cwd, root, timeout, envs, &mut |line| {
+        if line.trim().is_empty() {
+            return;
+        }
+        if tail.len() == TAIL_LINES {
+            tail.remove(0);
+        }
+        tail.push(line.to_string());
+        if last.map_or(true, |t: Instant| t.elapsed() >= TAIL_EVERY) {
+            emit(step, detail, &tail);
+            last = Some(Instant::now());
+        }
+    })?;
+    Ok((out, tail))
+}
+
+/// Between every step. A cancel that lands while a tool runs kills the tool;
+/// a cancel that lands between them must still stop the ceremony instead of
+/// letting the next step start.
+fn cancel_check(slot: &Slot) -> Result<(), Failed> {
+    if slot.cancelled() {
+        return Err(LoomError::Parse(CANCELLED.into()).into());
+    }
+    Ok(())
 }
 
 fn tail_of(text: &str) -> Vec<String> {
@@ -524,6 +578,8 @@ fn cargo_config(vendor: &Path) -> String {
 ///
 /// - `source` is the genome to work in: the checkout in dev, `loomhome/source`
 ///   in packaged mode (`ceremony_source`).
+/// - `slot` is the job slot this ceremony holds (`exec::JOB` in the app): every
+///   spawn registers its pid there, so `thread_cancel` reaches all of them.
 /// - `tools(name)` resolves a tool to its absolute path (`tool_path` in the
 ///   app; a closure over fakes in tests).
 /// - `exe` is the running executable, shelved as generation 0 at register.
@@ -534,10 +590,12 @@ fn cargo_config(vendor: &Path) -> String {
 ///
 /// Returns the failure so the caller can also surface it; the `failed`
 /// event has already been emitted by then.
+#[allow(clippy::too_many_arguments)]
 pub fn run_ceremony(
     home: &Home,
     mode: Mode,
     source: &Path,
+    slot: &Slot,
     tools: &dyn Fn(&str) -> Option<PathBuf>,
     exe: &Path,
     bundle: Option<&Path>,
@@ -550,7 +608,7 @@ pub fn run_ceremony(
         tools: vec![],
         steps: ThreadSteps::default(),
     });
-    match ceremony_steps(home, mode, source, tools, exe, bundle, emit, &mut t) {
+    match ceremony_steps(home, mode, source, slot, tools, exe, bundle, emit, &mut t) {
         Ok(()) => {
             emit("done", "the loom is threaded — it weaves offline from here.", &[]);
             Ok(())
@@ -596,14 +654,13 @@ fn ceremony_steps(
     home: &Home,
     mode: Mode,
     source: &Path,
+    slot: &Slot,
     tools: &dyn Fn(&str) -> Option<PathBuf>,
     exe: &Path,
     bundle: Option<&Path>,
     emit: &mut dyn FnMut(&str, &str, &[String]),
     t: &mut Threads,
 ) -> Result<(), Failed> {
-    use crate::exec::{run_checked_env, run_job_stream, JOB};
-
     let root = ceremony_root(home, mode, source);
     let source = source.to_path_buf();
     let core = source.join("src-tauri");
@@ -641,6 +698,7 @@ fn ceremony_steps(
         t.steps.seed = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 2 · deps (network, once)
     if t.steps.deps {
@@ -648,19 +706,25 @@ fn ceremony_steps(
     } else {
         emit("deps", "npm ci — this is the step that needs the network", none);
         let (npm, node_path) = npm_with_node(tools)?;
-        let out = run_checked_env(
+        let (out, _) = run_step(
+            slot,
+            "deps",
+            "npm ci",
             &[&npm, "ci", "--no-audit", "--no-fund"],
             &source,
             &root,
             DEPS_TIMEOUT,
             &[("PATH", &node_path)],
+            emit,
         )?;
         if out.code != 0 {
+            cancel_check(slot)?;
             return Err(step_failed("npm ci", &out));
         }
         t.steps.deps = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 3 · vendor (network, once)
     if t.steps.vendor {
@@ -669,14 +733,19 @@ fn ceremony_steps(
         emit("vendor", "cargo vendor — every crate, kept locally", none);
         let cargo = need_tool(tools, "cargo")?;
         let vendor_dir = home.vendor().to_string_lossy().into_owned();
-        let out = run_checked_env(
+        let (out, _) = run_step(
+            slot,
+            "vendor",
+            "vendoring the crates",
             &[&cargo, "vendor", "--versioned-dirs", &vendor_dir],
             &core,
             &root,
             VENDOR_TIMEOUT,
             &[],
+            emit,
         )?;
         if out.code != 0 {
+            cancel_check(slot)?;
             return Err(step_failed("cargo vendor", &out));
         }
         let cfg = source.join(".cargo").join("config.toml");
@@ -686,6 +755,7 @@ fn ceremony_steps(
         t.steps.vendor = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 4 · warm (the long one)
     if t.steps.warm {
@@ -693,52 +763,45 @@ fn ceremony_steps(
     } else {
         emit("warm", "building the assets", none);
         let (npm, node_path) = npm_with_node(tools)?;
-        let out = run_checked_env(
+        let (out, _) = run_step(
+            slot,
+            "warm",
+            "building the assets",
             &[&npm, "run", "build"],
             &source,
             &root,
             ASSETS_TIMEOUT,
             &[("PATH", &node_path)],
+            emit,
         )?;
         if out.code != 0 {
+            cancel_check(slot)?;
             return Err(step_failed("npm run build", &out));
         }
+        cancel_check(slot)?;
         emit("warm", "compiling the core — native deps compile once", none);
         let cargo = need_tool(tools, "cargo")?;
         let target = home.target().to_string_lossy().into_owned();
-        let mut tail: Vec<String> = Vec::new();
-        let mut last_emit: Option<Instant> = None;
-        let out = run_job_stream(
-            &JOB,
+        let (out, tail) = run_step(
+            slot,
+            "warm",
+            "compiling the core",
             &[&cargo, "build", "--release", "--offline"],
             &core,
             &root,
             CORE_TIMEOUT,
             &[("CARGO_TARGET_DIR", &target), ("CARGO_NET_OFFLINE", "true")],
-            &mut |line| {
-                if line.trim().is_empty() {
-                    return;
-                }
-                if tail.len() == TAIL_LINES {
-                    tail.remove(0);
-                }
-                tail.push(line.to_string());
-                if last_emit.map_or(true, |t| t.elapsed() >= TAIL_EVERY) {
-                    emit("warm", "compiling the core", &tail);
-                    last_emit = Some(Instant::now());
-                }
-            },
+            emit,
         )?;
         if out.code != 0 {
-            if JOB.cancelled() {
-                return Err(LoomError::Parse("threading was cancelled — run it again to continue.".into()).into());
-            }
+            cancel_check(slot)?;
             return Err(step_failed("cargo build", &out));
         }
         emit("warm", "the core is built", &tail);
         t.steps.warm = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 5 · register — the running body becomes generation 0
     if t.steps.register {
@@ -754,6 +817,7 @@ fn ceremony_steps(
         t.steps.register = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 6 · stamp — threaded only now
     emit("stamp", "writing threads.json", none);
@@ -764,6 +828,27 @@ fn ceremony_steps(
     Ok(())
 }
 
+/// Is the job in flight THREADING's? `exec::JOB` says a job holds the slot,
+/// not whose it is; `thread_cancel` must never reach a weave.
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Raises the flag for as long as it lives and lowers it on drop — an
+/// unwinding job thread leaves nothing standing.
+struct Active;
+
+impl Active {
+    fn take() -> Active {
+        ACTIVE.store(true, Ordering::SeqCst);
+        Active
+    }
+}
+
+impl Drop for Active {
+    fn drop(&mut self) {
+        ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Start the ceremony as a background job. Refuses if threading or reweave
 /// is already in flight (they share `exec::JOB`). Progress arrives as
 /// `loom-thread` events; the command itself returns at once.
@@ -771,9 +856,11 @@ fn ceremony_steps(
 pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
     use tauri::Emitter;
     let home = Home::from_app(&app)?;
-    if !crate::exec::JOB.try_take() {
+    // The slot is held by an RAII guard from here on: every early return
+    // below, and a panic in the job thread, releases it.
+    let Some(slot) = crate::exec::SlotGuard::take(&crate::exec::JOB) else {
         return Err(LoomError::Parse("threading already in flight".into()));
-    }
+    };
     // Record the machine's tools (paths + versions) before the first step,
     // so drift has a baseline and every spawn below uses a recorded path.
     if read(&home).is_none() {
@@ -785,10 +872,7 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
             tools: discovered,
             steps: ThreadSteps::default(),
         };
-        if let Err(e) = write(&home, &fresh) {
-            crate::exec::JOB.release();
-            return Err(e);
-        }
+        write(&home, &fresh)?;
     }
     let mode = crate::loomhome::mode();
     let bundle = match mode {
@@ -801,14 +885,10 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
             .map_err(|e| LoomError::NotFound(format!("current exe: {e}")))?;
         Ok::<(PathBuf, PathBuf), LoomError>((source, exe))
     })();
-    let (source, exe) = match started {
-        Ok(pair) => pair,
-        Err(e) => {
-            crate::exec::JOB.release();
-            return Err(e);
-        }
-    };
+    let (source, exe) = started?;
     std::thread::spawn(move || {
+        let _slot = slot; // released when this thread ends, panic included
+        let _active = Active::take();
         let tools = |name: &str| tool_path(&home, name);
         let mut emit = |step: &str, detail: &str, tail: &[String]| {
             let _ = app.emit(
@@ -816,16 +896,31 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
                 ThreadEvent { step: step.into(), detail: detail.into(), tail: tail.to_vec() },
             );
         };
-        let _ = run_ceremony(&home, mode, &source, &tools, &exe, bundle.as_deref(), &mut emit);
-        crate::exec::JOB.release();
+        let _ = run_ceremony(
+            &home,
+            mode,
+            &source,
+            _slot.slot(),
+            &tools,
+            &exe,
+            bundle.as_deref(),
+            &mut emit,
+        );
     });
     Ok(())
 }
 
 /// Stop a running ceremony: group-kills the current tool. The step that was
 /// running stays unmarked, so the next `thread_loom` resumes from it.
+///
+/// Refused unless threading is the job in flight. The slot is shared with
+/// reweave, and a weave past its cancellable stages is not threading's to
+/// kill — the spec's point of return belongs to the reweave card.
 #[tauri::command]
 pub fn thread_cancel() -> Result<(), LoomError> {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return Err(LoomError::Parse(NOTHING_TO_CANCEL.into()));
+    }
     crate::exec::JOB.kill();
     Ok(())
 }
@@ -1050,6 +1145,25 @@ mod tests {
         assert!(tool_path(&home, "git").map_or(true, |p| p != git));
     }
 
+    /// CANCEL on the threading card must not reach a weave: `exec::JOB` says
+    /// a job holds the slot, not whose it is, and a reweave past its
+    /// cancellable stages is nobody's to kill.
+    #[test]
+    fn cancel_is_refused_unless_threading_owns_the_job() {
+        match thread_cancel().unwrap_err() {
+            LoomError::Parse(m) => assert_eq!(m, NOTHING_TO_CANCEL),
+            e => panic!("expected the honest refusal, got {e:?}"),
+        }
+        // While the ceremony runs the flag says so; it lowers on drop, so a
+        // job thread that panics leaves nothing cancellable behind.
+        {
+            let _active = Active::take();
+            assert!(ACTIVE.load(Ordering::SeqCst));
+        }
+        assert!(!ACTIVE.load(Ordering::SeqCst));
+        assert!(thread_cancel().is_err(), "refused again once the ceremony ended");
+    }
+
     #[test]
     fn write_json_atomic_leaves_no_temp_file() {
         let d = tempfile::tempdir().unwrap();
@@ -1135,6 +1249,9 @@ mod tests {
     struct Stage {
         _dir: tempfile::TempDir,
         home: Home,
+        /// This ceremony's own job slot. The app runs in `exec::JOB`; a test
+        /// that shared it could group-kill another test's tools.
+        slot: &'static Slot,
         /// The dev checkout — where the owner keeps it, NOT under loomhome.
         /// `loomhome/source` is seed's work, and seed runs in packaged mode
         /// only; a fixture that pre-creates it hides that dev has no source.
@@ -1167,6 +1284,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("loom");
         let home = Home::at(root.clone());
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+        assert!(slot.try_take(), "the ceremony holds its slot, as thread_loom does");
         std::fs::create_dir_all(&root).unwrap();
         let source = dir.path().join("checkout");
         std::fs::create_dir_all(source.join("src-tauri")).unwrap();
@@ -1179,7 +1298,7 @@ mod tests {
         let cargo = fake_tool(&bin, "cargo", &log, &markers, cargo_extra);
         let exe = dir.path().join("loom-body");
         std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
-        Stage { _dir: dir, home, source, log, markers, npm, node, cargo, exe }
+        Stage { _dir: dir, home, slot, source, log, markers, npm, node, cargo, exe }
     }
 
     #[cfg(unix)]
@@ -1202,6 +1321,7 @@ mod tests {
                 &self.home,
                 Mode::Dev,
                 &self.source,
+                self.slot,
                 &tools,
                 &self.exe,
                 None,
@@ -1407,6 +1527,7 @@ fi"#;
             &st.home,
             Mode::Dev,
             &st.source,
+            st.slot,
             &npm_only,
             &st.exe,
             None,
@@ -1420,6 +1541,71 @@ fi"#;
         assert!(st.log().is_empty(), "nothing spawned");
     }
 
+    /// `npm ci` is the longest step that reaches the internet. CANCEL during
+    /// it has to take the process down — with `run_checked_env` no pid was
+    /// ever registered, so the stop button stopped nothing and LOOM kept
+    /// talking to the registry.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_during_npm_ci_kills_it_and_stops_the_ceremony() {
+        let st = stage(r#"if [ "$1" = ci ]; then sleep 30; fi"#, CARGO_BUILD_FAKE);
+        let slot = st.slot;
+        let home = Home::at(st.home.root.clone());
+        let source = st.source.clone();
+        let exe = st.exe.clone();
+        let npm = st.npm.clone();
+        let node = st.node.clone();
+        let cargo = st.cargo.clone();
+        let job = std::thread::spawn(move || {
+            let tools = move |name: &str| match name {
+                "npm" => Some(npm.clone()),
+                "node" => Some(node.clone()),
+                "cargo" => Some(cargo.clone()),
+                _ => None,
+            };
+            run_ceremony(&home, Mode::Dev, &source, slot, &tools, &exe, None, &mut |_, _, _| {})
+        });
+
+        let start = Instant::now();
+        while slot.pid().is_none() && start.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid = slot.pid().expect("npm ci registers its pid — otherwise CANCEL reaches nothing");
+        slot.kill();
+        let res = job.join().unwrap();
+
+        assert!(start.elapsed() < Duration::from_secs(20), "the kill lands promptly");
+        match res {
+            Err(LoomError::Parse(m)) => assert_eq!(m, CANCELLED),
+            other => panic!("expected the cancelled line, got {other:?}"),
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(
+            unsafe { libc::kill(pid as i32, 0) } != 0,
+            "the npm tree must be dead after CANCEL"
+        );
+        let log = st.log();
+        assert!(!log.contains("cargo vendor"), "nothing after the cancelled step runs: {log}");
+        assert!(!read(&st.home).unwrap().steps.deps, "the cancelled step stays unmarked");
+    }
+
+    /// A cancel that lands between two steps stops the ceremony too — the
+    /// warm build was the only place the mark was ever read.
+    #[cfg(unix)]
+    #[test]
+    fn a_cancel_between_steps_stops_before_the_next_one() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        st.slot.kill(); // marks cancelled; no child is running
+        let (res, events) = st.run();
+        match res {
+            Err(LoomError::Parse(m)) => assert_eq!(m, CANCELLED),
+            other => panic!("expected the cancelled line, got {other:?}"),
+        }
+        assert_eq!(events.last().unwrap().0, "failed");
+        assert!(st.log().is_empty(), "no tool was spawned: {:?}", st.log());
+        assert!(!read(&st.home).unwrap().threaded);
+    }
+
     #[cfg(unix)]
     #[test]
     fn missing_tool_stops_with_its_install_line() {
@@ -1430,6 +1616,7 @@ fi"#;
             &st.home,
             Mode::Dev,
             &st.source,
+            st.slot,
             &none,
             &st.exe,
             None,
