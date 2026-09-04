@@ -93,17 +93,29 @@ Deferred (non-blocking) findings from the foundation branch reviews. None block 
 - **Settings-organ seed upgrade** — existing installs keep the pre-Rebirth Settings organ (Cloud builder and Globe interaction sections) until reset; the seed-version upgrade path from the Phase-16 backlog would fix this class for good.
 - **`cockpit.*` naming** — three surviving keys still carry the Cockpit prefix; rename with a migration when a settings pass is otherwise due.
 
-### Phase-23 backlog (beyond Marrow)
+## Phase-23 — Rebirth (packaged self-rebuild, 2026-09-04)
 
-- **Packaged self-rebuild** — dev-mode (21/22) needs the Rust toolchain + source; a packaged app has no compiler. A supervised `npm run build` + `tauri build` + binary swap + relaunch (hardened spawn, obvious "rebuilding LOOM" UI, recovery on failure, macOS signed-binary + Windows in-use-lock handling). High risk, platform-specific — spec adversarially, its own phase.
-- **Faster cargo validation** — a core edit compiles cold in an isolated worktree (no shared `target/`), honestly minutes. A canonicalized `CARGO_TARGET_DIR` share (or a persistent validation worktree) would cut it to incremental seconds — weigh against the path-escape surface that sharing opens.
-- **Shrink the setup-panic residual** — a compile-clean core edit that panics in *untested* startup code still costs one auto-healed restart cycle. A setup-path smoke test (construct the app headless in `cargo test`) would let cargo-test catch more setup panics in isolation, shrinking the residual toward zero.
-- **Validation threat model** — validating a core edit runs `cargo test` (model-authored code) on the machine in a worktree; build scripts/proc-macros/tests execute during validation. The worktree + same-user bound it, but a stronger sandbox (container/VM for validation) is the real hardening if untrusted models ever author edits. (Same class as Phase 21's vitest-runs-JS reality.)
-- **Multi-file / refactor edits** — v1 favors small bounded single-region edits; broader refactors across files need a larger diff-review surface and staged validation.
-- **Kernel-edit history surface** — the source-repo `self:` commits could surface as a "what LOOM changed about itself" lens (the Tapestry already weaves source commits — a filtered view).
-- **Round-2 review notes (non-blocking, both HOLDS)** — (1) if the owner restarts before `kernel_boot_ok` fires on a *good* core edit, the guard treats the still-`booting` mirror as unconfirmed and rolls back; the edit is committed so it's recoverable from git history, and "booting = unknown" is the correct conservative signal — a per-boot attempt counter could distinguish "interrupted" from "failed" if this ever annoys. (2) add a Rust test for `preboot_heal_at` on a legacy `("booting", unknown armedBy)` mirror — the `_` match arm already rolls back safely (conservative), so this is coverage hygiene, not a hole.
-- **Mirror write atomicity** — `write_mirror` uses `fs::write` (not atomic on all FS); a crash mid-write leaves a corrupt mirror that reads as no-op (a bad edit would then lack a recovery record). Pre-existing residual; a write-to-temp-then-rename would make it atomic.
-- **boot_recover honoring a sourceRepo override** — recovery resolves the repo via the sentinel's stored `source_root` / cwd (correct for dev-mode); persist a non-default `kernel.sourceRepo` somewhere the pre-boot path can read if ever supported.
+### Resolved in Phase 23 (Rebirth)
+
+- **Packaged self-rebuild** — the genome (`git bundle`) ships in the app; threading seeds it into loomhome, vendors crates, installs node modules, warms the build; reweave builds `npm run build` + `cargo build --release --offline` under a shared `CARGO_TARGET_DIR`, shelves the running body under `generations/<sha>/`, swaps `Contents/MacOS/loom` atomically (write-then-rename), ad-hoc re-signs, writes the sentinel `applied` armed by `reweave`, and relaunches through the warden. (`src-tauri/src/{loomhome,threads,generations,platform,reweave,warden}.rs`, `scripts/genome-bundle.mjs`)
+- **Faster cargo validation** — packaged validation worktrees live under `loomhome/worktrees/` and share `loomhome/target`; deps compile once at threading. (`kernel.rs` `cargo_env`)
+- **`npx` gone from validation** — every worktree gets a `node_modules` symlink and validation invokes `node_modules/typescript/bin/tsc` and `vitest.mjs` through the recorded `node`; Phase 21's unstated npx-cache network dependency is closed. (`kernel.rs` `ts_argv`)
+- **Mirror/JSON write atomicity** — every loomhome JSON (threads, ledger, reweave state, sentinel-at-path) is written temp-then-rename. (`threads::write_json_atomic`)
+- **Recovery record surfaced once** — `kernel_boot_check` reports `healedGeneration` from `recovery.json` and deletes it; the notice reads "LOOM tried to become … and couldn't — it came home to …".
+
+### Phase-23 backlog (beyond Rebirth)
+
+- **Toolchain distribution** — LOOM only adopts tools already on the machine; a missing rustup/node/cmake is reported with its install line and threading stops. Installing them from inside the app (pinned versions, offline archives) is its own phase.
+- **Windows / Linux swap** — `platform::swap_plan` returns a typed `Unsupported` off macOS; the build and the ledger still work. Windows needs the rename-running-exe dance and in-use locks; Linux needs AppImage/desktop-file handling.
+- **Developer-ID signing + notarization** — reweave re-signs ad-hoc; a signed distribution would need the identity on the machine and a re-notarization path (or an unsigned-local policy stated plainly).
+- **Microphone permission after re-sign** — ad-hoc re-signing changes the code identity; macOS may re-prompt for the mic. The card says so before the swap. A stable signing identity is the real fix.
+- **Validation threat model** — unchanged from 22: validation runs model-authored code (build scripts, proc-macros, tests) in a worktree on the machine. A container/VM sandbox is the hardening if untrusted models ever author edits.
+- **Shrink the setup-panic residual** — a compile-clean core edit that panics in untested startup code still costs one warden-healed relaunch; a headless setup-path smoke test in `cargo test` would catch more of them before the swap.
+- **Multi-file / refactor edits** — unchanged from 22.
+- **Kernel-edit history surface** — the Tapestry now knots generations; a filtered "what LOOM changed about itself" lens over `self:` commits is still open.
+- **Legacy `("booting", unknown armedBy)` mirror test** — coverage hygiene carried from the Marrow round-2 hold.
+- **boot_recover honoring a sourceRepo override** — dev-only; unchanged.
+- **Seed upgrade** — existing installs keep the pre-Rebirth Settings organ until reset, so the LOOM page does not appear for them; the seed-version upgrade path is still the fix for this class.
 
 ### Resolved in Phase 22 (Marrow)
 

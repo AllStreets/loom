@@ -64,6 +64,10 @@ LOOM was built in phases, each a working, tested, reviewed milestone. The roadma
 
 **The Cockpit (Phases 9–15, 17 — excised in 23a).** For a stretch LOOM grew a world behind the orb: a bundled globe deck, a market terminal with its own Rust quote engine, a salience watch, an opt-in cloud builder. It was good work and none of it was the thesis — any wrapper could ship a dashboard. Phase 18 cut the exchange dock; Phase 23a cut the rest. What survived from that era is what only LOOM has: the Tapestry, the Shuttle, the organ powers, initiative, and the chrome design language. The code stays in git history.
 
+**Rebirth (Phase 23).** The packaged LOOM rebuilds itself, offline. It carries its own **genome** — the full git history it was woven from, bundled into the app. **Threading** the loom is a one-time ceremony: LOOM finds the tools already on the machine (git · cargo · rustc · node · npm · cmake · clang · codesign), seeds the genome into its own home, vendors every crate, installs its node modules, and warms a build. That step needs the network once and says so. From then on, with the cable unplugged, a core edit travels the five walls and then a sixth: **reweave** — assets, core, stage, swap, relaunch — builds a new binary from the genome, shelves the running one as a **generation**, swaps the executable inside the bundle, and relaunches. The **warden** is the previous generation's own binary: it watches the new body's first boot and, if that boot never confirms, brings LOOM home to the last good generation and leaves an honest record. Any kept generation can be returned to from Settings or by voice. The Tapestry weaves each generation as a knot in the cloth.
+
+What CI proves: tool discovery and drift, the ceremony's steps and resumption, the swap plan as a pure enumerable list, the warden's decision table against a faked world, the ledger never pruning a live body, the sentinel's ownership rule, `--offline` on every cargo argv and `npx` on none, the protected set by enumeration. What only the owner can prove, and did in dev: a real reweave of a real body. Honest residuals: threading needs the network once; ad-hoc re-signing may make macOS ask for the microphone again; a generation that boots and paints is confirmed even if it misbehaves later — boot health is the wall, and Generations is the way back; loomhome is several gigabytes (vendor + warm build) and Settings shows the number; the swap is macOS-only in this generation.
+
 **Rebirth (Phase 23a).** The second excision. Four decks, the watch, the market engine, the cloud override, and every phrase, setting, power, and Rust command that served them are gone — migration-clean, tests green at every commit. One brain: the local fleet.
 
 ---
@@ -149,6 +153,8 @@ ollama pull qwen3-coder:30b-a3b-q4_K_M && ollama pull gpt-oss:20b && ollama pull
 npm run check && npm run tauri dev
 ```
 
+To package it: `npm run tauri build`, open the app, then say **"thread the loom"** (or Settings → LOOM → THREAD THE LOOM). That needs the network once. After it, unplug and say *"give yourself …"* — approve the diff, then *"reweave yourself"*, and LOOM returns as its next generation.
+
 Type into LOOM — *"Build an organ that tracks my daily water intake with a goal and a progress bar."* — and press **Enter**. Watch it write, validate, repair if needed, and commit; approve the permission card and your new organ is alive.
 
 ---
@@ -175,8 +181,8 @@ Built in phases, each a working, tested, reviewed milestone.
 | **21 · Selfhood** | LOOM edits its own TypeScript kernel behind five walls — isolated-worktree validation (real tsc + vitest) · owner diff-approval · commit to source + hot-reload · recovery boot that rolls back a bad edit · a self-protection invariant (it cannot edit its own safety machinery) | **shipped** |
 | **22 · Marrow** | LOOM edits its own Rust core (dev-mode) — same five walls, `cargo check` + `cargo test` validation · honest "restart to load" (no hot-reload) · the recovery gap closed by a pre-compile guard + pre-`main` rollback so a bad core edit self-heals · self-protection extended over the whole Rust safety core + Cargo manifests | **shipped** |
 | **23a · Rebirth** | the second excision — the Cockpit is cut in full (decks · watch · market · cloud · their settings, powers, phrases and Rust commands) · one brain (local) · initiative re-rooted in the timeline | **shipped** |
-| **23 · Rebuild** | packaged self-rebuild — LOOM rebuilds its own binary without cloud access | next |
-| **later** | timeline-aware organs · embedding-based intent classifier · real organ isolation · KEEL · PRISM · SIGNET | vision |
+| **23 · Rebirth** | packaged self-rebuild, offline — the genome bundled into the app · threading (one-time tool discovery, vendor, warm build) · reweave (assets · core · stage · swap · relaunch) · generations ledger with return · the warden (the previous generation guards the next one's first boot and heals) · Settings → LOOM · reweave card · Tapestry generation knots · self-protection over the whole rebirth machinery | **shipped** |
+| **later** | toolchain distribution (rustup/node inside the app) · Windows/Linux swap · Developer-ID signing · sandboxed validation · timeline-aware organs · embedding-based intent classifier · real organ isolation · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 
