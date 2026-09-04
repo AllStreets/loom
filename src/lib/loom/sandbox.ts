@@ -57,9 +57,14 @@ const freshLoom = () => {
   ];
   // self — a threaded dev body whose generation matches its genome: no
   // ceremony to run, nothing new to weave, an empty shelf. Every tool present.
+  // The three ACTS only ever ask: in the real shell they dispatch a
+  // loom-body-request and chrome renders the owner's consent card. There is no
+  // owner in a sandbox, so the mock plays a standing yes and records what was
+  // asked — selfApi.asked — which is what an organ's tests can assert. The
+  // one thing they can never do here (as in the shell) is move the body.
   var SELF_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
   var SELF_TOOLS = ["git", "cargo", "rustc", "node", "npm", "cmake", "clang", "codesign"];
-  var selfApi = { returned: [] };
+  var selfApi = { returned: [], asked: [] };
   selfApi.identity = async function() {
     return { mode: "dev", genomeSha: SELF_SHA, generation: SELF_SHA, threaded: true, loomhome: "/sandbox/loom", loomhomeBytes: 0 };
   };
@@ -74,9 +79,18 @@ const freshLoom = () => {
     };
   };
   selfApi.generations = async function() { return []; };
-  selfApi.thread = async function(onEvent) { if (onEvent) onEvent({ step: "done", detail: "the loom is threaded", tail: [] }); };
-  selfApi.reweave = async function() { return { ok: false, reason: "nothing new to weave — the body already matches the genome" }; };
-  selfApi.returnTo = async function(sha) { selfApi.returned.push(String(sha)); };
+  selfApi.thread = async function(onEvent) {
+    selfApi.asked.push({ kind: "thread" });
+    if (onEvent) onEvent({ step: "done", detail: "the loom is threaded", tail: [] });
+  };
+  selfApi.reweave = async function() {
+    selfApi.asked.push({ kind: "reweave" });
+    return { ok: false, reason: "nothing new to weave — the body already matches the genome" };
+  };
+  selfApi.returnTo = async function(sha) {
+    selfApi.asked.push({ kind: "return", sha: String(sha) });
+    selfApi.returned.push(String(sha));
+  };
   return {
     storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },
     model: { chat: async () => "(model unavailable in sandbox)" },

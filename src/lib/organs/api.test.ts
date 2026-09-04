@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { purgeOrganStorage, addOrganTombstone, makeLoomApi, clearOrganPulses, organPulseCount, PULSE_MIN_MS, PULSE_MAX_PER_ORGAN } from "./api";
 import { makeLedger } from "./budgets";
 import { isLiveNotifyToken } from "./notifyGate";
+import { BodyRequestDeclined, LINE_DECLINED, LINE_NO_CHROME } from "./bodyGate";
 
 beforeEach(() => { localStorage.clear(); });
 afterEach(() => { localStorage.clear(); vi.useRealTimers(); });
@@ -336,59 +337,105 @@ describe("power: self", () => {
     await expect(api.self.generations()).resolves.toEqual([]);
   });
 
-  it("thread() listens before it starts, streams loom-thread events, resolves on done, and unlistens", async () => {
+  it("thread() listens before it ASKS, streams loom-thread events, resolves on done, and unlistens", async () => {
     const order: string[] = [];
     let emit: ((e: TEvent) => void) | null = null;
     const unlisten = vi.fn(() => { order.push("unlisten"); });
     const listenThread = vi.fn(async (cb: (e: TEvent) => void) => { order.push("listen"); emit = cb; return unlisten; });
-    const threadLoom = vi.fn(async () => { order.push("start"); });
-    const api = makeLoomApi("x", ["self"], { listenThread, threadLoom, ledger: makeLedger(() => 0) });
+    const requestBody = vi.fn(async () => { order.push("ask"); });
+    const api = makeLoomApi("x", ["self"], { listenThread, requestBody, ledger: makeLedger(() => 0) });
     const seen: string[] = [];
     const done = api.self.thread((e) => seen.push(e.step + ":" + e.detail));
     await new Promise((r) => setTimeout(r, 0));
-    expect(order).toEqual(["listen", "start"]);
+    expect(order).toEqual(["listen", "ask"]);
+    expect(requestBody).toHaveBeenCalledWith("thread", "x");
     emit!({ step: "seed", detail: "cloning the genome", tail: [] });
     emit!({ step: "done", detail: "the loom is threaded", tail: [] });
     await expect(done).resolves.toBeUndefined();
     expect(seen).toEqual(["seed:cloning the genome", "done:the loom is threaded"]);
-    expect(order).toEqual(["listen", "start", "unlisten"]);
+    expect(order).toEqual(["listen", "ask", "unlisten"]);
   });
 
   it("thread() rejects with the failure detail when the ceremony fails", async () => {
     let emit: ((e: TEvent) => void) | null = null;
     const listenThread = vi.fn(async (cb: (e: TEvent) => void) => { emit = cb; return () => {}; });
-    const threadLoom = vi.fn(async () => {});
-    const api = makeLoomApi("x", ["self"], { listenThread, threadLoom, ledger: makeLedger(() => 0) });
+    const requestBody = vi.fn(async () => {});
+    const api = makeLoomApi("x", ["self"], { listenThread, requestBody, ledger: makeLedger(() => 0) });
     const done = api.self.thread();
     await new Promise((r) => setTimeout(r, 0));
     emit!({ step: "failed", detail: "threading needs the network once — after that LOOM weaves offline.", tail: [] });
     await expect(done).rejects.toThrow(/needs the network once/);
   });
 
-  it("thread() unlistens and rejects when the core refuses to start", async () => {
+  it("thread() unlistens and rejects when the owner declines", async () => {
     const unlisten = vi.fn();
     const listenThread = vi.fn(async () => unlisten);
-    const threadLoom = vi.fn().mockRejectedValue(new Error("parse: a weave is already under way"));
-    const api = makeLoomApi("x", ["self"], { listenThread, threadLoom, ledger: makeLedger(() => 0) });
-    await expect(api.self.thread()).rejects.toThrow(/already under way/);
+    const requestBody = vi.fn(async () => { throw new BodyRequestDeclined(); });
+    const api = makeLoomApi("x", ["self"], { listenThread, requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.thread()).rejects.toThrow(LINE_DECLINED);
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
+});
 
-  it("reweave() returns the orchestration's StartResult; returnTo(sha) hands the sha through", async () => {
-    const startReweave = vi.fn().mockResolvedValue({ ok: false, reason: "nothing new to weave — the body already matches the genome" });
-    const returnTo = vi.fn().mockResolvedValue(undefined);
-    const api = makeLoomApi("x", ["self"], { startReweave, returnTo, ledger: makeLedger(() => 0) });
-    await expect(api.self.reweave()).resolves.toEqual({ ok: false, reason: expect.stringMatching(/nothing new/) });
-    expect(startReweave).toHaveBeenCalledTimes(1);
-    await api.self.returnTo("c".repeat(40));
-    expect(returnTo).toHaveBeenCalledWith("c".repeat(40));
+// ── the body gate: an organ asks, chrome acts (round-1 finding 1) ─────────────
+
+describe("power: self — the three acts only ever ASK", () => {
+  it("reweave() dispatches a body request and never reaches the orchestration", async () => {
+    const requestBody = vi.fn(async () => {});
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).resolves.toEqual({ ok: true });
+    expect(requestBody).toHaveBeenCalledWith("reweave", "notes");
   });
 
-  it("budget: three self actions a minute, then the calm budget error", async () => {
+  it("returnTo(sha) asks with the sha and the organ that asked", async () => {
+    const requestBody = vi.fn(async () => {});
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await api.self.returnTo("c".repeat(40));
+    expect(requestBody).toHaveBeenCalledWith("return", "notes", "c".repeat(40));
+  });
+
+  it("a declined reweave REJECTS with the calm refusal — never a quiet ok", async () => {
+    const requestBody = vi.fn(async () => { throw new BodyRequestDeclined(); });
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).rejects.toThrow(LINE_DECLINED);
+  });
+
+  it("a declined return rejects too", async () => {
+    const requestBody = vi.fn(async () => { throw new BodyRequestDeclined(); });
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.returnTo("abc")).rejects.toThrow(LINE_DECLINED);
+  });
+
+  it("the core's own refusal keeps the StartResult shape Settings reads", async () => {
+    const requestBody = vi.fn(async () => { throw new Error("a weave is already under way"); });
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).resolves.toEqual({
+      ok: false,
+      reason: "a weave is already under way",
+    });
+  });
+
+  it("with no chrome mounted, the real gate refuses at once rather than hanging", async () => {
+    const api = makeLoomApi("notes", ["self"], { ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).resolves.toEqual({ ok: false, reason: LINE_NO_CHROME });
+  });
+
+  it("api.ts holds no path to the orchestration at all — the ask is the only door", async () => {
+    // Structural, not behavioural: the finding was that an organ could reach
+    // `startReweave` through the api at all. If someone reintroduces the import
+    // this fails, whatever the call site looks like.
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const src = await fs.readFile(path.resolve("src/lib/organs/api.ts"), "utf8");
+    expect(src).not.toMatch(/startReweave/);
+    expect(src).not.toMatch(/returnToGeneration/);
+    expect(src).not.toMatch(/threadLoom/);
+  });
+
+  it("budget: three asks a minute, then the calm budget error", async () => {
     let now = 0;
-    const returnTo = vi.fn().mockResolvedValue(undefined);
-    const startReweave = vi.fn().mockResolvedValue({ ok: true });
-    const api = makeLoomApi("x", ["self"], { returnTo, startReweave, ledger: makeLedger(() => now) });
+    const requestBody = vi.fn(async () => {});
+    const api = makeLoomApi("x", ["self"], { requestBody, ledger: makeLedger(() => now) });
     await api.self.returnTo("a");
     await api.self.reweave();
     await api.self.returnTo("b");

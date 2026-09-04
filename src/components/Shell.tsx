@@ -20,6 +20,7 @@ import Notices from './chrome/Notices';
 import Proposal from './chrome/Proposal';
 import KernelDiff, { type KernelAppliedInfo } from './chrome/KernelDiff';
 import Reweave from './chrome/Reweave';
+import BodyRequest from './chrome/BodyRequest';
 import RecoveryNotice from './chrome/recoveryNotice';
 import { runBootCheck, markBootOk } from '../lib/loom/recovery';
 import { startReweave, shouldAutoReweave } from '../lib/loom/reweave';
@@ -865,6 +866,13 @@ export default function Shell() {
           has just ended; fed by the protected reweave.ts subscription. ── */}
       <ErrorBoundary zone="reweave">
         <Reweave />
+      </ErrorBoundary>
+
+      {/* ── BodyRequest: the shell's answer when an ORGAN asks to thread,
+          reweave, or return (z 1900). The `self` power can only ask; this is
+          the one place that acts, and only after the owner's consent card. ── */}
+      <ErrorBoundary zone="body-request">
+        <BodyRequest />
       </ErrorBoundary>
 
       {/* ── Minimized typing box: bottom-center glass pill — the mark and the

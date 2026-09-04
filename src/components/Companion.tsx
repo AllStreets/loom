@@ -5,6 +5,7 @@ import { startReweave } from "../lib/loom/reweave";
 import { returnToGeneration } from "../lib/loom/generations";
 import { draftKernelEdit, resolveSelfEditTarget, type KernelBuildEvent } from "../lib/loom/kernelBuild";
 import type { KernelReviewProposal } from "./chrome/KernelDiff";
+import ConsentPanel, { type ConsentKind } from "./chrome/ConsentCard";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
@@ -68,7 +69,7 @@ type SelfEditBlockedCard = {
  */
 type ConsentCard = {
   kind: "consent";
-  consent: "reweave_consent" | "thread_consent" | "generation_return_consent";
+  consent: ConsentKind;
   sha?: string;
   line: string;
   settled: null | "confirmed" | "declined";
@@ -585,20 +586,11 @@ function SelfEditBlockedView() {
   );
 }
 
-/** The affirmative each consent asks for — uppercase mono, the chrome voice. */
-export const CONSENT_AFFIRMATIVE: Record<ConsentCard["consent"], string> = {
-  reweave_consent: "REWEAVE",
-  thread_consent: "THREAD",
-  generation_return_consent: "RETURN",
-};
-
-/** The eyebrow above the line — which part of the body is being asked about. */
-export const CONSENT_LABEL: Record<ConsentCard["consent"], string> = {
-  reweave_consent: "reweave",
-  thread_consent: "threads",
-  generation_return_consent: "generations",
-};
-
+/**
+ * The conversation's wrapper around the shared consent card — the same card
+ * chrome renders when an ORGAN asks (see chrome/BodyRequest.tsx), so there is
+ * one surface for "may I change the body" no matter who asked.
+ */
 function ConsentCardView({
   item,
   onChoose,
@@ -606,69 +598,15 @@ function ConsentCardView({
   item: ConsentCard;
   onChoose: (id: string, confirmed: boolean) => void;
 }) {
-  const affirmative = CONSENT_AFFIRMATIVE[item.consent];
-  const label = CONSENT_LABEL[item.consent];
-  const actionStyle: React.CSSProperties = {
-    fontFamily: "var(--f-mono)",
-    fontSize: 11,
-    letterSpacing: ".12em",
-    textTransform: "uppercase",
-    padding: "6px 12px",
-    borderRadius: 4,
-    cursor: "pointer",
-    background: "transparent",
-  };
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
       <CyanDot />
-      <div
-        data-testid={`consent-${item.consent}`}
-        style={{
-          flex: 1,
-          background: "var(--accent-soft)",
-          border: "1px solid rgba(34,211,238,0.22)",
-          borderRadius: 8,
-          padding: "12px 14px",
-        }}
-      >
-        <div
-          style={{
-            fontFamily: "var(--f-mono)",
-            fontSize: 10,
-            letterSpacing: ".14em",
-            textTransform: "uppercase",
-            color: "var(--accent)",
-            marginBottom: 6,
-          }}
-        >
-          {label}
-        </div>
-        <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5, marginBottom: 10 }}>
-          {item.line}
-        </div>
-        {item.settled === null ? (
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => onChoose(item.id, true)}
-              style={{ ...actionStyle, color: "var(--accent)", border: "1px solid var(--accent)" }}
-            >
-              {affirmative}
-            </button>
-            <button
-              type="button"
-              onClick={() => onChoose(item.id, false)}
-              style={{ ...actionStyle, color: "var(--t3)", border: "1px solid var(--line)" }}
-            >
-              NOT NOW
-            </button>
-          </div>
-        ) : (
-          <div style={{ ...monoSmall, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".12em", fontSize: 10 }}>
-            {item.settled === "confirmed" ? affirmative : "not now"}
-          </div>
-        )}
-      </div>
+      <ConsentPanel
+        consent={item.consent}
+        line={item.line}
+        settled={item.settled}
+        onChoose={(confirmed) => onChoose(item.id, confirmed)}
+      />
     </div>
   );
 }

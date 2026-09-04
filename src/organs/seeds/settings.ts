@@ -208,63 +208,33 @@ const ORGAN_JS = `export default {
     loomPage.appendChild(identityBlock);
 
     // -- reweave (shown when threaded and the genome is ahead of the body) --------
+    // Settings ASKS; the shell consent card is where the owner agrees. This
+    // organ used to carry a confirm strip of its own, which — now that every
+    // path to the body ends at that one card — would have asked the same
+    // question twice in the same words. One question, one place.
     var reweaveWrap = document.createElement("div");
     reweaveWrap.style.marginBottom = "18px";
     var reweaveBtn = ui.button("REWEAVE", { variant: "primary", action: "self-reweave" });
-    var reweaveConfirm = document.createElement("div");
-    reweaveConfirm.dataset.testid = "loom-reweave-confirm";
-    reweaveConfirm.style.display = "none";
-    reweaveConfirm.style.gap = "8px";
-    reweaveConfirm.style.alignItems = "center";
-    reweaveConfirm.style.flexWrap = "wrap";
-    var reweaveConsent = document.createElement("span");
-    reweaveConsent.style.fontSize = "12px";
-    reweaveConsent.style.color = ui.tokens.t2;
-    var reweaveGo = ui.button("WEAVE", { variant: "primary", action: "self-reweave-confirm" });
-    var reweaveKeep = ui.button("KEEP", { variant: "ghost", action: "self-reweave-keep" });
-    reweaveConfirm.appendChild(reweaveConsent);
-    reweaveConfirm.appendChild(reweaveGo);
-    reweaveConfirm.appendChild(reweaveKeep);
     var reweaveNote = quiet("");
     reweaveNote.dataset.testid = "loom-reweave-note";
     reweaveNote.style.marginTop = "6px";
-    reweaveWrap.appendChild(reweaveConfirm);
     reweaveWrap.appendChild(reweaveNote);
     loomPage.appendChild(reweaveWrap);
 
-    var currentIdentity = null;
-
     reweaveBtn.addEventListener("click", function() {
-      if (!currentIdentity) return;
-      var target = sha7(currentIdentity.genomeSha);
-      reweaveConsent.textContent = currentIdentity.mode === "dev"
-        ? "weave generation " + target + " — in dev the body stays; restart tauri dev to become it"
-        : "weave generation " + target + " — LOOM will close and return";
-      reweaveBtn.style.display = "none";
-      reweaveConfirm.style.display = "flex";
-    });
-    reweaveKeep.addEventListener("click", function() {
-      reweaveConfirm.style.display = "none";
-      reweaveBtn.style.display = "";
-    });
-    reweaveGo.addEventListener("click", function() {
-      reweaveGo.disabled = true;
+      reweaveBtn.disabled = true;
       reweaveNote.textContent = "";
       Promise.resolve().then(function() { return self.reweave(); }).then(function(result) {
-        reweaveGo.disabled = false;
-        reweaveConfirm.style.display = "none";
+        reweaveBtn.disabled = false;
         if (result && result.ok) {
           reweaveNote.style.color = ui.tokens.t2;
           reweaveNote.textContent = "the weave has started — the reweave card carries the rail.";
         } else {
-          reweaveBtn.style.display = "";
           reweaveNote.style.color = ui.tokens.warn;
           reweaveNote.textContent = (result && result.reason) || "the weave could not start — try again from Settings";
         }
       }).catch(function(err) {
-        reweaveGo.disabled = false;
-        reweaveConfirm.style.display = "none";
-        reweaveBtn.style.display = "";
+        reweaveBtn.disabled = false;
         reweaveNote.style.color = ui.tokens.warn;
         reweaveNote.textContent = selfReason(err);
       });
@@ -429,52 +399,21 @@ const ORGAN_JS = `export default {
             ret.style.padding = "4px 10px";
             ret.style.fontSize = "12px";
             line.appendChild(ret);
-            var strip = document.createElement("div");
-            strip.dataset.testid = "loom-return-confirm";
-            strip.style.display = "none";
-            strip.style.gap = "8px";
-            strip.style.alignItems = "center";
-            strip.style.flexWrap = "wrap";
-            strip.style.marginTop = "6px";
-            var consent = document.createElement("span");
-            consent.style.fontSize = "12px";
-            consent.style.color = ui.tokens.t2;
-            var go = ui.button("RETURN", { variant: "primary", action: "self-return-confirm-" + short });
-            go.style.padding = "4px 10px";
-            go.style.fontSize = "12px";
-            var keep = ui.button("KEEP", { variant: "ghost", action: "self-return-keep-" + short });
-            keep.style.padding = "4px 10px";
-            keep.style.fontSize = "12px";
             var note = quiet("");
+            note.dataset.testid = "loom-return-note-" + short;
             note.style.marginTop = "4px";
-            strip.appendChild(consent);
-            strip.appendChild(go);
-            strip.appendChild(keep);
-            row.appendChild(strip);
             row.appendChild(note);
+            // RETURN asks; the shell consent card carries the sentence and
+            // the answer. One question, one place.
             ret.addEventListener("click", function() {
-              consent.textContent = currentIdentity && currentIdentity.mode === "dev"
-                ? "return to generation " + short + " — in dev the body stays; the genome moves to generation/" + short
-                : "return to generation " + short + " — LOOM will close and return";
-              strip.style.display = "flex";
-              ret.style.display = "none";
-            });
-            keep.addEventListener("click", function() {
-              strip.style.display = "none";
-              ret.style.display = "";
-            });
-            go.addEventListener("click", function() {
-              go.disabled = true;
+              ret.disabled = true;
               note.textContent = "";
               Promise.resolve().then(function() { return self.returnTo(g.sha); }).then(function() {
-                go.disabled = false;
-                strip.style.display = "none";
+                ret.disabled = false;
                 note.style.color = ui.tokens.t2;
                 note.textContent = "returning to " + short + " — the reweave card carries the rail.";
               }).catch(function(err) {
-                go.disabled = false;
-                strip.style.display = "none";
-                ret.style.display = "";
+                ret.disabled = false;
                 note.style.color = ui.tokens.warn;
                 note.textContent = selfReason(err);
               });
@@ -535,10 +474,10 @@ const ORGAN_JS = `export default {
       // The actions exist only when they mean something: no REWEAVE button to
       // press when there is nothing to weave, no THREAD button once threaded.
       var ahead = id.threaded && id.generation !== id.genomeSha;
-      if (ahead && !reweaveBtn.parentNode) reweaveWrap.insertBefore(reweaveBtn, reweaveConfirm);
+      if (ahead && !reweaveBtn.parentNode) reweaveWrap.insertBefore(reweaveBtn, reweaveNote);
       if (!ahead && reweaveBtn.parentNode) reweaveWrap.removeChild(reweaveBtn);
       reweaveBtn.style.display = "";
-      reweaveConfirm.style.display = "none";
+      reweaveBtn.disabled = false;
       reweaveNote.style.color = ui.tokens.t3;
       reweaveNote.textContent = ahead ? "" : id.threaded
         ? "the body matches the genome — nothing new to weave."
@@ -556,7 +495,6 @@ const ORGAN_JS = `export default {
         return;
       }
       Promise.resolve().then(function() { return self.identity(); }).then(function(id) {
-        currentIdentity = id;
         renderIdentity(id);
       }).catch(function(err) {
         clear(identityBlock);
