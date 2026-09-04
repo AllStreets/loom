@@ -154,6 +154,37 @@ describe("buildCatalog — system self-edit entry routes to self_edit", () => {
   });
 });
 
+// ── no-drift: rebirth entries (Phase 23) route through the rebirth rules ─────
+
+describe("buildCatalog — rebirth entries derive from the intent phrase tables", () => {
+  const expected: [string, string][] = [
+    ["system-reweave", "reweave"],
+    ["system-thread", "thread"],
+    ["system-identity", "identity"],
+    ["system-generation-return", "generation_return"],
+  ];
+
+  for (const [id, intent] of expected) {
+    it(`${id} is a system utterance whose phrase and aliases classify as ${intent}`, () => {
+      const entry = buildCatalog({}).find((e) => e.id === id);
+      expect(entry, `${id} must exist even without organs`).toBeDefined();
+      expect(entry!.group).toBe("system");
+      expect(entry!.kind).toBe("utterance");
+      for (const phrase of [entry!.phrase, ...entry!.aliases]) {
+        expect(classifyByRules(phrase, [])?.intent, `"${phrase}" must classify as ${intent}`).toBe(intent);
+      }
+    });
+  }
+
+  it("hints obey the copy law — lowercase sentences, no exclamation marks", () => {
+    for (const [id] of expected) {
+      const entry = catalog().find((e) => e.id === id)!;
+      expect(entry.hint).not.toMatch(/!/);
+      expect(entry.hint.charAt(0)).toBe(entry.hint.charAt(0).toLowerCase());
+    }
+  });
+});
+
 // ── fuzzyFilter ──────────────────────────────────────────────────────────────
 
 describe("fuzzyFilter", () => {

@@ -1,6 +1,17 @@
 import { normalize } from "./normalize";
 
-export type Intent = "self_edit" | "build_organ" | "edit_organ" | "act_on_organ" | "converse" | "help";
+export type Intent =
+  | "self_edit"
+  | "build_organ"
+  | "edit_organ"
+  | "act_on_organ"
+  | "converse"
+  | "help"
+  // Rebirth (Phase 23) — rules only, never produced by the model fallback.
+  | "reweave"
+  | "thread"
+  | "identity"
+  | "generation_return";
 
 export type IntentResult = {
   intent: Intent;
@@ -35,6 +46,47 @@ export const SELF_EDIT_PHRASES: readonly string[] = [
 ];
 const SELF_EDIT_RE =
   /\b(?:change|edit|rewrite|modify|fix|update|improve|refactor)\b\s+(?:your\s*self|yourself|your\s+own\b|your\b)/i;
+
+// ── Rebirth (Phase 23) ───────────────────────────────────────────────────────
+// Four rules about LOOM's own body: weaving a new generation, threading the
+// loom, saying which generation is running, and returning to the previous
+// one. Each *_PHRASES table is the canonical data the shuttle catalog derives
+// its entries from; each *_RE is the tolerant matcher. These never reach the
+// model — the body is not something to guess about. They outrank every other
+// rule because "rebuild yourself" overlaps the build verbs and "which
+// generation is this?" would otherwise fall into converse.
+export const REWEAVE_PHRASES: readonly string[] = [
+  "reweave yourself",
+  "rebuild yourself",
+  "become the new version",
+  "weave the new generation",
+];
+const REWEAVE_RE =
+  /^reweave[.!]?$|\b(?:reweave|rebuild|remake|reforge)\s+(?:your\s*self|yourself)\b|\bbecome\s+the\s+new\s+(?:version|generation|body)\b|\bweave\s+(?:the\s+|a\s+)?new\s+generation\b/i;
+
+export const THREAD_PHRASES: readonly string[] = ["thread the loom", "thread yourself"];
+const THREAD_RE = /\bthread\s+(?:the\s+loom|your\s*self|yourself)\b/i;
+
+export const IDENTITY_PHRASES: readonly string[] = [
+  "which generation is this",
+  "what generation are you",
+];
+const IDENTITY_RE =
+  /\b(?:which|what)\s+generation\s+(?:is\s+this|are\s+you|is\s+running|am\s+i\s+(?:on|running))\b/i;
+
+export const GENERATION_RETURN_PHRASES: readonly string[] = [
+  "return to the previous generation",
+  "go back a generation",
+];
+const GENERATION_RETURN_RE =
+  /\b(?:return|go\s+back|roll\s+back)\s+(?:to\s+)?(?:the\s+)?(?:previous|last|prior)\s+generation\b|\bgo\s+back\s+(?:a|one)\s+generation\b/i;
+
+const REBIRTH_RULES: readonly [RegExp, Intent][] = [
+  [REWEAVE_RE, "reweave"],
+  [THREAD_RE, "thread"],
+  [IDENTITY_RE, "identity"],
+  [GENERATION_RETURN_RE, "generation_return"],
+];
 
 // Verbs that signal an intent to modify an existing organ.
 const EDIT_VERB_RE =
@@ -106,6 +158,8 @@ function resolveOrganFromHistory(history: HistoryMsg[]): string | null {
  * Pure, transparent rule-based classifier.
  *
  * Precedence (highest → lowest):
+ *  -2. rebirth      — reweave / thread / identity / generation_return     (0.95)
+ *  -1. self_edit    — "change yourself", "edit your <x>"                  (0.95)
  *   0. build_organ  — BUILD_PHRASE_RE wins even when an organ substring appears (misfire fix)
  *   1. edit_organ   — anaphora + history organ resolve                    (0.9)
  *   2. edit_organ   — organ mention + edit verb                           (0.9)
@@ -126,6 +180,13 @@ export function classifyByRules(
   const hasBuildPhrase = BUILD_PHRASE_RE.test(lower);
   const hasEditVerb = EDIT_VERB_RE.test(lower);
   const hasAnaphora = ANAPHORA_RE.test(lower);
+
+  // -2. rebirth — LOOM's own body. Above everything: these phrases overlap
+  //     the build/edit verbs ("rebuild") and the question rule ("which
+  //     generation is this?"), and the body is never a thing to guess about.
+  for (const [re, intent] of REBIRTH_RULES) {
+    if (re.test(lower)) return { intent, confidence: 0.95, source: "rules" };
+  }
 
   // -1. self_edit — LOOM editing its OWN kernel. Highest precedence: the
   //     "yourself" / "your <x>" possessive is unambiguous and must never be

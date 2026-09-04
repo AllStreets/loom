@@ -107,28 +107,53 @@ export type StartDeps = {
 
 export type StartResult = { ok: true } | { ok: false; reason: string };
 
+export type ReadinessDeps = { identity: typeof kernelIdentity };
+
+export type Readiness =
+  | { ok: true; generation: string | null; genomeSha: string }
+  | { ok: false; reason: string };
+
 /**
- * Start a reweave, or say plainly why not.
+ * The dry run: is there a weave to start, without starting it. The companion
+ * asks this before it asks the owner for consent, so the consent line can
+ * name the generation it would weave and a refusal reads the same calm
+ * sentence the card would show.
  *
  * Preconditions read from `kernel_identity`:
  *   - not threaded → REASON_UNTHREADED
  *   - the running generation already IS the genome head (and not `force`)
  *     → REASON_NOTHING_NEW. A null generation (no body woven yet, or dev mode)
  *     always has something to weave.
- * The core enforces the same rules plus "nothing in flight"; its refusal is
- * passed through as the reason, with the in-flight case mapped to
- * REASON_IN_FLIGHT so the card and the companion speak one line.
  */
-export async function startReweave(
-  deps: StartDeps = { start: reweaveStart, identity: kernelIdentity },
+export async function reweaveReadiness(
+  deps: ReadinessDeps = { identity: kernelIdentity },
   force = false,
-): Promise<StartResult> {
+): Promise<Readiness> {
   try {
     const id = await deps.identity();
     if (!id.threaded) return { ok: false, reason: REASON_UNTHREADED };
     if (!force && id.generation !== null && id.generation === id.genomeSha) {
       return { ok: false, reason: REASON_NOTHING_NEW };
     }
+    return { ok: true, generation: id.generation, genomeSha: id.genomeSha };
+  } catch (e) {
+    return { ok: false, reason: reasonOf(e) };
+  }
+}
+
+/**
+ * Start a reweave, or say plainly why not — `reweaveReadiness` first, then
+ * `reweave_start`. The core enforces the same rules plus "nothing in flight";
+ * its refusal is passed through as the reason, with the in-flight case mapped
+ * to REASON_IN_FLIGHT so the card and the companion speak one line.
+ */
+export async function startReweave(
+  deps: StartDeps = { start: reweaveStart, identity: kernelIdentity },
+  force = false,
+): Promise<StartResult> {
+  const ready = await reweaveReadiness({ identity: deps.identity }, force);
+  if (!ready.ok) return ready;
+  try {
     await deps.start(force);
     return { ok: true };
   } catch (e) {

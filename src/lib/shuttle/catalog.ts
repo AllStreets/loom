@@ -17,7 +17,14 @@
  * transcripts take. Pure data + pure functions; no side effects, no I/O.
  */
 
-import { HELP_PHRASES, SELF_EDIT_PHRASES } from "../compiler/intent";
+import {
+  HELP_PHRASES,
+  SELF_EDIT_PHRASES,
+  REWEAVE_PHRASES,
+  THREAD_PHRASES,
+  IDENTITY_PHRASES,
+  GENERATION_RETURN_PHRASES,
+} from "../compiler/intent";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,6 +132,20 @@ function systemEntries(ctx: CatalogCtx): CatalogEntry[] {
     group: "system",
     kind: "template",
   });
+  // Rebirth (Phase 23) — the body. Each entry derives from the intent phrase
+  // table so the sayable and the typeable cannot drift. Immediate utterances:
+  // reweave and return each answer with a consent line before anything
+  // happens; thread and identity are a ceremony and a read.
+  const rebirth: [string, readonly string[], string][] = [
+    ["system-reweave", REWEAVE_PHRASES, "weave a new generation from the genome — asks first"],
+    ["system-thread", THREAD_PHRASES, "find the machine's tools and warm the build — network once"],
+    ["system-identity", IDENTITY_PHRASES, "generation · mode · threaded"],
+    ["system-generation-return", GENERATION_RETURN_PHRASES, "become the previous body again — asks first"],
+  ];
+  for (const [id, phrases, hint] of rebirth) {
+    const [canonical, ...aliases] = phrases;
+    entries.push({ id, phrase: canonical, aliases: [...aliases], hint, group: "system", kind: "utterance" });
+  }
   return entries;
 }
 

@@ -32,6 +32,7 @@ import {
   REASON_UNTHREADED,
   REASON_NOTHING_NEW,
   REASON_IN_FLIGHT,
+  reweaveReadiness,
 } from "./reweave";
 
 const identity = (over: Partial<Identity> = {}): Identity => ({
@@ -142,6 +143,48 @@ describe("startReweave", () => {
     const out = await startReweave();
     expect(out.ok).toBe(false);
     expect(out.ok === false && out.reason).toBe("This surface needs the desktop shell.");
+  });
+});
+
+describe("reweaveReadiness — the dry run the companion asks before consent", () => {
+  it("unthreaded → the settings line", async () => {
+    const id = vi.fn(async () => identity({ threaded: false }));
+    expect(await reweaveReadiness({ identity: id })).toEqual({ ok: false, reason: REASON_UNTHREADED });
+  });
+
+  it("head equals generation → nothing new", async () => {
+    const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
+    const id = vi.fn(async () => identity({ genomeSha: sha, generation: sha }));
+    expect(await reweaveReadiness({ identity: id })).toEqual({ ok: false, reason: REASON_NOTHING_NEW });
+  });
+
+  it("head ahead → ok with generation and genomeSha; nothing is started", async () => {
+    const id = vi.fn(async () => identity());
+    expect(await reweaveReadiness({ identity: id })).toEqual({
+      ok: true,
+      generation: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      genomeSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    expect(core.reweaveStart).not.toHaveBeenCalled();
+  });
+
+  it("no generation yet → ok with generation null", async () => {
+    const id = vi.fn(async () => identity({ generation: null }));
+    const out = await reweaveReadiness({ identity: id });
+    expect(out.ok).toBe(true);
+    expect(out.ok && out.generation).toBeNull();
+  });
+
+  it("force skips the nothing-new check", async () => {
+    const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
+    const id = vi.fn(async () => identity({ genomeSha: sha, generation: sha }));
+    expect((await reweaveReadiness({ identity: id }, true)).ok).toBe(true);
+  });
+
+  it("uses kernelIdentity by default and turns a shell rejection into a calm reason", async () => {
+    core.kernelIdentity.mockRejectedValue(new ShellUnavailableError());
+    const out = await reweaveReadiness();
+    expect(out).toEqual({ ok: false, reason: "This surface needs the desktop shell." });
   });
 });
 

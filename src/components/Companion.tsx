@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelDiscard, type OrganFile, type Msg, type ChatOpts } from "../lib/core";
+import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelDiscard, kernelIdentity, type OrganFile, type Msg, type ChatOpts } from "../lib/core";
+import { startReweave } from "../lib/loom/reweave";
+import { returnToGeneration } from "../lib/loom/generations";
 import { draftKernelEdit, resolveSelfEditTarget, type KernelBuildEvent } from "../lib/loom/kernelBuild";
 import type { KernelReviewProposal } from "./chrome/KernelDiff";
 import { gate } from "../lib/loom/validate";
@@ -57,13 +59,28 @@ type SelfEditBlockedCard = {
   id: string;
 };
 
+/**
+ * A consent card (Phase 23 — Rebirth): the body changes only after the owner
+ * presses the affirmative. `settled` remembers the choice so the actions
+ * vanish and nothing can start twice.
+ */
+type ConsentCard = {
+  kind: "consent";
+  consent: "reweave_consent" | "generation_return_consent";
+  sha?: string;
+  line: string;
+  settled: null | "confirmed" | "declined";
+  id: string;
+};
+
 type ConvoItem =
   | MsgBubble
   | EventLogCard
   | SuccessCard
   | FailureCard
   | ReviewCard
-  | SelfEditBlockedCard;
+  | SelfEditBlockedCard
+  | ConsentCard;
 
 // ---------------------------------------------------------------------------
 // Shared style tokens (mirror LoomConsole visual language)
@@ -566,6 +583,80 @@ function SelfEditBlockedView() {
   );
 }
 
+function ConsentCardView({
+  item,
+  onChoose,
+}: {
+  item: ConsentCard;
+  onChoose: (id: string, confirmed: boolean) => void;
+}) {
+  const affirmative = item.consent === "reweave_consent" ? "REWEAVE" : "RETURN";
+  const label = item.consent === "reweave_consent" ? "reweave" : "generations";
+  const actionStyle: React.CSSProperties = {
+    fontFamily: "var(--f-mono)",
+    fontSize: 11,
+    letterSpacing: ".12em",
+    textTransform: "uppercase",
+    padding: "6px 12px",
+    borderRadius: 4,
+    cursor: "pointer",
+    background: "transparent",
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
+      <CyanDot />
+      <div
+        data-testid={`consent-${item.consent}`}
+        style={{
+          flex: 1,
+          background: "var(--accent-soft)",
+          border: "1px solid rgba(34,211,238,0.22)",
+          borderRadius: 8,
+          padding: "12px 14px",
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "var(--f-mono)",
+            fontSize: 10,
+            letterSpacing: ".14em",
+            textTransform: "uppercase",
+            color: "var(--accent)",
+            marginBottom: 6,
+          }}
+        >
+          {label}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5, marginBottom: 10 }}>
+          {item.line}
+        </div>
+        {item.settled === null ? (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => onChoose(item.id, true)}
+              style={{ ...actionStyle, color: "var(--accent)", border: "1px solid var(--accent)" }}
+            >
+              {affirmative}
+            </button>
+            <button
+              type="button"
+              onClick={() => onChoose(item.id, false)}
+              style={{ ...actionStyle, color: "var(--t3)", border: "1px solid var(--line)" }}
+            >
+              NOT NOW
+            </button>
+          </div>
+        ) : (
+          <div style={{ ...monoSmall, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".12em", fontSize: 10 }}>
+            {item.settled === "confirmed" ? affirmative : "not now"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Error mapping — raw exceptions never reach the UI
 // ---------------------------------------------------------------------------
@@ -1008,12 +1099,24 @@ export default function Companion() {
       const replyText = turn.text;
       appendItem({ kind: "bubble", role: "assistant", text: replyText, id: nextId() });
       history.current.push({ role: "assistant", content: replyText });
+    } else if (turn.kind === "consent") {
+      // The body asks before it changes. The card carries the actions; the
+      // line is what the owner reads and hears.
+      appendItem({
+        kind: "consent",
+        consent: turn.consent,
+        sha: turn.consent === "generation_return_consent" ? turn.sha : undefined,
+        line: turn.line,
+        settled: null,
+        id: nextId(),
+      });
+      history.current.push({ role: "assistant", content: turn.line });
     }
 
     // Determine if we should speak the reply
     let speakableText: string | null = null;
-    if (turn.kind === "reply") {
-      speakableText = turn.text;
+    if (turn.kind === "reply" || turn.kind === "consent") {
+      speakableText = turn.kind === "reply" ? turn.text : turn.line;
     } else if (turn.kind === "build") {
       const r = turn.result;
       if (r.ok && r.organId) speakableText = `${r.organId} is ready — approve it below.`;
@@ -1062,6 +1165,37 @@ export default function Companion() {
     runTurn(utterance);
   }
 
+  /**
+   * The owner's answer to a consent card. The card settles first so the
+   * affirmative can never fire twice; only then does the protected
+   * orchestration run. A refusal is spoken as its own calm line — the
+   * companion never pretends a weave began.
+   */
+  function chooseConsent(id: string, confirmed: boolean) {
+    const card = items.find((i): i is ConsentCard => i.kind === "consent" && i.id === id);
+    if (!card || card.settled !== null) return;
+    setItems((prev) =>
+      prev.map((i) =>
+        i.kind === "consent" && i.id === id
+          ? { ...i, settled: confirmed ? "confirmed" : "declined" }
+          : i,
+      ),
+    );
+    if (!confirmed) return;
+    void (async () => {
+      try {
+        if (card.consent === "reweave_consent") {
+          const out = await startReweave();
+          if (!out.ok) appendItem({ kind: "bubble", role: "assistant", text: out.reason, id: nextId() });
+        } else if (card.sha) {
+          await returnToGeneration(card.sha);
+        }
+      } catch (err) {
+        appendItem({ kind: "bubble", role: "assistant", text: mapTurnError(err), id: nextId() });
+      }
+    })();
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1097,6 +1231,42 @@ export default function Companion() {
       id: nextId(),
     }]);
     localStorage.setItem("loom.firstGreeting", "1");
+  }, []);
+
+  // The greeting after a weave (Phase 23 — Rebirth). On the first boot of a
+  // new generation the companion says so, once, with no model call, spoken
+  // per voice.speakReplies. Outside the shell, or before any body has been
+  // woven, it stays quiet. The ref guards a double-mount; the stored sha
+  // guards the next boot.
+  const greetedRef = useRef(false);
+  useEffect(() => {
+    if (greetedRef.current) return;
+    greetedRef.current = true;
+    void (async () => {
+      let generation: string | null = null;
+      try {
+        const id = await kernelIdentity();
+        generation = typeof id?.generation === "string" ? id.generation : null;
+      } catch {
+        return; // no shell, or no identity yet — nothing to greet about.
+      }
+      if (generation === null) return;
+      if (localStorage.getItem("loom.lastGeneration") === generation) return;
+      localStorage.setItem("loom.lastGeneration", generation);
+      const line = `I'm back — generation ${generation.slice(0, 6)}.`;
+      appendItem({ kind: "bubble", role: "assistant", text: line, id: nextId() });
+      history.current.push({ role: "assistant", content: line });
+      if (getSetting("voice.speakReplies") !== "always") return;
+      dispatchMood("speaking");
+      try {
+        const raw = await ttsSpeak(line, getSetting("voice.default"));
+        await playWav(new Uint8Array(raw));
+      } catch (e) {
+        console.debug("[Companion] greeting ttsSpeak/playWav failed:", e);
+      } finally {
+        dispatchMood("idle");
+      }
+    })();
   }, []);
 
   // Cleanup: settle all pending reviews on unmount, cancel idle timer, dispatch idle
@@ -1243,6 +1413,9 @@ export default function Companion() {
           }
           if (item.kind === "self-edit-blocked") {
             return <SelfEditBlockedView key={item.id} />;
+          }
+          if (item.kind === "consent") {
+            return <ConsentCardView key={item.id} item={item} onChoose={chooseConsent} />;
           }
           return null;
         })}

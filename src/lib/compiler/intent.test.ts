@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { classifyByRules, classifyIntent } from "./intent";
+import {
+  classifyByRules,
+  classifyIntent,
+  REWEAVE_PHRASES,
+  THREAD_PHRASES,
+  IDENTITY_PHRASES,
+  GENERATION_RETURN_PHRASES,
+} from "./intent";
 
 // ---- classifyByRules -------------------------------------------------------
 
@@ -429,5 +436,69 @@ describe("classifyByRules — self_edit", () => {
       "edit_organ",
     );
     expect(classifyByRules("build me a sleep tracker", [])?.intent).toBe("build_organ");
+  });
+});
+
+// ---- rebirth rules (Phase 23) — reweave / thread / identity / return -------
+
+describe("classifyByRules — rebirth rules (no model call)", () => {
+  const table: [string, string][] = [
+    ["reweave yourself", "reweave"],
+    ["rebuild yourself", "reweave"],
+    ["become the new version", "reweave"],
+    ["weave the new generation", "reweave"],
+    ["reweave", "reweave"],
+    ["please reweave yourself now", "reweave"],
+    ["thread the loom", "thread"],
+    ["thread yourself", "thread"],
+    ["which generation is this", "identity"],
+    ["which generation is this?", "identity"],
+    ["what generation are you", "identity"],
+    ["what generation are you?", "identity"],
+    ["return to the previous generation", "generation_return"],
+    ["go back a generation", "generation_return"],
+    ["go back to the previous generation", "generation_return"],
+    ["return to the last generation", "generation_return"],
+  ];
+
+  for (const [utterance, intent] of table) {
+    it(`"${utterance}" → ${intent} from rules with high confidence`, () => {
+      const result = classifyByRules(utterance, ["water-tracker", "settings"]);
+      expect(result).not.toBeNull();
+      expect(result!.intent).toBe(intent);
+      expect(result!.source).toBe("rules");
+      expect(result!.confidence).toBeGreaterThanOrEqual(0.9);
+      expect(result!.organId).toBeUndefined();
+    });
+  }
+
+  it("the rebirth rules outrank self_edit, build, and converse", () => {
+    // "rebuild yourself" must never become a build_organ or a self_edit.
+    expect(classifyByRules("rebuild yourself", [])?.intent).toBe("reweave");
+    // a trailing question mark must not swallow identity into converse.
+    expect(classifyByRules("which generation is this?", [])?.intent).toBe("identity");
+  });
+
+  it("does not misfire on ordinary organ talk mentioning threads or generations", () => {
+    expect(classifyByRules("build me a thread tracker", [])?.intent).toBe("build_organ");
+    expect(
+      classifyByRules("add a generation column to the water tracker", ["water-tracker"])?.intent,
+    ).toBe("edit_organ");
+    expect(classifyByRules("change yourself so the orb is brighter", [])?.intent).toBe("self_edit");
+  });
+
+  it("every phrase in the exported tables classifies to its intent (the catalog derives from them)", () => {
+    const tables: [readonly string[], string][] = [
+      [REWEAVE_PHRASES, "reweave"],
+      [THREAD_PHRASES, "thread"],
+      [IDENTITY_PHRASES, "identity"],
+      [GENERATION_RETURN_PHRASES, "generation_return"],
+    ];
+    for (const [phrases, intent] of tables) {
+      expect(phrases.length).toBeGreaterThan(0);
+      for (const p of phrases) {
+        expect(classifyByRules(p, [])?.intent, `"${p}" must be ${intent}`).toBe(intent);
+      }
+    }
   });
 });
