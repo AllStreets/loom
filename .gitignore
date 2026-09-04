@@ -38,3 +38,7 @@ src-tauri/target/
 # scripts/genome-bundle.mjs into the packaged app. Never committed.
 src-tauri/genome/*
 !src-tauri/genome/README.md
+
+# The Cockpit is excised (Phase 23a). Nothing under public/ serves a deck,
+# and Vite copies public/ verbatim into the binary — scratch left here ships.
+public/decks/
