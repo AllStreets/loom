@@ -284,3 +284,22 @@ export const reweaveCancel = () => safeInvoke<void>("reweave_cancel");
 export const reweaveState = () => safeInvoke<ReweaveState>("reweave_state");
 /** Return to a kept generation: the same job with the build stages skipped. */
 export const generationsReturn = (sha: string) => safeInvoke<void>("generations_return", { sha });
+/** One `loom-thread` progress event. `step` walks seed · deps · vendor · warm ·
+ *  register · stamp and ends in `done` or `failed`; `tail` is the last few
+ *  lines of the running tool (cargo's "Compiling x/y") when there are any. */
+export type ThreadStep = "seed" | "deps" | "vendor" | "warm" | "register" | "stamp" | "done" | "failed";
+export type ThreadEvent = {
+  step: ThreadStep;
+  detail: string;
+  tail: string[];
+};
+export const THREAD_EVENT = "loom-thread";
+
+/** Start the one-time ceremony as a background job. Resolves as soon as the
+ *  job is spawned; progress arrives as `loom-thread` events. Rejects with
+ *  `parse` when threading or reweave is already in flight. */
+export const threadLoom = () => safeInvoke<void>("thread_loom");
+
+/** Stop a running ceremony. The interrupted step stays unmarked, so the
+ *  next `threadLoom` resumes from it. */
+export const threadCancel = () => safeInvoke<void>("thread_cancel");

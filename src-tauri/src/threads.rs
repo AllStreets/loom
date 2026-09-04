@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::LoomError;
 use crate::loomhome::Home;
@@ -373,6 +373,348 @@ pub fn thread_status(app: tauri::AppHandle) -> Result<ThreadStatus, LoomError> {
     Ok(status(&home))
 }
 
+// ── The ceremony ──────────────────────────────────────────────────────────────
+//
+// Spec §Threading: seed · deps · vendor · warm · register · stamp. Runs as one
+// background job in the global `exec::JOB` slot (shared with reweave, so the
+// two can never overlap). Every step first reads its own marker in
+// `threads.json` and skips if already true — an interrupted ceremony resumes
+// where it stopped. `threaded` turns true only at stamp.
+//
+// Every spawn is a fixed argv through `exec` with `allowed_root = home.root`;
+// argv[0] is the absolute tool path the threads table recorded. deps and
+// vendor are the only steps in all of LOOM allowed to touch the network,
+// and the failure line says so.
+
+/// The `loom-thread` event payload. `step` is one of seed · deps · vendor ·
+/// warm · register · stamp · done · failed; `tail` is the last few lines of
+/// the running tool's output (cargo's "Compiling x/y").
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadEvent {
+    pub step: String,
+    pub detail: String,
+    pub tail: Vec<String>,
+}
+
+pub const THREAD_EVENT: &str = "loom-thread";
+
+/// The one honest line about the network (spec §Threading, step 2).
+pub const NEEDS_NETWORK: &str = "threading needs the network once — after that LOOM weaves offline.";
+
+const DEPS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const VENDOR_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const ASSETS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const CORE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// How many lines of the running tool's output ride on a progress event.
+const TAIL_LINES: usize = 3;
+/// How often the warm step re-emits its tail.
+const TAIL_EVERY: Duration = Duration::from_secs(2);
+
+/// npm's own words for "no network".
+const OFFLINE_MARKS: &[&str] = &["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"];
+
+/// The tool named `name`, or the install line for it — the ceremony does
+/// not install toolchains, it says what is missing and stops.
+fn need_tool(tools: &dyn Fn(&str) -> Option<PathBuf>, name: &str) -> Result<String, LoomError> {
+    match tools(name) {
+        Some(p) => Ok(p.to_string_lossy().into_owned()),
+        None => {
+            let install = spec(name).map(|s| s.install).unwrap_or("");
+            Err(LoomError::NotFound(format!("{name} is missing — install it with `{install}`")))
+        }
+    }
+}
+
+fn tail_of(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let skip = lines.len().saturating_sub(TAIL_LINES);
+    lines[skip..].iter().map(|l| l.to_string()).collect()
+}
+
+/// The vendored-source replacement written after `cargo vendor`. PROTECTED
+/// in the genome (kernel.rs) — a self-edit here could point cargo anywhere.
+fn cargo_config(vendor: &Path) -> String {
+    format!(
+        "[source.crates-io]\nreplace-with = \"vendored\"\n[source.vendored]\ndirectory = \"{}\"\n[net]\noffline = true\n",
+        vendor.display()
+    )
+}
+
+/// The ceremony, factored so a test can stage fake tools in a tempdir.
+///
+/// - `tools(name)` resolves a tool to its absolute path (`tool_path` in the
+///   app; a closure over fakes in tests).
+/// - `exe` is the running executable, shelved as generation 0 at register.
+/// - `bundle` is the genome bundle for seed (`None` in dev, where source is
+///   the cwd and seed is skipped).
+/// - `emit(step, detail, tail)` is called for every progress event, ending
+///   with `done` or `failed`.
+///
+/// Returns the failure so the caller can also surface it; the `failed`
+/// event has already been emitted by then.
+pub fn run_ceremony(
+    home: &Home,
+    mode: crate::loomhome::Mode,
+    tools: &dyn Fn(&str) -> Option<PathBuf>,
+    exe: &Path,
+    bundle: Option<&Path>,
+    emit: &mut dyn FnMut(&str, &str, &[String]),
+) -> Result<(), LoomError> {
+    let mut t = read(home).unwrap_or(Threads {
+        threaded: false,
+        threaded_at: None,
+        threaded_sha: None,
+        tools: vec![],
+        steps: ThreadSteps::default(),
+    });
+    match ceremony_steps(home, mode, tools, exe, bundle, emit, &mut t) {
+        Ok(()) => {
+            emit("done", "the loom is threaded — it weaves offline from here.", &[]);
+            Ok(())
+        }
+        Err(Failed { err, tail }) => {
+            let detail = match &err {
+                LoomError::Parse(m) => m.clone(),
+                LoomError::Timeout => "a step ran out of time — run threading again to continue.".to_string(),
+                other => other.to_string(),
+            };
+            emit("failed", &detail, &tail);
+            Err(err)
+        }
+    }
+}
+
+/// A step's failure plus the last lines of the tool that failed, so the
+/// `failed` event carries evidence (npm's own ENOTFOUND under the honest line).
+struct Failed {
+    err: LoomError,
+    tail: Vec<String>,
+}
+
+impl From<LoomError> for Failed {
+    fn from(err: LoomError) -> Failed {
+        Failed { err, tail: vec![] }
+    }
+}
+
+/// An `npm`/`cargo` exit ≠ 0: the honest network line when the stderr says
+/// the network was the reason, otherwise the tool's own last words.
+fn step_failed(what: &str, out: &crate::exec::ExecOut) -> Failed {
+    let text = if out.stderr.trim().is_empty() { &out.stdout } else { &out.stderr };
+    let tail = tail_of(text);
+    if OFFLINE_MARKS.iter().any(|m| out.stderr.contains(m)) {
+        return Failed { err: LoomError::Parse(NEEDS_NETWORK.into()), tail };
+    }
+    Failed { err: LoomError::Parse(format!("{what} failed (exit {})", out.code)), tail }
+}
+
+fn ceremony_steps(
+    home: &Home,
+    mode: crate::loomhome::Mode,
+    tools: &dyn Fn(&str) -> Option<PathBuf>,
+    exe: &Path,
+    bundle: Option<&Path>,
+    emit: &mut dyn FnMut(&str, &str, &[String]),
+    t: &mut Threads,
+) -> Result<(), Failed> {
+    use crate::exec::{run_checked_env, run_job_stream, JOB};
+    use crate::loomhome::Mode;
+
+    let root = home.root.clone();
+    let source = home.source();
+    let core = source.join("src-tauri");
+    let sha = crate::loomhome::genome_sha();
+    let none: &[String] = &[];
+
+    // 1 · seed
+    if t.steps.seed {
+        emit("seed", "already seeded", none);
+    } else {
+        match mode {
+            Mode::Dev => emit("seed", "dev mode — the source is this checkout", none),
+            Mode::Packaged => {
+                emit("seed", "cloning the bundled genome into source/", none);
+                let bundle = bundle.ok_or_else(|| {
+                    Failed::from(LoomError::NotFound(
+                        "the genome bundle is missing — this LOOM was built without its history".into(),
+                    ))
+                })?;
+                crate::loomhome::seed_source(home, bundle, sha)?;
+            }
+        }
+        t.steps.seed = true;
+        write(home, t)?;
+    }
+
+    // 2 · deps (network, once)
+    if t.steps.deps {
+        emit("deps", "dependencies already installed", none);
+    } else {
+        emit("deps", "npm ci — this is the step that needs the network", none);
+        let npm = need_tool(tools, "npm")?;
+        let out = run_checked_env(&[&npm, "ci", "--no-audit", "--no-fund"], &source, &root, DEPS_TIMEOUT, &[])?;
+        if out.code != 0 {
+            return Err(step_failed("npm ci", &out));
+        }
+        t.steps.deps = true;
+        write(home, t)?;
+    }
+
+    // 3 · vendor (network, once)
+    if t.steps.vendor {
+        emit("vendor", "crates already vendored", none);
+    } else {
+        emit("vendor", "cargo vendor — every crate, kept locally", none);
+        let cargo = need_tool(tools, "cargo")?;
+        let vendor_dir = home.vendor().to_string_lossy().into_owned();
+        let out = run_checked_env(
+            &[&cargo, "vendor", "--versioned-dirs", &vendor_dir],
+            &core,
+            &root,
+            VENDOR_TIMEOUT,
+            &[],
+        )?;
+        if out.code != 0 {
+            return Err(step_failed("cargo vendor", &out));
+        }
+        let cfg = source.join(".cargo").join("config.toml");
+        std::fs::create_dir_all(cfg.parent().unwrap()).map_err(|e| LoomError::Git(e.to_string()))?;
+        std::fs::write(&cfg, cargo_config(&home.vendor()))
+            .map_err(|e| LoomError::Git(format!("write {}: {e}", cfg.display())))?;
+        t.steps.vendor = true;
+        write(home, t)?;
+    }
+
+    // 4 · warm (the long one)
+    if t.steps.warm {
+        emit("warm", "the build is already warm", none);
+    } else {
+        emit("warm", "building the assets", none);
+        let npm = need_tool(tools, "npm")?;
+        let out = run_checked_env(&[&npm, "run", "build"], &source, &root, ASSETS_TIMEOUT, &[])?;
+        if out.code != 0 {
+            return Err(step_failed("npm run build", &out));
+        }
+        emit("warm", "compiling the core — native deps compile once", none);
+        let cargo = need_tool(tools, "cargo")?;
+        let target = home.target().to_string_lossy().into_owned();
+        let mut tail: Vec<String> = Vec::new();
+        let mut last_emit: Option<Instant> = None;
+        let out = run_job_stream(
+            &JOB,
+            &[&cargo, "build", "--release", "--offline"],
+            &core,
+            &root,
+            CORE_TIMEOUT,
+            &[("CARGO_TARGET_DIR", &target), ("CARGO_NET_OFFLINE", "true")],
+            &mut |line| {
+                if line.trim().is_empty() {
+                    return;
+                }
+                if tail.len() == TAIL_LINES {
+                    tail.remove(0);
+                }
+                tail.push(line.to_string());
+                if last_emit.map_or(true, |t| t.elapsed() >= TAIL_EVERY) {
+                    emit("warm", "compiling the core", &tail);
+                    last_emit = Some(Instant::now());
+                }
+            },
+        )?;
+        if out.code != 0 {
+            if JOB.cancelled() {
+                return Err(LoomError::Parse("threading was cancelled — run it again to continue.".into()).into());
+            }
+            return Err(step_failed("cargo build", &out));
+        }
+        emit("warm", "the core is built", &tail);
+        t.steps.warm = true;
+        write(home, t)?;
+    }
+
+    // 5 · register — the running body becomes generation 0
+    if t.steps.register {
+        emit("register", "generation 0 already shelved", none);
+    } else {
+        emit("register", "shelving this body as generation 0", none);
+        crate::generations::record(home, sha, exe, "threaded")?;
+        let mut ledger = crate::generations::read(home);
+        ledger.current = Some(sha.to_string());
+        ledger.previous = None;
+        ledger.confirmed = true;
+        crate::generations::write(home, &ledger)?;
+        t.steps.register = true;
+        write(home, t)?;
+    }
+
+    // 6 · stamp — threaded only now
+    emit("stamp", "writing threads.json", none);
+    t.threaded = true;
+    t.threaded_at = Some(crate::generations::now_rfc3339());
+    t.threaded_sha = Some(sha.to_string());
+    write(home, t)?;
+    Ok(())
+}
+
+/// Start the ceremony as a background job. Refuses if threading or reweave
+/// is already in flight (they share `exec::JOB`). Progress arrives as
+/// `loom-thread` events; the command itself returns at once.
+#[tauri::command]
+pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
+    use tauri::Emitter;
+    let home = Home::from_app(&app)?;
+    if !crate::exec::JOB.try_take() {
+        return Err(LoomError::Parse("threading already in flight".into()));
+    }
+    // Record the machine's tools (paths + versions) before the first step,
+    // so drift has a baseline and every spawn below uses a recorded path.
+    if read(&home).is_none() {
+        let discovered = status(&home).tools;
+        let fresh = Threads {
+            threaded: false,
+            threaded_at: None,
+            threaded_sha: None,
+            tools: discovered,
+            steps: ThreadSteps::default(),
+        };
+        if let Err(e) = write(&home, &fresh) {
+            crate::exec::JOB.release();
+            return Err(e);
+        }
+    }
+    let mode = crate::loomhome::mode();
+    let bundle = match mode {
+        crate::loomhome::Mode::Packaged => home.genome_bundle_resource(&app).ok(),
+        crate::loomhome::Mode::Dev => None,
+    };
+    let exe = std::env::current_exe().map_err(|e| {
+        crate::exec::JOB.release();
+        LoomError::NotFound(format!("current exe: {e}"))
+    })?;
+    std::thread::spawn(move || {
+        let tools = |name: &str| tool_path(&home, name);
+        let mut emit = |step: &str, detail: &str, tail: &[String]| {
+            let _ = app.emit(
+                THREAD_EVENT,
+                ThreadEvent { step: step.into(), detail: detail.into(), tail: tail.to_vec() },
+            );
+        };
+        let _ = run_ceremony(&home, mode, &tools, &exe, bundle.as_deref(), &mut emit);
+        crate::exec::JOB.release();
+    });
+    Ok(())
+}
+
+/// Stop a running ceremony: group-kills the current tool. The step that was
+/// running stays unmarked, so the next `thread_loom` resumes from it.
+#[tauri::command]
+pub fn thread_cancel() -> Result<(), LoomError> {
+    crate::exec::JOB.kill();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,5 +958,241 @@ mod tests {
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["needsNetwork"], true);
         assert!(v["steps"]["register"].is_boolean());
+    }
+
+    // ── The ceremony ──────────────────────────────────────────────────────────
+
+    /// A staged machine: a loomhome with `source/src-tauri`, fake `npm` and
+    /// `cargo` that append their argv to `log` and touch a marker per
+    /// subcommand, and a small file standing in for the running executable.
+    #[cfg(unix)]
+    struct Stage {
+        _dir: tempfile::TempDir,
+        home: Home,
+        log: PathBuf,
+        markers: PathBuf,
+        npm: PathBuf,
+        cargo: PathBuf,
+        exe: PathBuf,
+    }
+
+    #[cfg(unix)]
+    fn fake_tool(dir: &Path, name: &str, log: &Path, markers: &Path, extra: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        let script = format!(
+            "#!/bin/sh\necho \"{name} $*\" >> \"{log}\"\ntouch \"{markers}/{name}-$1\"\n{extra}\nexit 0\n",
+            log = log.display(),
+            markers = markers.display(),
+        );
+        std::fs::write(&p, script).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    #[cfg(unix)]
+    fn stage(npm_extra: &str, cargo_extra: &str) -> Stage {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("loom");
+        let home = Home::at(root.clone());
+        std::fs::create_dir_all(home.source().join("src-tauri")).unwrap();
+        let log = dir.path().join("calls.log");
+        let markers = dir.path().join("markers");
+        std::fs::create_dir_all(&markers).unwrap();
+        let bin = dir.path().join("bin");
+        let npm = fake_tool(&bin, "npm", &log, &markers, npm_extra);
+        let cargo = fake_tool(&bin, "cargo", &log, &markers, cargo_extra);
+        let exe = dir.path().join("loom-body");
+        std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
+        Stage { _dir: dir, home, log, markers, npm, cargo, exe }
+    }
+
+    #[cfg(unix)]
+    impl Stage {
+        fn tools(&self) -> impl Fn(&str) -> Option<PathBuf> + '_ {
+            move |name: &str| match name {
+                "npm" => Some(self.npm.clone()),
+                "cargo" => Some(self.cargo.clone()),
+                _ => None,
+            }
+        }
+        fn log(&self) -> String {
+            std::fs::read_to_string(&self.log).unwrap_or_default()
+        }
+        fn run(&self) -> (Result<(), LoomError>, Vec<(String, String, Vec<String>)>) {
+            let mut events: Vec<(String, String, Vec<String>)> = Vec::new();
+            let tools = self.tools();
+            let res = run_ceremony(
+                &self.home,
+                crate::loomhome::Mode::Dev,
+                &tools,
+                &self.exe,
+                None,
+                &mut |step, detail, tail| events.push((step.to_string(), detail.to_string(), tail.to_vec())),
+            );
+            (res, events)
+        }
+    }
+
+    fn step_order(events: &[(String, String, Vec<String>)]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (s, _, _) in events {
+            if out.last() != Some(s) {
+                out.push(s.clone());
+            }
+        }
+        out
+    }
+
+    /// The `cargo build` fake prints a few "Compiling" lines and records the
+    /// envs the ceremony must set.
+    const CARGO_BUILD_FAKE: &str = r#"if [ "$1" = build ]; then
+  echo "target=$CARGO_TARGET_DIR offline=$CARGO_NET_OFFLINE" >> "$(dirname "$0")/../calls.log"
+  echo "Compiling a"; echo "Compiling b"; echo "Compiling c"; echo "Compiling d"
+fi"#;
+
+    #[cfg(unix)]
+    #[test]
+    fn ceremony_runs_every_step_in_order_and_stamps() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        let (res, events) = st.run();
+        assert!(res.is_ok(), "ceremony failed: {res:?}\nevents: {events:?}");
+        assert_eq!(
+            step_order(&events),
+            vec!["seed", "deps", "vendor", "warm", "register", "stamp", "done"]
+        );
+
+        // The tools were called in the spec's order with the spec's argv.
+        let log = st.log();
+        let calls: Vec<&str> = log.lines().collect();
+        let vendor_dir = st.home.vendor().to_string_lossy().into_owned();
+        assert_eq!(calls[0], "npm ci --no-audit --no-fund");
+        assert_eq!(calls[1], format!("cargo vendor --versioned-dirs {vendor_dir}"));
+        assert_eq!(calls[2], "npm run build");
+        assert_eq!(calls[3], "cargo build --release --offline");
+        assert_eq!(
+            calls[4],
+            format!("target={} offline=true", st.home.target().display()),
+            "cargo build runs with the shared target and offline"
+        );
+        assert_eq!(calls.len(), 5, "no extra spawns: {calls:?}");
+        assert!(st.markers.join("npm-ci").exists());
+        assert!(st.markers.join("cargo-build").exists());
+
+        // The warm step streamed cargo's tail (last 3 lines).
+        let warm_tail = events
+            .iter()
+            .filter(|(s, _, _)| s == "warm")
+            .map(|(_, _, t)| t.clone())
+            .find(|t| t.len() == 3)
+            .expect("a warm event carries a 3-line tail");
+        assert_eq!(warm_tail, vec!["Compiling b", "Compiling c", "Compiling d"]);
+
+        // Stamped: every marker, threaded, sha + time recorded.
+        let t = read(&st.home).unwrap();
+        assert!(t.threaded);
+        assert_eq!(t.steps, ThreadSteps { seed: true, deps: true, vendor: true, warm: true, register: true });
+        assert_eq!(t.threaded_sha.as_deref(), Some(crate::loomhome::genome_sha()));
+        assert!(t.threaded_at.as_deref().map_or(false, |s| s.ends_with('Z')));
+
+        // Registered: generation 0 shelved, ledger current + confirmed.
+        let sha = crate::loomhome::genome_sha();
+        assert!(st.home.generation_exe(sha).is_file());
+        let ledger = crate::generations::read(&st.home);
+        assert_eq!(ledger.current.as_deref(), Some(sha));
+        assert_eq!(ledger.previous, None);
+        assert_eq!(ledger.kept, vec![sha.to_string()]);
+        assert!(ledger.confirmed);
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(st.home.generation_meta(sha)).unwrap()).unwrap();
+        assert_eq!(meta["reason"], "threaded");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ceremony_resumes_after_deps_already_done() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        write(
+            &st.home,
+            &Threads {
+                threaded: false,
+                threaded_at: None,
+                threaded_sha: None,
+                tools: vec![],
+                steps: ThreadSteps { seed: true, deps: true, ..ThreadSteps::default() },
+            },
+        )
+        .unwrap();
+        let (res, events) = st.run();
+        assert!(res.is_ok(), "ceremony failed: {res:?}");
+        let log = st.log();
+        assert!(!log.contains("npm ci"), "npm ci must not run again: {log}");
+        assert!(!st.markers.join("npm-ci").exists());
+        assert!(log.contains("cargo vendor"), "vendor still runs: {log}");
+        assert!(log.contains("npm run build"), "warm still runs: {log}");
+        // Skipped steps still announce themselves, so the card shows the whole ceremony.
+        let order = step_order(&events);
+        assert_eq!(order, vec!["seed", "deps", "vendor", "warm", "register", "stamp", "done"]);
+        let deps = events.iter().find(|(s, _, _)| s == "deps").unwrap();
+        assert!(deps.1.contains("already"), "skip detail says so: {:?}", deps.1);
+        assert!(read(&st.home).unwrap().threaded);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn offline_deps_failure_uses_the_honest_line() {
+        let st = stage(
+            r#"if [ "$1" = ci ]; then echo "npm ERR! code ENOTFOUND" 1>&2; echo "npm ERR! request to https://registry.npmjs.org/x failed" 1>&2; exit 1; fi"#,
+            CARGO_BUILD_FAKE,
+        );
+        let (res, events) = st.run();
+        assert!(res.is_err(), "offline deps must fail");
+        let last = events.last().unwrap();
+        assert_eq!(last.0, "failed");
+        assert_eq!(last.1, "threading needs the network once — after that LOOM weaves offline.");
+        assert!(last.2.iter().any(|l| l.contains("ENOTFOUND")), "tail carries npm's own words: {:?}", last.2);
+        let t = read(&st.home).unwrap();
+        assert!(!t.threaded);
+        assert!(t.steps.seed, "seed (dev: skip) was recorded before deps failed");
+        assert!(!t.steps.deps);
+        assert!(!st.log().contains("cargo"), "nothing after the failed step runs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vendor_writes_offline_config() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        let (res, _) = st.run();
+        assert!(res.is_ok(), "{res:?}");
+        let cfg = std::fs::read_to_string(st.home.source().join(".cargo").join("config.toml")).unwrap();
+        let expected = format!(
+            "[source.crates-io]\nreplace-with = \"vendored\"\n[source.vendored]\ndirectory = \"{}\"\n[net]\noffline = true\n",
+            st.home.vendor().display()
+        );
+        assert_eq!(cfg, expected);
+        assert!(st.markers.join("cargo-vendor").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_tool_stops_with_its_install_line() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        let mut events: Vec<(String, String, Vec<String>)> = Vec::new();
+        let none = |_: &str| None::<PathBuf>;
+        let res = run_ceremony(
+            &st.home,
+            crate::loomhome::Mode::Dev,
+            &none,
+            &st.exe,
+            None,
+            &mut |s, d, t| events.push((s.into(), d.into(), t.to_vec())),
+        );
+        assert!(res.is_err());
+        let last = events.last().unwrap();
+        assert_eq!(last.0, "failed");
+        assert!(last.1.contains("npm is missing"), "{:?}", last.1);
+        assert!(last.1.contains("brew install node"), "{:?}", last.1);
+        assert!(st.log().is_empty(), "nothing spawned");
     }
 }

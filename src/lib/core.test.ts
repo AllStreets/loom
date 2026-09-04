@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity, generationsList, threadStatus, reweaveStart, reweaveCancel, reweaveState, generationsReturn } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity, generationsList, threadStatus, reweaveStart, reweaveCancel, reweaveState, generationsReturn, threadLoom, threadCancel, THREAD_EVENT } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -317,5 +317,26 @@ describe("threading wrappers", () => {
     expect(s.tools[0].requiredFor).toContain("native deps");
     expect(s.steps.seed).toBe(true);
     expect(s.needsNetwork).toBe(true);
+  });
+
+  it("threadLoom invokes thread_loom with no args and resolves once the job is spawned", async () => {
+    invoke.mockResolvedValue(undefined);
+    await expect(threadLoom()).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith("thread_loom");
+  });
+
+  it("threadLoom surfaces the in-flight refusal as-is", async () => {
+    invoke.mockRejectedValue({ kind: "parse", message: "threading already in flight" });
+    await expect(threadLoom()).rejects.toEqual({ kind: "parse", message: "threading already in flight" });
+  });
+
+  it("threadCancel invokes thread_cancel with no args", async () => {
+    invoke.mockResolvedValue(undefined);
+    await expect(threadCancel()).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith("thread_cancel");
+  });
+
+  it("THREAD_EVENT names the loom-thread channel", () => {
+    expect(THREAD_EVENT).toBe("loom-thread");
   });
 });

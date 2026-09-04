@@ -177,7 +177,7 @@ pub fn record(home: &Home, sha: &str, exe_src: &Path, reason: &str) -> Result<Me
 
 /// `YYYY-MM-DDTHH:MM:SSZ` from the system clock, no chrono. Civil-date
 /// conversion per Howard Hinnant's `civil_from_days`.
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
