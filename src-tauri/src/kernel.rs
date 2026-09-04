@@ -596,9 +596,12 @@ pub(crate) fn read_sentinel(path: &Path) -> Option<Sentinel> {
     serde_json::from_str(&raw).ok()
 }
 
+/// Every write of the sentinel goes through the same atomic helper as the
+/// rest of loomhome (round-1 review, Finding 4): a staging file, fsync,
+/// rename. A torn sentinel reads as `None`, and a boot that reads `None`
+/// proceeds unguarded — permanently.
 fn write_sentinel(path: &Path, s: &Sentinel) -> Result<(), LoomError> {
-    let json = serde_json::to_string_pretty(s).map_err(|e| LoomError::Parse(e.to_string()))?;
-    std::fs::write(path, json).map_err(|e| LoomError::Git(e.to_string()))
+    crate::threads::write_json_atomic(path, s)
 }
 
 /// Write a sentinel at an explicit path (Phase 23 / Rebirth). The swap
@@ -2608,6 +2611,36 @@ mod tests {
 
     fn mirror_armed_by_at(root: &Path) -> Option<String> {
         read_sentinel(&mirror_path(root)).and_then(|s| s.armed_by)
+    }
+
+    /// Round-1 review, Finding 4. The sentinel is the one file every healer
+    /// reads: a torn write reads as `None`, and a boot that reads `None`
+    /// proceeds unguarded, permanently. It is written the way every other
+    /// loomhome JSON is — a staging file, then a rename — so a reader sees
+    /// the whole old sentinel or the whole new one. Pinned by the one
+    /// observable difference: the rename needs the directory, not the file.
+    #[test]
+    fn sentinel_is_written_by_rename() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let sp = d.path().join("kernel-boot.json");
+        let sentinel = |status: &str| Sentinel {
+            prev_sha: "aaa111".into(),
+            applied_sha: "bbb222".into(),
+            status: status.into(),
+            source_root: d.path().to_string_lossy().into_owned(),
+            armed_by: Some("reweave".into()),
+        };
+        write_sentinel_at(&sp, &sentinel("applied")).unwrap();
+        fs::set_permissions(&sp, fs::Permissions::from_mode(0o444)).unwrap();
+
+        write_sentinel_at(&sp, &sentinel("booting")).unwrap();
+        assert_eq!(read_sentinel(&sp).unwrap().status, "booting");
+        let names: Vec<String> = fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["kernel-boot.json".to_string()], "no staging file remains");
     }
 
     #[test]
