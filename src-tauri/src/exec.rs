@@ -341,6 +341,11 @@ pub static JOB: Slot = Slot::new();
 ///
 /// Hold it for the whole life of the job thread; never call `release`
 /// yourself while one is alive.
+///
+/// TODO(rebirth, other agent's file): `reweave.rs` still takes and releases
+/// `JOB` by hand in `spawn_job` / `reweave_start` / `generations_return`, so a
+/// panicking weave leaks the slot exactly as a panicking ceremony did. It
+/// should hold a `SlotGuard` the way `threads::thread_loom` now does.
 pub struct SlotGuard<'a> {
     slot: &'a Slot,
 }

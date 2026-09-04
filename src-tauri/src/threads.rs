@@ -990,7 +990,11 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
     })();
     let (source, exe) = started?;
     std::thread::spawn(move || {
-        let _slot = slot; // released when this thread ends, panic included
+        // Both are RAII: this thread ending — by return or by panic — lowers
+        // the flag first and frees the slot second, so there is never a
+        // moment where a reweave holds the slot while threading still claims
+        // the right to cancel it.
+        let held = slot;
         let _active = Active::take();
         let tools = |name: &str| tool_path(&home, name);
         let mut emit = |step: &str, detail: &str, tail: &[String]| {
@@ -1003,7 +1007,7 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
             &home,
             mode,
             &source,
-            _slot.slot(),
+            held.slot(),
             &tools,
             &exe,
             bundle.as_deref(),
