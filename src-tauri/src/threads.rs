@@ -14,7 +14,10 @@
 //!
 //! No shell is ever spawned: a version probe is `<absolute path> --version`
 //! through `exec::run_checked`. `codesign` has no `--version`; it is recorded
-//! as `present`.
+//! as `present`. npm is the one exception to "an absolute path is enough":
+//! it is a `#!/usr/bin/env node` shim, so every npm spawn — the probe and the
+//! ceremony's own — carries a PATH pair leading with the recorded node's
+//! directory (`npm_path_env`).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -187,10 +190,42 @@ pub fn locate(spec: &ToolSpec, home_dir: &Path, path_env: &str) -> Option<PathBu
     None
 }
 
+/// The PATH value every `npm` spawn carries: the directory of the RECORDED
+/// node, then everything this process already had.
+///
+/// npm is a `#!/usr/bin/env node` shim — an absolute npm path still resolves
+/// `node` through PATH. A Finder-launched macOS app inherits
+/// `/usr/bin:/bin:/usr/sbin:/sbin`, which holds neither nvm nor homebrew, so
+/// npm answered `env: node: No such file or directory` (exit 127) and the
+/// packaged self-rebuild could not take its first step.
+///
+/// Both halves are LOOM's own — the parent of a path the tool table found,
+/// and this process's PATH — so the pair keeps exec's fixed-env contract:
+/// nothing here is composed from model output. `None` when the node path has
+/// no directory to name.
+pub fn npm_path_env(node: &Path) -> Option<String> {
+    let dir = node.parent().filter(|d| !d.as_os_str().is_empty())?;
+    let mut dirs: Vec<PathBuf> = vec![dir.to_path_buf()];
+    dirs.extend(std::env::split_paths(&path_env()));
+    std::env::join_paths(dirs).ok().map(|v| v.to_string_lossy().into_owned())
+}
+
+/// The PATH pair for `npm`, discovered alongside it; empty for every other
+/// tool, which needs nothing but its absolute path.
+fn probe_envs(spec: &ToolSpec, home_dir: &Path, path_env: &str) -> Vec<(String, String)> {
+    if spec.name != "npm" {
+        return Vec::new();
+    }
+    locate(&NODE, home_dir, path_env)
+        .and_then(|node| npm_path_env(&node))
+        .map(|v| vec![("PATH".to_string(), v)])
+        .unwrap_or_default()
+}
+
 /// The first line of `<path> <version_args>`, trimmed; `present` when the
 /// tool has no version flag; `None` if the probe fails (a found tool that
 /// cannot answer is reported, not hidden — the drift check will flag it).
-fn probe_version(path: &Path, spec: &ToolSpec) -> Option<String> {
+fn probe_version(path: &Path, spec: &ToolSpec, envs: &[(&str, &str)]) -> Option<String> {
     if spec.version_args.is_empty() {
         return Some("present".into());
     }
@@ -198,7 +233,7 @@ fn probe_version(path: &Path, spec: &ToolSpec) -> Option<String> {
     let mut argv: Vec<&str> = vec![p];
     argv.extend_from_slice(spec.version_args);
     let root = Path::new("/");
-    let out = crate::exec::run_checked(&argv, root, root, VERSION_TIMEOUT).ok()?;
+    let out = crate::exec::run_checked_env(&argv, root, root, VERSION_TIMEOUT, envs).ok()?;
     if out.code != 0 {
         return None;
     }
@@ -212,7 +247,9 @@ fn probe_version(path: &Path, spec: &ToolSpec) -> Option<String> {
 /// build a whole machine in a tempdir.
 pub fn discover(spec: &ToolSpec, home_dir: &Path, path_env: &str) -> Tool {
     let path = locate(spec, home_dir, path_env);
-    let version = path.as_deref().and_then(|p| probe_version(p, spec));
+    let owned = probe_envs(spec, home_dir, path_env);
+    let envs: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let version = path.as_deref().and_then(|p| probe_version(p, spec, &envs));
     Tool {
         name: spec.name.to_string(),
         path: path.map(|p| p.to_string_lossy().into_owned()),
@@ -427,6 +464,17 @@ fn need_tool(tools: &dyn Fn(&str) -> Option<PathBuf>, name: &str) -> Result<Stri
     }
 }
 
+/// npm's absolute path plus the PATH value that lets its shebang find node.
+/// A machine with npm but no node cannot run npm at all, so it stops here
+/// with node's own install line rather than at a shim's exit 127.
+fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String, String), LoomError> {
+    let npm = need_tool(tools, "npm")?;
+    let node = need_tool(tools, "node")?;
+    let path = npm_path_env(Path::new(&node))
+        .ok_or_else(|| LoomError::NotFound(format!("node has no directory to lead PATH: {node}")))?;
+    Ok((npm, path))
+}
+
 fn tail_of(text: &str) -> Vec<String> {
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     let skip = lines.len().saturating_sub(TAIL_LINES);
@@ -599,8 +647,14 @@ fn ceremony_steps(
         emit("deps", "dependencies already installed", none);
     } else {
         emit("deps", "npm ci — this is the step that needs the network", none);
-        let npm = need_tool(tools, "npm")?;
-        let out = run_checked_env(&[&npm, "ci", "--no-audit", "--no-fund"], &source, &root, DEPS_TIMEOUT, &[])?;
+        let (npm, node_path) = npm_with_node(tools)?;
+        let out = run_checked_env(
+            &[&npm, "ci", "--no-audit", "--no-fund"],
+            &source,
+            &root,
+            DEPS_TIMEOUT,
+            &[("PATH", &node_path)],
+        )?;
         if out.code != 0 {
             return Err(step_failed("npm ci", &out));
         }
@@ -638,8 +692,14 @@ fn ceremony_steps(
         emit("warm", "the build is already warm", none);
     } else {
         emit("warm", "building the assets", none);
-        let npm = need_tool(tools, "npm")?;
-        let out = run_checked_env(&[&npm, "run", "build"], &source, &root, ASSETS_TIMEOUT, &[])?;
+        let (npm, node_path) = npm_with_node(tools)?;
+        let out = run_checked_env(
+            &[&npm, "run", "build"],
+            &source,
+            &root,
+            ASSETS_TIMEOUT,
+            &[("PATH", &node_path)],
+        )?;
         if out.code != 0 {
             return Err(step_failed("npm run build", &out));
         }
@@ -787,6 +847,18 @@ mod tests {
         p
     }
 
+    /// A fake executable with a body of its own (the shebang interpreter
+    /// runs it; LOOM never spawns a shell itself).
+    #[cfg(unix)]
+    fn fake_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
     fn spec_for(name: &str) -> &'static ToolSpec {
         TOOLS.iter().find(|t| t.name == name).expect("spec exists")
     }
@@ -857,6 +929,45 @@ mod tests {
             Some(nvm.join("v22.3.0").join("bin").join("node").to_str().unwrap())
         );
         assert_eq!(tool.version.as_deref(), Some("v22.3.0"));
+    }
+
+    #[test]
+    fn npm_path_env_puts_the_recorded_node_first() {
+        let v = npm_path_env(Path::new("/opt/loom/node/v22.3.0/bin/node")).unwrap();
+        let mut entries = std::env::split_paths(&v);
+        assert_eq!(
+            entries.next().unwrap(),
+            PathBuf::from("/opt/loom/node/v22.3.0/bin"),
+            "the recorded node's own directory leads: {v}"
+        );
+        // Nothing the process already had is dropped — the pair prepends.
+        let rest: Vec<PathBuf> = entries.collect();
+        for dir in std::env::split_paths(&std::env::var("PATH").unwrap_or_default()) {
+            assert!(rest.contains(&dir), "{} was dropped from PATH", dir.display());
+        }
+        assert_eq!(npm_path_env(Path::new("node")), None, "a bare name has no directory");
+    }
+
+    /// npm is a `#!/usr/bin/env node` shim: an absolute npm path is not
+    /// enough, node has to be ON PATH. A Finder-launched app's PATH is
+    /// `/usr/bin:/bin:/usr/sbin:/sbin`, which has neither nvm nor homebrew,
+    /// so the probe answered `env: node: No such file or directory` and the
+    /// table showed npm with a valid path and no version.
+    #[cfg(unix)]
+    #[test]
+    fn npm_version_probe_carries_the_recorded_node() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let bin = home.join(".nvm").join("versions").join("node").join("v22.3.0").join("bin");
+        fake_exe(&bin, "node", "v22.3.0");
+        fake_script(&bin, "npm", "command -v node");
+        let tool = discover(spec_for("npm"), &home, "");
+        assert_eq!(tool.path.as_deref(), Some(bin.join("npm").to_str().unwrap()));
+        assert_eq!(
+            tool.version.as_deref(),
+            Some(bin.join("node").to_str().unwrap()),
+            "the probe must see the RECORDED node, not whatever PATH the app inherited"
+        );
     }
 
     #[cfg(unix)]
@@ -1031,6 +1142,7 @@ mod tests {
         log: PathBuf,
         markers: PathBuf,
         npm: PathBuf,
+        node: PathBuf,
         cargo: PathBuf,
         exe: PathBuf,
     }
@@ -1063,10 +1175,11 @@ mod tests {
         std::fs::create_dir_all(&markers).unwrap();
         let bin = dir.path().join("bin");
         let npm = fake_tool(&bin, "npm", &log, &markers, npm_extra);
+        let node = fake_exe(&bin, "node", "v22.3.0");
         let cargo = fake_tool(&bin, "cargo", &log, &markers, cargo_extra);
         let exe = dir.path().join("loom-body");
         std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
-        Stage { _dir: dir, home, source, log, markers, npm, cargo, exe }
+        Stage { _dir: dir, home, source, log, markers, npm, node, cargo, exe }
     }
 
     #[cfg(unix)]
@@ -1074,6 +1187,7 @@ mod tests {
         fn tools(&self) -> impl Fn(&str) -> Option<PathBuf> + '_ {
             move |name: &str| match name {
                 "npm" => Some(self.npm.clone()),
+                "node" => Some(self.node.clone()),
                 "cargo" => Some(self.cargo.clone()),
                 _ => None,
             }
@@ -1257,6 +1371,53 @@ fi"#;
         );
         assert_eq!(cfg, expected);
         assert!(st.markers.join("cargo-vendor").exists());
+    }
+
+    /// Both npm spawns in the ceremony — deps and the warm assets build —
+    /// carry the pair, or the packaged self-rebuild dies at `npm ci`.
+    #[cfg(unix)]
+    #[test]
+    fn every_npm_spawn_carries_the_recorded_node_on_path() {
+        let st = stage(
+            r#"echo "npm-saw=${PATH%%:*}" >> "$(dirname "$0")/../calls.log""#,
+            CARGO_BUILD_FAKE,
+        );
+        let (res, _) = st.run();
+        assert!(res.is_ok(), "{res:?}");
+        let bin = st.node.parent().unwrap().to_string_lossy().into_owned();
+        let log = st.log();
+        let saw: Vec<&str> = log.lines().filter(|l| l.starts_with("npm-saw=")).collect();
+        let want = format!("npm-saw={bin}");
+        assert_eq!(
+            saw,
+            vec![want.as_str(), want.as_str()],
+            "npm ci and npm run build both lead PATH with the recorded node's directory"
+        );
+    }
+
+    /// node is what makes npm runnable, so a machine without it stops at the
+    /// same wall as a machine without npm — with node's own install line.
+    #[cfg(unix)]
+    #[test]
+    fn npm_without_node_stops_with_nodes_install_line() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        let mut events: Vec<(String, String, Vec<String>)> = Vec::new();
+        let npm_only = |name: &str| if name == "npm" { Some(st.npm.clone()) } else { None };
+        let res = run_ceremony(
+            &st.home,
+            Mode::Dev,
+            &st.source,
+            &npm_only,
+            &st.exe,
+            None,
+            &mut |s, d, t| events.push((s.into(), d.into(), t.to_vec())),
+        );
+        assert!(res.is_err());
+        let last = events.last().unwrap();
+        assert_eq!(last.0, "failed");
+        assert!(last.1.contains("node is missing"), "{:?}", last.1);
+        assert!(last.1.contains("brew install node"), "{:?}", last.1);
+        assert!(st.log().is_empty(), "nothing spawned");
     }
 
     #[cfg(unix)]
