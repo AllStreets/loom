@@ -13,13 +13,21 @@
 //! machinery — `is_editable` denies the protected set BEFORE any fs op.
 //!
 //! Isolation model: a proposal creates a detached `git worktree` at HEAD in a
-//! temp dir. Edits and validation happen THERE. `kernel_apply` re-derives the
-//! same patch and writes it to the live tree only on an explicit, separate
-//! call. Every error path cleans up the worktree (`git worktree remove` +
-//! `git worktree prune`) so no orphan survives.
+//! temp dir (dev) or under `loomhome/worktrees/` (packaged). Edits and
+//! validation happen THERE. `kernel_apply` re-derives the same patch and writes
+//! it to the live tree only on an explicit, separate call. Every error path
+//! cleans up the worktree (`git worktree remove` + `git worktree prune`) so no
+//! orphan survives.
+//!
+//! Phase 23 (Rebirth): validation is OFFLINE. The worktree borrows the source
+//! tree's `node_modules` through a symlink, `tsc`/`vitest` are invoked as
+//! files under it through the recorded `node` binary (never `npx`, whose own
+//! cache was an unstated network dependency), and cargo runs `--offline`
+//! against the shared loomhome `target/` in packaged mode.
 
 use crate::error::LoomError;
-use crate::exec::{run_checked, ExecOut};
+use crate::exec::{run_checked, run_checked_env, ExecOut};
+use crate::loomhome::{mode, Home, Mode};
 use git2::Repository;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -230,16 +238,36 @@ pub fn is_editable(rel: &str) -> bool {
 
 // ── Source-repo resolution ────────────────────────────────────────────────────
 
-/// Resolve the SOURCE repo root: the `override_opt` setting if a non-empty
-/// value is supplied, else the process cwd. Canonicalized, asserted to be a git
-/// WORK dir (`.git` present + `Repository::open` succeeds, not bare). Typed
-/// error otherwise. This is the sovereignty guard — LOOM only ever edits the
-/// repo it is running from (or an explicitly configured one).
+/// Resolve the SOURCE repo root in DEV mode: the `override_opt` setting if a
+/// non-empty value is supplied, else the process cwd. Canonicalized, asserted
+/// to be a git WORK dir (`.git` present + `Repository::open` succeeds, not
+/// bare). Typed error otherwise. This is the sovereignty guard — LOOM only
+/// ever edits the repo it is running from (or an explicitly configured one).
+/// Commands go through `resolve_source_repo_for` so packaged mode answers
+/// `loomhome/source` instead; this dev entry serves the tests today.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn resolve_source_repo(override_opt: Option<&str>) -> Result<PathBuf, LoomError> {
-    let raw: PathBuf = match override_opt {
-        Some(s) if !s.trim().is_empty() => PathBuf::from(s.trim()),
-        _ => std::env::current_dir()
-            .map_err(|e| LoomError::NotFound(format!("cwd unavailable: {e}")))?,
+    resolve_source_repo_at(Mode::Dev, override_opt, None)
+}
+
+/// The mode-aware core. Packaged → `home.source()`, the `kernel.sourceRepo`
+/// override is dev-only and ignored (a packaged LOOM edits its own genome,
+/// never an arbitrary checkout). Dev → the override, else the cwd. Pure in
+/// `mode` so a test can exercise the packaged branch without a built app.
+pub fn resolve_source_repo_at(
+    mode: Mode,
+    override_opt: Option<&str>,
+    home: Option<&Home>,
+) -> Result<PathBuf, LoomError> {
+    let raw: PathBuf = match mode {
+        Mode::Packaged => home
+            .ok_or_else(|| LoomError::NotFound("loomhome unavailable — cannot locate source".into()))?
+            .source(),
+        Mode::Dev => match override_opt {
+            Some(s) if !s.trim().is_empty() => PathBuf::from(s.trim()),
+            _ => std::env::current_dir()
+                .map_err(|e| LoomError::NotFound(format!("cwd unavailable: {e}")))?,
+        },
     };
     let canonical = raw
         .canonicalize()
@@ -259,6 +287,15 @@ pub fn resolve_source_repo(override_opt: Option<&str>) -> Result<PathBuf, LoomEr
         )));
     }
     Ok(canonical)
+}
+
+/// What every command uses: the process mode + the app's loomhome.
+fn resolve_source_repo_for(
+    app: &tauri::AppHandle,
+    override_opt: Option<&str>,
+) -> Result<PathBuf, LoomError> {
+    let home = Home::from_app(app)?;
+    resolve_source_repo_at(mode(), override_opt, Some(&home))
 }
 
 // ── git helpers (hardened, fixed argv, via exec) ──────────────────────────────
@@ -290,17 +327,20 @@ fn head_sha(root: &Path) -> Result<String, LoomError> {
 
 // ── Validator toolchain resolution (Finding 8) ────────────────────────────────
 //
-// `kernel_validate` must not spawn `npx` resolved from an inherited PATH on
-// every call: a PATH hijacked between startup and a validate call could swap in
-// a validator that lies. Instead we resolve the ABSOLUTE path of `npx` ONCE (a
-// OnceLock cache) by walking PATH ourselves, and use that absolute path as
-// argv[0] thereafter — keeping the fixed-argv discipline intact.
+// `kernel_validate` must not spawn a validator resolved from an inherited PATH
+// on every call: a PATH hijacked between startup and a validate call could
+// swap in a validator that lies. The ABSOLUTE path of `node` is taken from
+// `threads.json` (recorded at threading) when a loomhome is at hand, else
+// resolved ONCE (a OnceLock cache) by walking PATH ourselves, and used as
+// argv[0] thereafter — keeping the fixed-argv discipline intact. The compiler
+// and test runner themselves are files under the worktree's `node_modules`
+// (a symlink to the source install), so nothing is looked up by name.
 //
 // Residual, stated honestly: if PATH is ALREADY hijacked at process startup the
 // machine is already compromised and no in-process check can save it. This
 // removes the *per-call re-resolution* window, not that root compromise.
 
-static NPX_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static NODE_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// Walk `PATH` looking for an executable named `bin` (with common Windows
 /// extensions on that platform). Returns the first absolute match.
@@ -323,29 +363,33 @@ fn which(bin: &str) -> Option<PathBuf> {
     None
 }
 
-/// The absolute `npx` path, resolved once and cached. `None` if unresolvable —
-/// in which case `kernel_validate` fails honestly (can't prove → can't pass).
-fn npx_path() -> Option<PathBuf> {
-    NPX_PATH.get_or_init(|| which("npx")).clone()
+/// The absolute `node` path: the recorded thread first (`threads.json`, if it
+/// still exists on disk — `threads::tool_path` handles the drift), else the
+/// PATH walk resolved once and cached. `None` if unresolvable — in which case
+/// `kernel_validate` fails honestly (can't prove → can't pass).
+fn node_path(home: Option<&Home>) -> Option<PathBuf> {
+    home.and_then(|h| crate::threads::tool_path(h, "node"))
+        .or_else(|| NODE_PATH.get_or_init(|| which("node")).clone())
 }
 
-// cargo gets the SAME treatment as npx (Phase 22): resolve the absolute path
+// cargo gets the SAME treatment as node (Phase 22): resolve the absolute path
 // ONCE via the shared PATH-walk `which`, cache it, and use it as argv[0] so a
 // PATH hijacked between startup and a validate call cannot swap in a `cargo`
 // that lies. Same residual: a PATH already hijacked at process startup is
 // out of scope (the machine is already compromised).
 static CARGO_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-/// The absolute `cargo` path, resolved once and cached. `None` if unresolvable —
-/// in which case a Rust validate fails honestly (can't prove → can't pass).
-fn cargo_path() -> Option<PathBuf> {
-    // Phase 23: the threads table's fixed candidate order (`~/.cargo/bin`
-    // first) is consulted before the PATH walk, so a cargo that PATH cannot
-    // see (a packaged app launched from Finder) is still found. Task 6 wires
-    // the recorded `threads.json` path for packaged mode.
-    CARGO_PATH
-        .get_or_init(|| crate::threads::locate_now("cargo").or_else(|| which("cargo")))
-        .clone()
+/// The absolute `cargo` path: the recorded thread first, else the threads
+/// table's fixed candidate order (`~/.cargo/bin` first — a cargo that PATH
+/// cannot see, e.g. a packaged app launched from Finder, is still found), else
+/// the PATH walk; the fallback is resolved once and cached. `None` if
+/// unresolvable — a Rust validate then fails honestly (can't prove → can't pass).
+fn cargo_path(home: Option<&Home>) -> Option<PathBuf> {
+    home.and_then(|h| crate::threads::tool_path(h, "cargo")).or_else(|| {
+        CARGO_PATH
+            .get_or_init(|| crate::threads::locate_now("cargo").or_else(|| which("cargo")))
+            .clone()
+    })
 }
 
 // ── SEARCH/REPLACE (exact, unique) ─────────────────────────────────────────────
@@ -414,6 +458,17 @@ fn with_registry<T>(f: impl FnOnce(&mut HashMap<String, Proposal>) -> T) -> T {
 /// Remove a worktree directory and prune the source repo's worktree metadata.
 /// Best-effort but thorough — used on every error path and on apply/discard.
 fn cleanup_worktree(source_root: &Path, worktree: &Path) {
+    // The borrowed `node_modules` symlink goes FIRST, by unlink — so neither
+    // git nor remove_dir_all below can ever be tempted to walk into the source
+    // tree's real install. `symlink_metadata` does not follow; `remove_file`
+    // on a symlink removes the link, never the target.
+    let link = worktree.join("node_modules");
+    if std::fs::symlink_metadata(&link)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_file(&link);
+    }
     // `git worktree remove --force` unregisters and deletes it. If the path is
     // not valid UTF-8 we can't form the git argv (fixed-argv discipline forbids
     // lossy coercion) — fall straight through to remove_dir_all, which takes a
@@ -600,9 +655,53 @@ fn protected_list() -> Vec<String> {
 
 // ── Core operations (testable, app-independent) ───────────────────────────────
 
+/// Where validation worktrees live. Packaged → `loomhome/worktrees/` (inside
+/// loomhome, next to the shared `target/`, so the cargo env pair names two
+/// LOOM-owned paths); dev → the system temp dir, as in Phase 21.
+pub fn worktree_parent(mode: Mode, home: &Home) -> PathBuf {
+    match mode {
+        Mode::Packaged => home.worktrees(),
+        Mode::Dev => std::env::temp_dir(),
+    }
+}
+
+/// Lend the source tree's `node_modules` to a worktree: a symlink
+/// `<worktree>/node_modules → <source_node_modules>`. A worktree is a bare
+/// checkout with no install of its own, and Phase 21's `npx` quietly filled
+/// that gap from its own cache — a network dependency. The link makes the
+/// worktree's `tsc`/`vitest` the source tree's, offline. Untracked (the tree
+/// gitignores it), so the proposal diff is unaffected.
+#[cfg(unix)]
+fn link_node_modules(source_node_modules: &Path, worktree: &Path) -> Result<(), LoomError> {
+    std::os::unix::fs::symlink(source_node_modules, worktree.join("node_modules")).map_err(|e| {
+        LoomError::Git(format!(
+            "link node_modules into worktree {}: {e}",
+            worktree.display()
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn link_node_modules(_source_node_modules: &Path, _worktree: &Path) -> Result<(), LoomError> {
+    // No symlink on this platform: validation then fails honestly at the
+    // missing compiler rather than reaching for the network.
+    Ok(())
+}
+
 /// Create a worktree, apply the edits, produce a unified diff. Live tree
-/// untouched. Cleans up the worktree on ANY error before returning.
+/// untouched. Cleans up the worktree on ANY error before returning. Dev
+/// entry: worktrees under the temp dir. Commands use `propose_in` with the
+/// mode's parent.
+#[cfg_attr(not(test), allow(dead_code))]
 fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut, LoomError> {
+    propose_in(source_root, edits, &std::env::temp_dir())
+}
+
+fn propose_in(
+    source_root: &Path,
+    edits: &[KernelEdit],
+    parent: &Path,
+) -> Result<ProposeOut, LoomError> {
     // WALL 0 (self-protection): reject non-editable paths BEFORE any fs/worktree
     // op. This runs before isolation so a protected-path proposal never even
     // creates a worktree.
@@ -620,9 +719,12 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
 
     let base_sha = head_sha(source_root)?;
 
-    // Unique worktree path under the system temp dir (OUTSIDE the source tree).
-    // A monotonic counter + nanos guarantees no collision across concurrent
-    // proposals in the same process.
+    // Unique worktree path under `parent` (OUTSIDE the source tree: the temp
+    // dir in dev, `loomhome/worktrees/` packaged). A monotonic counter + nanos
+    // guarantees no collision across concurrent proposals in the same process.
+    std::fs::create_dir_all(parent).map_err(|e| {
+        LoomError::Git(format!("create worktree parent {}: {e}", parent.display()))
+    })?;
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
@@ -636,7 +738,7 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
         seq,
         nanos
     );
-    let worktree = std::env::temp_dir().join(&id);
+    let worktree = parent.join(&id);
     // If a stale dir exists (crash), clear it first.
     if worktree.exists() {
         cleanup_worktree(source_root, &worktree);
@@ -660,6 +762,14 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
         source_root,
         &["worktree", "add", "--detach", worktree_str, &base_sha],
     ) {
+        cleanup_worktree(source_root, &worktree);
+        return Err(e);
+    }
+
+    // Lend the source install to the worktree (offline validation, see
+    // link_node_modules). Unconditional: if the source has no node_modules the
+    // link dangles and tsc fails honestly at "file not found" — never npx.
+    if let Err(e) = link_node_modules(&source_root.join("node_modules"), &worktree) {
         cleanup_worktree(source_root, &worktree);
         return Err(e);
     }
@@ -732,9 +842,16 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
+// The commands take `app: tauri::AppHandle` (injected by Tauri, invisible to
+// the TS wrappers' argument objects) so every source-root lookup goes through
+// the mode + loomhome. `source_repo` stays the dev-only override.
+
 #[tauri::command]
-pub fn kernel_editable(source_repo: Option<String>) -> Result<EditableMeta, LoomError> {
-    let root = resolve_source_repo(source_repo.as_deref())?;
+pub fn kernel_editable(
+    app: tauri::AppHandle,
+    source_repo: Option<String>,
+) -> Result<EditableMeta, LoomError> {
+    let root = resolve_source_repo_for(&app, source_repo.as_deref())?;
     Ok(EditableMeta {
         root: root.to_string_lossy().to_string(),
         protected: protected_list(),
@@ -742,8 +859,12 @@ pub fn kernel_editable(source_repo: Option<String>) -> Result<EditableMeta, Loom
 }
 
 #[tauri::command]
-pub fn kernel_read(source_repo: Option<String>, path: String) -> Result<String, LoomError> {
-    let root = resolve_source_repo(source_repo.as_deref())?;
+pub fn kernel_read(
+    app: tauri::AppHandle,
+    source_repo: Option<String>,
+    path: String,
+) -> Result<String, LoomError> {
+    let root = resolve_source_repo_for(&app, source_repo.as_deref())?;
     if !is_editable(&path) {
         return Err(LoomError::Parse(format!(
             "path is not editable (protected or outside whitelist): {path}"
@@ -762,17 +883,22 @@ pub fn kernel_read(source_repo: Option<String>, path: String) -> Result<String, 
 
 #[tauri::command]
 pub fn kernel_propose(
+    app: tauri::AppHandle,
     source_repo: Option<String>,
     edits: Vec<KernelEdit>,
 ) -> Result<ProposeOut, LoomError> {
-    let root = resolve_source_repo(source_repo.as_deref())?;
-    propose_inner(&root, &edits)
+    let home = Home::from_app(&app)?;
+    let m = mode();
+    let root = resolve_source_repo_at(m, source_repo.as_deref(), Some(&home))?;
+    propose_in(&root, &edits, &worktree_parent(m, &home))
 }
 
 #[tauri::command]
-pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
+pub fn kernel_validate(app: tauri::AppHandle, worktree_id: String) -> Result<ValidateOut, LoomError> {
     let prop = with_registry(|reg| reg.get(&worktree_id).cloned())
         .ok_or_else(|| LoomError::NotFound(format!("unknown worktreeId: {worktree_id}")))?;
+    let home = Home::from_app(&app)?;
+    let m = mode();
 
     // Re-validation resets the gate: a validate call must re-prove the current
     // proposal from scratch, so clear validated (and, since re-validating means
@@ -793,12 +919,12 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
     let touches_rust = prop.edits.iter().any(|(rel, _, _)| rel.ends_with(".rs"));
 
     if touches_ts {
-        if let Some(fail) = validate_ts(&prop)? {
+        if let Some(fail) = validate_ts(&prop, Some(&home))? {
             return Ok(fail);
         }
     }
     if touches_rust {
-        if let Some(fail) = validate_rust(&prop)? {
+        if let Some(fail) = validate_rust(&prop, m, &home)? {
             return Ok(fail);
         }
     }
@@ -814,34 +940,43 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
     })
 }
 
+/// The two TS validation argvs, composed from the recorded `node`, the
+/// worktree and the targeted test files: `(tsc, vitest)`. Both run a FILE
+/// under `<worktree>/node_modules` (the symlink to the source install) through
+/// `node` — never a name resolved by PATH or `npx` (whose own cache was an
+/// unstated network dependency). Pure, so the shape is testable without a
+/// spawn. Lossy path coercion is refused by the caller (`to_str`), not here.
+pub fn ts_argv(node: &Path, wt: &Path, tests: &[String]) -> (Vec<String>, Vec<String>) {
+    let node = node.to_string_lossy().to_string();
+    let tsc = wt.join("node_modules/typescript/bin/tsc");
+    let vitest = wt.join("node_modules/vitest/vitest.mjs");
+    let tsc_argv = vec![
+        node.clone(),
+        tsc.to_string_lossy().to_string(),
+        "--noEmit".to_string(),
+    ];
+    let mut vitest_argv = vec![
+        node,
+        vitest.to_string_lossy().to_string(),
+        "run".to_string(),
+    ];
+    vitest_argv.extend(tests.iter().cloned());
+    (tsc_argv, vitest_argv)
+}
+
 /// Run the TS validation toolchain (tsc --noEmit, then targeted vitest) in the
 /// worktree. Returns `Ok(None)` if both pass, `Ok(Some(fail))` with the failing
 /// stage+output on the first failure, or `Err` for an infrastructure fault
 /// (validator unresolvable, spawn failure, timeout).
-fn validate_ts(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
-    // Resolve the validator's ABSOLUTE path once (Finding 8). If npx can't be
-    // found we cannot prove the edit is safe → we must not pass.
-    let npx = npx_path().ok_or_else(|| {
-        LoomError::NotFound("npx not found on PATH — cannot validate".into())
+fn validate_ts(prop: &Proposal, home: Option<&Home>) -> Result<Option<ValidateOut>, LoomError> {
+    // Resolve node's ABSOLUTE path (recorded thread, else once via PATH —
+    // Finding 8). If node can't be found we cannot prove the edit is safe → we
+    // must not pass.
+    let node = node_path(home).ok_or_else(|| {
+        LoomError::NotFound("node not found (threads.json or PATH) — cannot validate".into())
     })?;
-    let npx = npx
-        .to_str()
-        .ok_or_else(|| LoomError::Parse("npx path is not valid UTF-8".into()))?;
-
-    // tsc first, then targeted vitest. Fixed argv; cwd is the worktree, asserted
-    // under itself. First failure returns stage+output.
-    let tsc = run_checked(
-        &[npx, "tsc", "--noEmit"],
-        &prop.worktree,
-        &prop.worktree,
-        TSC_TIMEOUT,
-    )?;
-    if tsc.code != 0 {
-        return Ok(Some(ValidateOut {
-            ok: false,
-            stage: "tsc".into(),
-            output: format!("{}\n{}", tsc.stdout, tsc.stderr).trim().to_string(),
-        }));
+    if node.to_str().is_none() || prop.worktree.to_str().is_none() {
+        return Err(LoomError::Parse("node or worktree path is not valid UTF-8".into()));
     }
 
     // Targeted vitest: the edited .ts(x) files + their `.test` siblings that
@@ -861,10 +996,21 @@ fn validate_ts(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
     // De-dup while preserving order.
     targets.dedup();
 
-    let mut argv: Vec<&str> = vec![npx, "vitest", "run"];
-    for t in &targets {
-        argv.push(t.as_str());
+    let (tsc_argv, vitest_argv) = ts_argv(&node, &prop.worktree, &targets);
+
+    // tsc first, then targeted vitest. Fixed argv; cwd is the worktree, asserted
+    // under itself. First failure returns stage+output.
+    let argv: Vec<&str> = tsc_argv.iter().map(String::as_str).collect();
+    let tsc = run_checked(&argv, &prop.worktree, &prop.worktree, TSC_TIMEOUT)?;
+    if tsc.code != 0 {
+        return Ok(Some(ValidateOut {
+            ok: false,
+            stage: "tsc".into(),
+            output: format!("{}\n{}", tsc.stdout, tsc.stderr).trim().to_string(),
+        }));
     }
+
+    let argv: Vec<&str> = vitest_argv.iter().map(String::as_str).collect();
     let vitest = run_checked(&argv, &prop.worktree, &prop.worktree, VITEST_TIMEOUT)?;
     if vitest.code != 0 {
         return Ok(Some(ValidateOut {
@@ -878,21 +1024,52 @@ fn validate_ts(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
     Ok(None)
 }
 
+/// A cargo argv: `[cargo, <sub…>, "--offline"]`. `--offline` is ALWAYS
+/// appended — validation never touches the network (the crates were fetched
+/// at threading in packaged mode, by the dev build in dev). Pure.
+pub fn cargo_argv(cargo: &Path, sub: &[&str]) -> Vec<String> {
+    let mut argv = vec![cargo.to_string_lossy().to_string()];
+    argv.extend(sub.iter().map(|s| s.to_string()));
+    argv.push("--offline".to_string());
+    argv
+}
+
+/// The env pairs every cargo spawn gets, composed from constants and LOOM-
+/// owned paths only (never model output). Packaged: `CARGO_TARGET_DIR` is the
+/// shared loomhome `target/` warmed at threading — a core edit then validates
+/// in incremental time — plus `CARGO_NET_OFFLINE=true`. Dev: only the offline
+/// pin; the worktree keeps its own isolated target (unchanged behaviour).
+pub fn cargo_env(mode: Mode, home: &Home) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    if mode == Mode::Packaged {
+        env.push((
+            "CARGO_TARGET_DIR".to_string(),
+            home.target().to_string_lossy().to_string(),
+        ));
+    }
+    env.push(("CARGO_NET_OFFLINE".to_string(), "true".to_string()));
+    env
+}
+
 /// Run the Rust validation toolchain (`cargo check` then `cargo test`) in the
 /// worktree's `src-tauri/` dir. A `git worktree add` at HEAD contains the full
-/// repo, so `src-tauri/Cargo.toml` is present with no shared `target/` — the
-/// compile is cold (minutes). Returns `Ok(None)` if both pass, `Ok(Some(fail))`
-/// on the first failing stage, or `Err` for an infrastructure fault (cargo
+/// repo, so `src-tauri/Cargo.toml` is present. In dev there is no shared
+/// `target/` — the compile is cold (minutes); packaged, the loomhome target is
+/// shared and warm. Returns `Ok(None)` if both pass, `Ok(Some(fail))` on the
+/// first failing stage, or `Err` for an infrastructure fault (cargo
 /// unresolvable, the worktree lacks src-tauri/, spawn failure, timeout).
-fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
-    // Resolve cargo's ABSOLUTE path once (mirror of the npx hardening). If cargo
-    // can't be found we cannot prove the edit compiles → we must not pass.
-    let cargo = cargo_path().ok_or_else(|| {
-        LoomError::NotFound("cargo not found on PATH — cannot validate Rust".into())
+fn validate_rust(prop: &Proposal, mode: Mode, home: &Home) -> Result<Option<ValidateOut>, LoomError> {
+    // Resolve cargo's ABSOLUTE path (recorded thread, else once — mirror of the
+    // node hardening). If cargo can't be found we cannot prove the edit
+    // compiles → we must not pass.
+    let cargo = cargo_path(Some(home)).ok_or_else(|| {
+        LoomError::NotFound("cargo not found (threads.json or PATH) — cannot validate Rust".into())
     })?;
-    let cargo = cargo
-        .to_str()
-        .ok_or_else(|| LoomError::Parse("cargo path is not valid UTF-8".into()))?;
+    if cargo.to_str().is_none() || home.target().to_str().is_none() {
+        return Err(LoomError::Parse("cargo or target path is not valid UTF-8".into()));
+    }
+    let env = cargo_env(mode, home);
+    let envs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
     // cargo runs in the worktree's src-tauri/ (where Cargo.toml lives), asserted
     // under the worktree by run_checked's containment check.
@@ -916,12 +1093,9 @@ fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
     // validation (see docs/FOLLOWUPS.md "Validation threat model"); the safety
     // envelope here is compile-validation (cargo check + cargo test --no-run) +
     // human diff-review + the recovery boot, not test EXECUTION.
-    let check = run_checked(
-        &[cargo, "check"],
-        &cargo_cwd,
-        &prop.worktree,
-        CARGO_CHECK_TIMEOUT,
-    )?;
+    let check_argv = cargo_argv(&cargo, &["check"]);
+    let argv: Vec<&str> = check_argv.iter().map(String::as_str).collect();
+    let check = run_checked_env(&argv, &cargo_cwd, &prop.worktree, CARGO_CHECK_TIMEOUT, &envs)?;
     if check.code != 0 {
         return Ok(Some(ValidateOut {
             ok: false,
@@ -930,12 +1104,9 @@ fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
         }));
     }
 
-    let test = run_checked(
-        &[cargo, "test", "--no-run"],
-        &cargo_cwd,
-        &prop.worktree,
-        CARGO_TEST_TIMEOUT,
-    )?;
+    let test_argv = cargo_argv(&cargo, &["test", "--no-run"]);
+    let argv: Vec<&str> = test_argv.iter().map(String::as_str).collect();
+    let test = run_checked_env(&argv, &cargo_cwd, &prop.worktree, CARGO_TEST_TIMEOUT, &envs)?;
     if test.code != 0 {
         return Ok(Some(ValidateOut {
             ok: false,
@@ -1196,8 +1367,12 @@ pub fn kernel_discard(worktree_id: String) -> Result<(), LoomError> {
 }
 
 #[tauri::command]
-pub fn kernel_rollback(source_repo: Option<String>, sha: String) -> Result<(), LoomError> {
-    let root = resolve_source_repo(source_repo.as_deref())?;
+pub fn kernel_rollback(
+    app: tauri::AppHandle,
+    source_repo: Option<String>,
+    sha: String,
+) -> Result<(), LoomError> {
+    let root = resolve_source_repo_for(&app, source_repo.as_deref())?;
     rollback_to(&root, &sha)
 }
 
@@ -1356,13 +1531,26 @@ pub fn kernel_boot_check(
     source_repo: Option<String>,
 ) -> Result<BootCheckOut, LoomError> {
     let sp = sentinel_path(&app)?;
-    decide_boot_at(&sp, source_repo.as_deref())
+    let home = Home::from_app(&app)?;
+    decide_boot_in(&sp, mode(), source_repo.as_deref(), Some(&home))
+}
+
+/// Dev-mode entry for the tests: no loomhome, the override/cwd fallback.
+#[cfg(test)]
+fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootCheckOut, LoomError> {
+    decide_boot_in(sp, Mode::Dev, source_repo_override, None)
 }
 
 /// The app-independent core of the boot decision. Testable without an
-/// AppHandle. `source_repo_override` is a last-resort fallback ONLY used when a
-/// legacy sentinel carries no `source_root` of its own.
-fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootCheckOut, LoomError> {
+/// AppHandle. `source_repo_override` (dev) / `home.source()` (packaged) is a
+/// last-resort fallback ONLY used when a legacy sentinel carries no
+/// `source_root` of its own.
+fn decide_boot_in(
+    sp: &Path,
+    mode: Mode,
+    source_repo_override: Option<&str>,
+    home: Option<&Home>,
+) -> Result<BootCheckOut, LoomError> {
     let Some(s) = read_sentinel(sp) else {
         return Ok(BootCheckOut {
             rolled_back_to: None,
@@ -1388,7 +1576,7 @@ fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootC
     let root: PathBuf = if !s.source_root.trim().is_empty() {
         PathBuf::from(&s.source_root)
     } else {
-        resolve_source_repo(source_repo_override)?
+        resolve_source_repo_at(mode, source_repo_override, home)?
     };
 
     match rollback_to(&root, &s.prev_sha) {
@@ -1858,15 +2046,16 @@ mod tests {
     // ── validator toolchain resolver (Finding 8) ────────────────────────────────
 
     #[test]
-    fn npx_resolver_returns_absolute_path_or_skips() {
-        // Skip-guard like the existing ignored live tests: if npx is absent this
+    fn node_resolver_returns_absolute_path_or_skips() {
+        // Skip-guard like the existing ignored live tests: if node is absent this
         // asserts nothing (can't prove a resolver that has nothing to resolve).
-        match npx_path() {
+        // No loomhome → the PATH walk is the only source.
+        match node_path(None) {
             Some(p) => {
-                assert!(p.is_absolute(), "resolved npx must be absolute: {}", p.display());
-                assert!(p.exists(), "resolved npx must exist: {}", p.display());
+                assert!(p.is_absolute(), "resolved node must be absolute: {}", p.display());
+                assert!(p.exists(), "resolved node must exist: {}", p.display());
             }
-            None => eprintln!("SKIP npx_resolver_returns_absolute_path_or_skips: npx not on PATH"),
+            None => eprintln!("SKIP node_resolver_returns_absolute_path_or_skips: node not on PATH"),
         }
     }
 
@@ -1875,7 +2064,7 @@ mod tests {
         // Same skip-guard as npx: cargo is resolved once to an absolute path via
         // the shared PATH-walk. If cargo is absent (unlikely in a Rust test run,
         // but honest) this asserts nothing.
-        match cargo_path() {
+        match cargo_path(None) {
             Some(p) => {
                 assert!(p.is_absolute(), "resolved cargo must be absolute: {}", p.display());
                 assert!(p.exists(), "resolved cargo must exist: {}", p.display());
@@ -2366,56 +2555,175 @@ mod tests {
 
     // ── SKIP-GUARDED real-tsc integration test ─────────────────────────────────
     //
-    // Proves the validation wall genuinely catches breakage: a passing TS
-    // fixture yields code 0; a type-error fixture yields non-zero. Guarded to
-    // skip if npx/tsc is unavailable (like the existing ignored live tests).
+    // Proves the validation wall genuinely catches breakage THROUGH THE EXACT
+    // INVOCATION validate_ts uses: `node <wt>/node_modules/typescript/bin/tsc
+    // --noEmit`, with `<wt>/node_modules` a symlink to a real install (the
+    // Phase 23 shape — no npx, no network). A passing TS fixture yields code 0;
+    // a type-error fixture yields non-zero. Skips if node or an installed
+    // typescript is unavailable (like the existing ignored live tests).
+    #[cfg(unix)]
     #[test]
     fn real_tsc_catches_type_errors() {
-        // Resolve a REAL tsc: prefer the project's installed compiler
-        // (node_modules/.bin/tsc, walking up from CARGO_MANIFEST_DIR), else fall
-        // back to `npx tsc`. Skip if neither yields a usable compiler — this
-        // test proves the wall WHEN tsc is present (like the ignored live tests).
+        let Some(node) = node_path(None) else {
+            eprintln!("SKIP real_tsc_catches_type_errors: node unavailable");
+            return;
+        };
+        let Some(nm) = local_node_modules() else {
+            eprintln!("SKIP real_tsc_catches_type_errors: no node_modules/typescript installed");
+            return;
+        };
         let dir = tempfile::tempdir().unwrap();
-        let wt = dir.path();
+        let wt = dir.path().canonicalize().unwrap();
         fs::write(
             wt.join("tsconfig.json"),
             r#"{"compilerOptions":{"strict":true,"noEmit":true,"skipLibCheck":true}}"#,
         )
         .unwrap();
         fs::write(wt.join("ok.ts"), "export const n: number = 1;\n").unwrap();
+        link_node_modules(&nm, &wt).unwrap();
 
-        let tsc_bin = local_tsc();
+        let (tsc_argv, _) = ts_argv(&node, &wt, &[]);
         let run_tsc = |wt: &Path| -> Result<ExecOut, LoomError> {
-            match &tsc_bin {
-                Some(bin) => run_checked(
-                    &[bin.to_str().unwrap(), "--noEmit"],
-                    wt,
-                    wt,
-                    TSC_TIMEOUT,
-                ),
-                None => run_checked(&["npx", "tsc", "--noEmit"], wt, wt, TSC_TIMEOUT),
-            }
+            let argv: Vec<&str> = tsc_argv.iter().map(String::as_str).collect();
+            run_checked(&argv, wt, wt, TSC_TIMEOUT)
         };
 
-        let ok = match run_tsc(wt) {
+        let ok = match run_tsc(&wt) {
             Ok(o) => o,
-            Err(_) => {
-                eprintln!("SKIP real_tsc_catches_type_errors: tsc unavailable");
+            Err(e) => {
+                eprintln!("SKIP real_tsc_catches_type_errors: tsc unavailable: {e:?}");
                 return;
             }
         };
-        if ok.code != 0 {
-            eprintln!(
-                "SKIP real_tsc_catches_type_errors: no usable tsc (npx shim?): {}",
-                ok.stdout
-            );
-            return;
-        }
+        assert_eq!(ok.code, 0, "clean fixture must pass tsc: {}\n{}", ok.stdout, ok.stderr);
 
         // Type-error fixture → tsc must fail. This is the load-bearing assertion.
         fs::write(wt.join("bad.ts"), "export const s: number = \"nope\";\n").unwrap();
-        let bad = run_tsc(wt).unwrap();
+        let bad = run_tsc(&wt).unwrap();
         assert_ne!(bad.code, 0, "type error must fail tsc: {}\n{}", bad.stdout, bad.stderr);
+    }
+
+    // ── Phase 23: validation in packaged mode ──────────────────────────────────
+
+    #[test]
+    fn packaged_source_root_is_loomhome_source() {
+        use crate::loomhome::{Home, Mode};
+        // A loomhome whose source/ is a real git work dir.
+        let hd = tempfile::tempdir().unwrap();
+        let home = Home::at(hd.path().canonicalize().unwrap());
+        let src = home.source();
+        fs::create_dir_all(&src).unwrap();
+        run(&src, &["init", "-q"]);
+        // The dev-only override names a DIFFERENT valid repo — packaged mode
+        // must ignore it and answer loomhome/source.
+        let (_d, other) = init_repo();
+        let got =
+            resolve_source_repo_at(Mode::Packaged, Some(other.to_str().unwrap()), Some(&home))
+                .unwrap();
+        assert_eq!(got, src.canonicalize().unwrap());
+        // Packaged with no loomhome cannot answer — typed error, never the cwd.
+        assert!(resolve_source_repo_at(Mode::Packaged, None, None).is_err());
+        // Dev: the override still wins, as before.
+        let dev = resolve_source_repo_at(Mode::Dev, Some(other.to_str().unwrap()), Some(&home))
+            .unwrap();
+        assert_eq!(dev, other);
+    }
+
+    #[test]
+    fn worktree_parent_follows_mode() {
+        use crate::loomhome::{Home, Mode};
+        let hd = tempfile::tempdir().unwrap();
+        let home = Home::at(hd.path().to_path_buf());
+        assert_eq!(worktree_parent(Mode::Packaged, &home), home.worktrees());
+        assert_eq!(worktree_parent(Mode::Dev, &home), std::env::temp_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_gets_node_modules_symlink() {
+        let (_d, root) = init_repo();
+        // A fake install in the source repo (gitignored in the real tree).
+        fs::create_dir_all(root.join("node_modules/marker")).unwrap();
+        let edits = vec![KernelEdit {
+            path: "src/hello.ts".into(),
+            search: "\"hi\"".into(),
+            replace: "\"hello\"".into(),
+        }];
+        let out = propose_inner(&root, &edits).unwrap();
+        let wt = with_registry(|r| r.get(&out.worktree_id).map(|p| p.worktree.clone())).unwrap();
+        let link = wt.join("node_modules");
+        let meta = fs::symlink_metadata(&link).expect("node_modules must exist in the worktree");
+        assert!(meta.file_type().is_symlink(), "node_modules must be a symlink");
+        assert_eq!(fs::read_link(&link).unwrap(), root.join("node_modules"));
+        assert!(link.join("marker").is_dir(), "symlink must resolve to the source install");
+        // The symlink is untracked, so the diff is only the edit.
+        assert!(!out.diff.contains("node_modules"));
+        // Discard removes the worktree and the link — and NEVER the target.
+        kernel_discard(out.worktree_id).unwrap();
+        assert!(!wt.exists(), "worktree must be gone");
+        assert!(root.join("node_modules/marker").is_dir(), "source node_modules must survive");
+    }
+
+    #[test]
+    fn ts_validation_argv_uses_node_not_npx() {
+        let node = PathBuf::from("/opt/tools/bin/node");
+        let wt = PathBuf::from("/loomhome/worktrees/loom-kernel-1");
+        let tests = vec!["src/a.ts".to_string(), "src/a.test.ts".to_string()];
+        let (tsc, vitest) = ts_argv(&node, &wt, &tests);
+        assert_eq!(
+            tsc,
+            vec![
+                "/opt/tools/bin/node",
+                "/loomhome/worktrees/loom-kernel-1/node_modules/typescript/bin/tsc",
+                "--noEmit",
+            ]
+        );
+        assert_eq!(
+            vitest,
+            vec![
+                "/opt/tools/bin/node",
+                "/loomhome/worktrees/loom-kernel-1/node_modules/vitest/vitest.mjs",
+                "run",
+                "src/a.ts",
+                "src/a.test.ts",
+            ]
+        );
+        for a in tsc.iter().chain(vitest.iter()) {
+            assert!(!a.contains("npx"), "npx must never appear in validation argv: {a}");
+        }
+    }
+
+    #[test]
+    fn rust_validation_argv_has_offline_and_target_env() {
+        use crate::loomhome::{Home, Mode};
+        let cargo = PathBuf::from("/opt/tools/bin/cargo");
+        assert_eq!(
+            cargo_argv(&cargo, &["check"]),
+            vec!["/opt/tools/bin/cargo", "check", "--offline"]
+        );
+        assert_eq!(
+            cargo_argv(&cargo, &["test", "--no-run"]),
+            vec!["/opt/tools/bin/cargo", "test", "--no-run", "--offline"]
+        );
+        let hd = tempfile::tempdir().unwrap();
+        let home = Home::at(hd.path().to_path_buf());
+        let packaged = cargo_env(Mode::Packaged, &home);
+        assert_eq!(
+            packaged,
+            vec![
+                (
+                    "CARGO_TARGET_DIR".to_string(),
+                    home.target().to_string_lossy().to_string()
+                ),
+                ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
+            ]
+        );
+        let dev = cargo_env(Mode::Dev, &home);
+        assert_eq!(dev, vec![("CARGO_NET_OFFLINE".to_string(), "true".to_string())]);
+        assert!(
+            !dev.iter().any(|(k, _)| k == "CARGO_TARGET_DIR"),
+            "dev keeps the worktree's own target"
+        );
     }
 
     // ── SKIP-GUARDED real-cargo integration test (#[ignore]) ────────────────────
@@ -2433,7 +2741,7 @@ mod tests {
     #[test]
     #[ignore = "invokes real cargo/rustc — slow; run manually with --ignored"]
     fn real_cargo_catches_type_errors() {
-        let cargo = match cargo_path() {
+        let cargo = match cargo_path(None) {
             Some(c) => c,
             None => {
                 eprintln!("SKIP real_cargo_catches_type_errors: cargo not on PATH");
@@ -2492,13 +2800,16 @@ mod tests {
         );
     }
 
-    /// Walk up from the crate dir to find `node_modules/.bin/tsc`.
-    fn local_tsc() -> Option<PathBuf> {
+    /// The nearest installed `node_modules` (one holding `typescript/bin/tsc`)
+    /// walking up from the crate dir — the dev install a validation worktree
+    /// symlinks to.
+    #[cfg(unix)]
+    fn local_node_modules() -> Option<PathBuf> {
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         loop {
-            let c = dir.join("node_modules/.bin/tsc");
-            if c.exists() {
-                return Some(c);
+            let c = dir.join("node_modules");
+            if c.join("typescript/bin/tsc").exists() {
+                return c.canonicalize().ok();
             }
             if !dir.pop() {
                 return None;
