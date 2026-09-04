@@ -34,10 +34,6 @@
 //! inside an allowed root, no shell). The only tool here is `codesign`, whose
 //! path comes from the threading manifest via the `tools` lookup.
 
-// Consumed by reweave.rs (Task 9) and warden.rs (Task 10); until they land the
-// only caller is this module's tests. Remove this once either wires in.
-#![allow(dead_code)]
-
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -102,6 +98,9 @@ pub enum Step {
     /// Sentinel `{ status: "applied", armedBy: "reweave" }`.
     WriteSentinel { applied: String, prev: String },
     /// Sentinel `{ status: "healed" }` — written by the warden after a heal.
+    /// Constructed only by warden.rs (Task 10); until it lands, the tests
+    /// below are its only author.
+    #[allow(dead_code)]
     WriteSentinelHealed { failed: String, prev: String },
     /// Ledger `{ current, previous, confirmed: false }`.
     WriteLedger { current: String, previous: String },

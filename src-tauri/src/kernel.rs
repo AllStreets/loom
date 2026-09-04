@@ -130,6 +130,7 @@ const PROTECTED_RUST: &[&str] = &[
     "src-tauri/src/generations.rs", // the ledger — decides which bodies survive on disk
     "src-tauri/src/loomhome.rs", // identity + every path the reweave reads/writes
     "src-tauri/src/threads.rs",  // tool discovery + the threading ceremony (spawns tools)
+    "src-tauri/src/reweave.rs",  // the build job — assets, core, stage, swap, relaunch
     "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA — a generation's own name
     "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
 ];
@@ -320,8 +321,9 @@ fn git_ok(cwd: &Path, allowed_root: &Path, args: &[&str]) -> Result<String, Loom
     Ok(out.stdout)
 }
 
-/// Current HEAD sha of the repo at `root`.
-fn head_sha(root: &Path) -> Result<String, LoomError> {
+/// Current HEAD sha of the repo at `root`. `pub(crate)`: reweave.rs names
+/// the sha a weave targets with the same call `kernel_apply` records.
+pub(crate) fn head_sha(root: &Path) -> Result<String, LoomError> {
     Ok(git_ok(root, root, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
@@ -1185,7 +1187,28 @@ pub fn kernel_apply(
     worktree_id: String,
     message: String,
 ) -> Result<ApplyOut, LoomError> {
-    let prop = with_registry(|reg| reg.get(&worktree_id).cloned())
+    let sp = sentinel_path(&app)?;
+    apply_at(mode(), &sp, &worktree_id, &message)
+}
+
+/// Does a source apply arm the boot sentinel (the mirror at the source root
+/// and, for a TS edit, the app_data `pending`)? Only in DEV: there the edit
+/// hot-reloads (TS) or recompiles under `tauri dev` (Rust), so the next boot
+/// IS the edit and the guard / pre-main hook must be armed to judge it.
+///
+/// PACKAGED (Phase 23 / Rebirth): a source apply changes the genome only.
+/// The running body is a built binary — nothing hot-reloads, nothing
+/// recompiles, NOTHING BOOTS UNTIL A REWEAVE. Arming a sentinel here would
+/// be a record of a birth that is not happening; the reweave's swap writes
+/// its own (`applied`, `armedBy: "reweave"`) and the warden judges it.
+pub fn apply_arms_sentinel(mode: Mode) -> bool {
+    mode == Mode::Dev
+}
+
+/// `kernel_apply` over an explicit mode and app_data sentinel path, so the
+/// packaged branch is testable without a built app.
+fn apply_at(mode: Mode, app_sentinel: &Path, worktree_id: &str, message: &str) -> Result<ApplyOut, LoomError> {
+    let prop = with_registry(|reg| reg.get(worktree_id).cloned())
         .ok_or_else(|| LoomError::NotFound(format!("unknown worktreeId: {worktree_id}")))?;
 
     // WALL ORDERING, ENFORCED IN RUST (Finding 1/5). The live tree is NEVER
@@ -1233,29 +1256,34 @@ pub fn kernel_apply(
         // Freshly applied, not yet armed by either actor (round-1, Finding 2/3).
         armed_by: None,
     };
-    if let Err(e) = write_mirror(&source_root, &sentinel) {
-        // Mirror write failed → we cannot guarantee recovery. Abort BEFORE any
-        // live change: drop the worktree, forget the proposal, return the error.
-        cleanup_worktree(&prop.source_root, &prop.worktree);
-        with_registry(|reg| {
-            reg.remove(&worktree_id);
-        });
-        return Err(LoomError::Git(format!(
-            "refusing apply: could not write the mandatory recovery mirror ({}): {e}",
-            mirror_path(&source_root).display()
-        )));
+    // Packaged mode writes NO sentinel at all (see `apply_arms_sentinel`):
+    // the genome moves, the body does not, and the reweave owns the next boot.
+    let arms = apply_arms_sentinel(mode);
+    if arms {
+        if let Err(e) = write_mirror(&source_root, &sentinel) {
+            // Mirror write failed → we cannot guarantee recovery. Abort BEFORE any
+            // live change: drop the worktree, forget the proposal, return the error.
+            cleanup_worktree(&prop.source_root, &prop.worktree);
+            with_registry(|reg| {
+                reg.remove(worktree_id);
+            });
+            return Err(LoomError::Git(format!(
+                "refusing apply: could not write the mandatory recovery mirror ({}): {e}",
+                mirror_path(&source_root).display()
+            )));
+        }
     }
 
     // The recovery record now exists. Apply the edit to the live tree + commit.
     // apply_inner re-reads HEAD (== prev_sha; nothing wrote between the read
     // above and here) and refuses if HEAD moved — the recovery record is
     // therefore consistent with what apply_inner commits against.
-    let out = apply_inner(&prop, &message);
+    let out = apply_inner(&prop, message);
 
     // Whatever happened, drop the worktree (success or failure) and forget it.
     cleanup_worktree(&prop.source_root, &prop.worktree);
     with_registry(|reg| {
-        reg.remove(&worktree_id);
+        reg.remove(worktree_id);
     });
 
     let (sha, prev_sha) = match out {
@@ -1277,22 +1305,23 @@ pub fn kernel_apply(
     // sentinel too would make setup()'s boot_recover perform a redundant second
     // rollback (double-rollback) of the same edit the guard/pre-main hook
     // already owns. A TS (or mixed) edit still writes "pending" as before.
-    if touches_ts {
+    if arms && touches_ts {
         let ts_sentinel = Sentinel {
             status: "pending".into(),
             applied_sha: sha.clone(),
             ..sentinel.clone()
         };
-        let sp = sentinel_path(&app)?;
-        write_sentinel(&sp, &ts_sentinel)?;
+        write_sentinel(app_sentinel, &ts_sentinel)?;
     }
 
     // After the commit, best-effort update the mirror's applied_sha
     // (INFORMATIONAL only — recovery never keys off it). The load-bearing
     // {status:"applied", prev_sha, source_root, armed_by:null} already landed
     // above, so a hiccup here cannot reopen the gap.
-    sentinel.applied_sha = sha.clone();
-    let _ = write_mirror(&source_root, &sentinel);
+    if arms {
+        sentinel.applied_sha = sha.clone();
+        let _ = write_mirror(&source_root, &sentinel);
+    }
 
     Ok(ApplyOut { sha, prev_sha })
 }
@@ -1768,6 +1797,7 @@ mod tests {
             "src-tauri/src/generations.rs", // the ledger — which bodies survive
             "src-tauri/src/loomhome.rs", // identity + every loomhome path
             "src-tauri/src/threads.rs",  // tool discovery + threading (spawns tools)
+            "src-tauri/src/reweave.rs",  // the build job — swaps the body, spawns the warden
             "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA into the binary
             "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
             "src-tauri/capabilities/default.json",
@@ -1787,7 +1817,7 @@ mod tests {
         // Every one of them is NAMED in a protected set (explicit, enumerable —
         // the `kernel_editable` meta lists it for the model), not just
         // implicitly outside the whitelist.
-        for f in ["src-tauri/src/platform.rs", "src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/src/threads.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
+        for f in ["src-tauri/src/platform.rs", "src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/src/threads.rs", "src-tauri/src/reweave.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
             assert!(PROTECTED_RUST.contains(&f), "{f} must be in PROTECTED_RUST");
         }
         for f in ["package.json", "package-lock.json", "vite.config.ts", "scripts/genome-bundle.mjs"] {
@@ -2421,6 +2451,48 @@ mod tests {
         let (_sha, prev_sha) = apply_inner(&prop, "bump").unwrap();
         assert_eq!(prev_sha, prev, "apply committed against the recorded prev_sha");
         kernel_discard(id).unwrap();
+    }
+
+    #[test]
+    fn packaged_apply_does_not_arm_the_sentinel() {
+        // Phase 23 (Rebirth): in PACKAGED mode a source apply moves the genome
+        // only — nothing boots until a reweave — so NO sentinel is written:
+        // not the mirror at the source root, not the app_data `pending`, even
+        // for a TS edit. The commit still lands.
+        assert!(!apply_arms_sentinel(Mode::Packaged));
+        assert!(apply_arms_sentinel(Mode::Dev), "dev behaviour is unchanged");
+
+        let (_d, root) = init_repo();
+        let prev = head_sha(&root).unwrap();
+        let app_sentinel = root.join("app-data-kernel-boot.json");
+        let edits = vec![KernelEdit {
+            path: "src/hello.ts".into(),
+            search: "n = 1".into(),
+            replace: "n = 5".into(),
+        }];
+        let id = propose_inner(&root, &edits).unwrap().worktree_id;
+        set_flags(&id, true, true);
+        let out = apply_at(Mode::Packaged, &app_sentinel, &id, "packaged edit").unwrap();
+        assert_eq!(out.prev_sha, prev);
+        assert_eq!(head_sha(&root).unwrap(), out.sha, "the commit landed");
+        assert!(fs::read_to_string(root.join("src/hello.ts")).unwrap().contains("n = 5"));
+        assert!(!mirror_path(&root).exists(), "packaged: no mirror at the source root");
+        assert!(!app_sentinel.exists(), "packaged: no app_data sentinel, even for a TS edit");
+        assert!(with_registry(|reg| reg.get(&id).is_none()), "the proposal is forgotten");
+
+        // DEV, same edit shape: the mirror AND (TS edit) the app_data sentinel
+        // are written — the behaviour Phase 22 established.
+        let (_d2, root2) = init_repo();
+        let app_sentinel2 = root2.join("app-data-kernel-boot.json");
+        let id2 = propose_inner(&root2, &edits).unwrap().worktree_id;
+        set_flags(&id2, true, true);
+        let out2 = apply_at(Mode::Dev, &app_sentinel2, &id2, "dev edit").unwrap();
+        let m = read_sentinel(&mirror_path(&root2)).expect("dev: the mirror is written");
+        assert_eq!(m.status, "applied");
+        assert_eq!(m.prev_sha, out2.prev_sha);
+        assert_eq!(m.applied_sha, out2.sha);
+        let a = read_sentinel(&app_sentinel2).expect("dev: TS edit arms the app_data sentinel");
+        assert_eq!(a.status, "pending");
     }
 
     #[test]
