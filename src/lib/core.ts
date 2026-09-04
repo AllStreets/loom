@@ -256,3 +256,31 @@ export type ThreadStatus = {
 
 /** Discover the machine's tools now and compare with `threads.json`. */
 export const threadStatus = () => safeInvoke<ThreadStatus>("thread_status");
+
+// ── Reweave (Phase 23 — Rebirth) ───────────────────────────────────────────────
+
+/**
+ * The build job's state as Rust persists it to `reweave.json` and emits it on
+ * `loom-reweave`. `tail` is the last ≤ 400 lines of the current tool; `outcome`
+ * is the calm sentence for `done`/`failed`/`cancelled`; `cancellable` goes
+ * false at the point of return (swap). Same shape in dev and packaged mode.
+ */
+export type ReweaveState = {
+  stage: "idle" | "assets" | "core" | "stage" | "swap" | "relaunch" | "done" | "failed" | "cancelled";
+  targetSha: string | null;
+  startedAt: string | null;
+  elapsedMs: number;
+  tail: string[];
+  outcome: string | null;
+  cancellable: boolean;
+  mode: "dev" | "packaged";
+};
+
+/** Start the job. `force` weaves even when the genome matches the body. */
+export const reweaveStart = (force = false) => safeInvoke<void>("reweave_start", { force });
+/** Kill the job tree — refused past the point of return. */
+export const reweaveCancel = () => safeInvoke<void>("reweave_cancel");
+/** The persisted state, for the initial paint before events arrive. */
+export const reweaveState = () => safeInvoke<ReweaveState>("reweave_state");
+/** Return to a kept generation: the same job with the build stages skipped. */
+export const generationsReturn = (sha: string) => safeInvoke<void>("generations_return", { sha });

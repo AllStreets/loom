@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
-import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity, generationsList, threadStatus } from "./core";
+import { fleetStatus, fleetChat, organWrite, voiceStatus, voiceSetup, sttTranscribe, ttsSpeak, modelOverrides, FLEET_DEFAULTS, builderChat, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelApply, kernelDiscard, kernelRollback, kernelBootOk, kernelBootCheck, kernelIdentity, generationsList, threadStatus, reweaveStart, reweaveCancel, reweaveState, generationsReturn } from "./core";
 
 beforeEach(() => {
   invoke.mockReset();
@@ -203,6 +203,40 @@ describe("kernel self-edit wrappers", () => {
     expect(rows[0].commitSubject).toBe("feat: second weave");
     expect(rows[1].isPrevious).toBe(true);
     expect(rows[1].sizeBytes).toBe(41);
+  });
+
+  it("reweaveStart passes force (false by default)", async () => {
+    invoke.mockResolvedValue(undefined);
+    await reweaveStart();
+    expect(invoke).toHaveBeenCalledWith("reweave_start", { force: false });
+    await reweaveStart(true);
+    expect(invoke).toHaveBeenCalledWith("reweave_start", { force: true });
+  });
+
+  it("reweaveCancel invokes reweave_cancel with no args", async () => {
+    invoke.mockResolvedValue(undefined);
+    await reweaveCancel();
+    expect(invoke).toHaveBeenCalledWith("reweave_cancel");
+  });
+
+  it("reweaveState invokes reweave_state and returns the camelCase state", async () => {
+    invoke.mockResolvedValue({
+      stage: "core", targetSha: "abc", startedAt: "2026-09-02T10:00:00Z", elapsedMs: 1200,
+      tail: ["Compiling loom"], outcome: null, cancellable: true, mode: "packaged",
+    });
+    const s = await reweaveState();
+    expect(invoke).toHaveBeenCalledWith("reweave_state");
+    expect(s.stage).toBe("core");
+    expect(s.targetSha).toBe("abc");
+    expect(s.elapsedMs).toBe(1200);
+    expect(s.cancellable).toBe(true);
+    expect(s.tail).toEqual(["Compiling loom"]);
+  });
+
+  it("generationsReturn passes the sha", async () => {
+    invoke.mockResolvedValue(undefined);
+    await generationsReturn("3f2a1c");
+    expect(invoke).toHaveBeenCalledWith("generations_return", { sha: "3f2a1c" });
   });
 });
 
