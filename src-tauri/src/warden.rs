@@ -16,10 +16,15 @@
 //! 3. watch the sentinel: the new body's pre-main marks `booting`, a healthy
 //!    shell's `kernel_boot_ok` marks `ok` and confirms the ledger;
 //! 4. confirmed within `timeoutSecs` → write nothing else, exit;
-//! 5. not confirmed — the process vanished (`crashed`) or the clock ran out
-//!    (`never confirmed`) — → HEAL: kill any lingering new process, copy the
-//!    previous body back over the executable, re-sign, sentinel `healed`,
-//!    ledger `current: prev`, recovery record, `open -n` again, exit.
+//! 5. not confirmed — the process vanished (`crashed`: `CRASH_SAMPLES`
+//!    consecutive empty samples, never one) or the clock ran out (`never
+//!    confirmed`) — → HEAL: copy the previous body back over the executable,
+//!    re-sign, sentinel `healed`, ledger `current: prev`, recovery record.
+//!    Then one of two endings: a body no longer running is killed if any
+//!    straggler remains and the app is opened again; a body STILL RUNNING at
+//!    the deadline is left alone — no kill, no second window — because the
+//!    executable on disk is already the proven one, so the next launch comes
+//!    home without taking the owner's session away.
 //!
 //! `relaunchOnly` jobs come from the pre-main backstop (kernel.rs): the heal
 //! already happened in-process; the warden only waits for that process to
@@ -96,6 +101,20 @@ const TICK: Duration = Duration::from_millis(500);
 
 pub const REASON_CRASHED: &str = "crashed";
 pub const REASON_NEVER_CONFIRMED: &str = "never confirmed";
+/// The clock ran out while the body was still running and painting: the
+/// window was left alone and the executable on disk put back, so the reason
+/// the record carries must not claim LOOM already came home.
+pub const REASON_NEVER_CONFIRMED_ALIVE: &str =
+    "never confirmed — still running when the clock ran out";
+
+/// How many consecutive empty samples make a death (round-1 review, Finding
+/// 2). One is a hiccup; three in a row, half a second apart, is a body that
+/// is gone.
+const CRASH_SAMPLES: u32 = 3;
+/// How many times `open -n` is asked before a refusal counts as a failed
+/// birth (round-1 review, Finding 6), and how long between the asks.
+const OPEN_ATTEMPTS: u32 = 3;
+const OPEN_BACKOFF: Duration = Duration::from_secs(2);
 
 // ── World ─────────────────────────────────────────────────────────────────────
 
@@ -104,7 +123,9 @@ pub trait World {
     fn pid_alive(&self, pid: u32) -> bool;
     fn open_app(&mut self, app: &Path) -> Result<(), LoomError>;
     /// Every live pid whose command line names `exe` (never our own).
-    fn find_pids(&self, exe: &Path) -> Vec<u32>;
+    /// `None` when the sample could not be taken at all — no information,
+    /// never evidence of death (round-1 review, Finding 2).
+    fn find_pids(&self, exe: &Path) -> Option<Vec<u32>>;
     fn kill(&mut self, pid: u32);
     fn read_sentinel(&self) -> Option<Sentinel>;
     fn now(&self) -> Instant;
@@ -158,19 +179,21 @@ impl World for RealWorld {
         Ok(())
     }
 
-    fn find_pids(&self, exe: &Path) -> Vec<u32> {
-        let Ok(root) = parent_of(exe) else { return Vec::new() };
+    fn find_pids(&self, exe: &Path) -> Option<Vec<u32>> {
+        let root = parent_of(exe).ok()?;
         let pattern = exe.to_string_lossy().into_owned();
         let me = std::process::id();
-        match exec::run_checked(&["/usr/bin/pgrep", "-f", &pattern], &root, &root, Duration::from_secs(10)) {
-            Ok(out) => out
-                .stdout
+        // `pgrep` exits 1 with no output when nothing matches — that IS the
+        // answer "nothing is running". A spawn failure or a timeout is not an
+        // answer at all, and must never read as one.
+        let out = exec::run_checked(&["/usr/bin/pgrep", "-f", &pattern], &root, &root, Duration::from_secs(10)).ok()?;
+        Some(
+            out.stdout
                 .lines()
                 .filter_map(|l| l.trim().parse::<u32>().ok())
                 .filter(|p| *p != me)
                 .collect(),
-            Err(_) => Vec::new(),
-        }
+        )
     }
 
     fn kill(&mut self, pid: u32) {
@@ -203,6 +226,10 @@ pub enum Verdict {
     Confirmed,
     /// The new body did not confirm; the previous one is back in place.
     Healed { reason: String },
+    /// The new body did not confirm but is still running: the owner's window
+    /// is left alone, and the file on disk is the previous body, so the NEXT
+    /// launch is the one already proven.
+    HealedNextLaunch { reason: String },
     /// The new body did not confirm AND the heal failed — the sentinel says
     /// `rollback-failed` so nothing loops.
     HealFailed(String),
@@ -216,8 +243,8 @@ pub fn watch(job: &Job, world: &mut dyn World, home: &Home) -> Verdict {
         world.sleep(Duration::from_millis(250));
     }
 
-    // 2 · open the app.
-    let opened = world.open_app(&job.app_path);
+    // 2 · open the app. A single refusal is not a failed birth (Finding 6).
+    let opened = open_with_retry(world, &job.app_path);
     if job.relaunch_only {
         // The heal already happened in-process; opening was the whole job.
         return match opened {
@@ -225,48 +252,117 @@ pub fn watch(job: &Job, world: &mut dyn World, home: &Home) -> Verdict {
             Err(e) => Verdict::HealFailed(format!("the app could not be opened after the heal — {e}")),
         };
     }
+    // 3–4 · watch for confirmation.
     let reason = match opened {
-        Ok(()) => {
-            // 3–4 · watch for confirmation.
-            let launched = world.now();
-            let deadline = launched + Duration::from_secs(job.timeout_secs);
-            let mut seen_alive = false;
-            loop {
-                if world.read_sentinel().map(|s| s.status == "ok").unwrap_or(false) {
-                    return Verdict::Confirmed;
-                }
-                let pids = world.find_pids(&job.exe_path);
-                if pids.is_empty() {
-                    if seen_alive || world.now().duration_since(launched) >= LAUNCH_GRACE {
-                        break REASON_CRASHED.to_string();
-                    }
-                } else {
-                    seen_alive = true;
-                }
-                if world.now() >= deadline {
-                    break REASON_NEVER_CONFIRMED.to_string();
-                }
-                world.sleep(TICK);
-            }
-        }
+        Ok(()) => match confirm(job, world) {
+            None => return Verdict::Confirmed,
+            Some(reason) => reason,
+        },
         // The body never ran: it never confirmed.
         Err(_) => REASON_NEVER_CONFIRMED.to_string(),
     };
 
-    // 5 · heal.
-    for pid in world.find_pids(&job.exe_path) {
-        world.kill(pid);
+    // 5 · heal. One last look decides HOW. A body still running at the
+    // deadline is one the owner may be using — `kernel_boot_ok` is vetoed by
+    // any ErrorBoundary caught during boot, so a perfectly usable generation
+    // can reach this point unconfirmed (Finding 3). It is not killed and no
+    // second window is opened over it; the executable on disk goes back, so
+    // the NEXT launch is the body already proven.
+    let seen = world.find_pids(&job.exe_path).unwrap_or_default();
+    let (take_it_down, reason) = ending(&reason, !seen.is_empty());
+    if take_it_down {
+        for pid in seen {
+            world.kill(pid);
+        }
     }
     let layout = AppLayout { app_path: job.app_path.clone(), exe_path: job.exe_path.clone() };
     let tools = |name: &str| threads::tool_path(home, name);
     match heal(home, &layout, &job.new_sha, &job.prev_sha, &reason, &tools) {
+        Ok(()) if !take_it_down => Verdict::HealedNextLaunch { reason },
         Ok(()) => {
-            if let Err(e) = world.open_app(&job.app_path) {
+            if let Err(e) = open_with_retry(world, &job.app_path) {
                 eprintln!("[warden] healed, but the app could not be reopened — {e}");
             }
             Verdict::Healed { reason }
         }
         Err(e) => Verdict::HealFailed(e.to_string()),
+    }
+}
+
+/// PURE: how a failed birth ends (round-1 review, Finding 3). `alive` is the
+/// last look at the machine. Returns whether the body is taken down — killed
+/// if anything of it lingers, and the app opened again once the previous body
+/// is back — and the reason the record carries.
+///
+/// A body still running when the clock ran out is NOT taken down: it is a
+/// window the owner may be working in, and `kernel_boot_ok` is vetoed by any
+/// ErrorBoundary caught during boot, so a usable generation reaches the
+/// deadline unconfirmed. The heal still puts the previous body on disk, so
+/// the next launch comes home; the record says which of the two happened.
+pub fn ending(reason: &str, alive: bool) -> (bool, String) {
+    if alive && reason == REASON_NEVER_CONFIRMED {
+        (false, REASON_NEVER_CONFIRMED_ALIVE.to_string())
+    } else {
+        (true, reason.to_string())
+    }
+}
+
+/// `open -n`, asked again with a backoff before a refusal counts (Finding 6).
+/// LaunchServices refuses transiently — a bundle still settling after the
+/// re-sign, a machine mid-login — and one refusal used to roll a generation
+/// back, with the heal's own reopen then failing the same way and leaving no
+/// LOOM running at all.
+fn open_with_retry(world: &mut dyn World, app: &Path) -> Result<(), LoomError> {
+    let mut last = None;
+    for attempt in 1..=OPEN_ATTEMPTS {
+        match world.open_app(app) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last = Some(e);
+                if attempt < OPEN_ATTEMPTS {
+                    world.sleep(OPEN_BACKOFF * attempt);
+                }
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| LoomError::NotFound(format!("open {}", app.display()))))
+}
+
+/// Steps 3–4: watch the sentinel and the machine until one of them answers.
+/// `None` is a confirmed birth; `Some(reason)` is the fact that ended it.
+///
+/// Death is only ever declared on `CRASH_SAMPLES` consecutive empty samples
+/// (Finding 2): one empty sample is a hiccup, and a sample that could not be
+/// taken at all (`None`) is no information — it neither counts toward a
+/// death nor clears the count.
+fn confirm(job: &Job, world: &mut dyn World) -> Option<String> {
+    let launched = world.now();
+    let deadline = launched + Duration::from_secs(job.timeout_secs);
+    let mut seen_alive = false;
+    let mut empty = 0u32;
+    loop {
+        if world.read_sentinel().map(|s| s.status == "ok").unwrap_or(false) {
+            return None;
+        }
+        match world.find_pids(&job.exe_path) {
+            None => {}
+            Some(pids) if pids.is_empty() => {
+                empty += 1;
+                let launched_by_now =
+                    seen_alive || world.now().duration_since(launched) >= LAUNCH_GRACE;
+                if launched_by_now && empty >= CRASH_SAMPLES {
+                    return Some(REASON_CRASHED.to_string());
+                }
+            }
+            Some(_) => {
+                seen_alive = true;
+                empty = 0;
+            }
+        }
+        if world.now() >= deadline {
+            return Some(REASON_NEVER_CONFIRMED.to_string());
+        }
+        world.sleep(TICK);
     }
 }
 
@@ -367,7 +463,12 @@ fn run_warden(job_path: &Path) -> i32 {
     };
     job.warden_pid = Some(std::process::id());
     if let Err(e) = threads::write_json_atomic(job_path, &job) {
-        eprintln!("[warden] could not record my pid — {e}");
+        // A warden whose pid is not on file is invisible to the pre-main
+        // backstop, which would then heal the same birth this loop is
+        // guarding — two healers on one body (round-1 review, Finding 5).
+        // Better no warden at all: the backstop alone is a coherent guard.
+        eprintln!("[warden] my pid could not be recorded — {e}; the birth is left to the body's own backstop");
+        return 1;
     }
     let home = Home::at(job.loomhome.clone());
     let mut world = RealWorld::new(&home);
@@ -375,6 +476,13 @@ fn run_warden(job_path: &Path) -> i32 {
         Verdict::Confirmed => 0,
         Verdict::Healed { reason } => {
             eprintln!("[warden] the new body {reason} — LOOM came home to {}", &job.prev_sha);
+            0
+        }
+        Verdict::HealedNextLaunch { reason } => {
+            eprintln!(
+                "[warden] the new body {reason} — the window was left running; the next launch is generation {}",
+                &job.prev_sha
+            );
             0
         }
         Verdict::HealFailed(m) => {
@@ -401,10 +509,12 @@ mod tests {
         old_pid_gone_at: u32,
         /// (from_tick, sentinel status) — the latest row ≤ tick wins.
         sentinel: Vec<(u32, &'static str)>,
-        /// (from_tick, pids) — the latest row ≤ tick wins.
-        pids: Vec<(u32, Vec<u32>)>,
+        /// (from_tick, pids) — the latest row ≤ tick wins. `None` is a
+        /// sample that could not be taken.
+        pids: Vec<(u32, Option<Vec<u32>>)>,
         opens: Vec<PathBuf>,
-        open_fails: bool,
+        /// How many leading `open` calls refuse.
+        open_fails: u32,
         kills: Vec<u32>,
     }
 
@@ -416,9 +526,9 @@ mod tests {
                 ticks: 0,
                 old_pid_gone_at: 0,
                 sentinel: vec![(0, "applied")],
-                pids: vec![(0, vec![4242])],
+                pids: vec![(0, Some(vec![4242]))],
                 opens: Vec::new(),
-                open_fails: false,
+                open_fails: 0,
                 kills: Vec::new(),
             }
         }
@@ -433,10 +543,14 @@ mod tests {
         }
         fn open_app(&mut self, app: &Path) -> Result<(), LoomError> {
             self.opens.push(app.to_path_buf());
-            if self.open_fails { Err(LoomError::Git("open refused".into())) } else { Ok(()) }
+            if (self.opens.len() as u32) <= self.open_fails {
+                Err(LoomError::Parse("open refused".into()))
+            } else {
+                Ok(())
+            }
         }
-        fn find_pids(&self, _exe: &Path) -> Vec<u32> {
-            self.latest(&self.pids).cloned().unwrap_or_default()
+        fn find_pids(&self, _exe: &Path) -> Option<Vec<u32>> {
+            self.latest(&self.pids).cloned().flatten()
         }
         fn kill(&mut self, pid: u32) {
             self.kills.push(pid);
@@ -586,7 +700,7 @@ mod tests {
         let fx = fixture();
         let mut w = FakeWorld::new();
         w.sentinel = vec![(0, "applied"), (2, "booting")];
-        w.pids = vec![(0, vec![4242]), (4, vec![])];
+        w.pids = vec![(0, Some(vec![4242])), (4, Some(vec![]))];
         let v = watch(&fx.job, &mut w, &fx.home);
         assert_eq!(v, Verdict::Healed { reason: REASON_CRASHED.into() });
         assert_eq!(w.opens.len(), 2, "opened, then opened again after the heal");
@@ -615,19 +729,157 @@ mod tests {
         assert_eq!(names, vec!["loom".to_string()]);
     }
 
+    /// Round-1 review, Finding 2. One empty `pgrep` sample was a terminal
+    /// crash verdict. A sampling hiccup, a moment between exec and the new
+    /// image being named, a machine under load — none of those are evidence
+    /// that the body is gone. Only consecutive empty samples are.
     #[test]
-    fn warden_timeout_heals() {
+    fn one_empty_sample_does_not_roll_back_a_healthy_generation() {
         let fx = fixture();
         let mut w = FakeWorld::new();
-        // The body lives but never confirms: pids stay, sentinel stays booting.
+        w.sentinel = vec![(0, "applied"), (2, "booting"), (8, "ok")];
+        w.pids = vec![(0, Some(vec![4242])), (4, Some(vec![])), (5, Some(vec![4242]))];
+        assert_eq!(watch(&fx.job, &mut w, &fx.home), Verdict::Confirmed);
+        assert_eq!(fx.exe(), "new body", "a healthy generation stays");
+        assert!(w.kills.is_empty());
+        assert_eq!(w.opens.len(), 1);
+        assert!(!fx.home.recovery_json().exists());
+    }
+
+    /// Finding 2, the other half. A sample that could not be TAKEN — pgrep
+    /// failed to spawn, timed out, the cwd went away — used to be
+    /// byte-identical to "the process is gone".
+    #[test]
+    fn a_sample_that_could_not_be_taken_is_not_evidence_of_death() {
+        let fx = fixture();
+        let mut w = FakeWorld::new();
+        w.sentinel = vec![(0, "applied"), (2, "booting"), (30, "ok")];
+        w.pids = vec![(0, Some(vec![4242])), (3, None)];
+        assert_eq!(watch(&fx.job, &mut w, &fx.home), Verdict::Confirmed);
+        assert_eq!(fx.exe(), "new body");
+        assert!(w.kills.is_empty());
+        // Not even a body that was never seen alive: unknown is unknown, and
+        // the deadline — not a guess — ends the watch.
+        let fx2 = fixture();
+        let mut w2 = FakeWorld::new();
+        w2.pids = vec![(0, None)];
+        assert!(matches!(watch(&fx2.job, &mut w2, &fx2.home), Verdict::Healed { .. }));
+        assert!(w2.elapsed >= Duration::from_secs(90), "the whole timeout was granted");
+    }
+
+    /// Round-1 review, Finding 3. `markBootOk` is vetoed whenever an
+    /// ErrorBoundary caught anything during boot, so a generation that is
+    /// running, painting and in use can reach the deadline unconfirmed.
+    /// SIGKILLing it takes the owner's session away. The window is left
+    /// alone; the file on disk goes back, so the NEXT launch comes home.
+    #[test]
+    fn a_generation_still_running_is_not_killed_at_the_deadline() {
+        let fx = fixture();
+        let mut w = FakeWorld::new();
         w.sentinel = vec![(0, "applied"), (2, "booting")];
         let v = watch(&fx.job, &mut w, &fx.home);
-        assert_eq!(v, Verdict::Healed { reason: REASON_NEVER_CONFIRMED.into() });
+        assert_eq!(v, Verdict::HealedNextLaunch { reason: REASON_NEVER_CONFIRMED_ALIVE.into() });
+        assert!(w.kills.is_empty(), "the owner's running session is not killed");
+        assert_eq!(w.opens.len(), 1, "no second window over the one in use");
         assert!(w.elapsed >= Duration::from_secs(90), "the whole timeout was granted");
-        assert_eq!(w.kills, vec![4242], "the lingering body was killed before the heal");
+        // The next launch is the proven body, and the record says why.
         assert_eq!(fx.exe(), "old body");
-        assert_eq!(read_recovery(&fx.home).unwrap().reason, "never confirmed");
-        assert_eq!(w.opens.len(), 2);
+        assert_eq!(sentinel_status(&fx.home).as_deref(), Some("healed"));
+        let ledger = generations::read(&fx.home);
+        assert_eq!(ledger.current.as_deref(), Some("aaa111"));
+        assert_eq!(ledger.previous.as_deref(), Some("bbb222"));
+        let rec = read_recovery(&fx.home).unwrap();
+        assert_eq!(rec.reason, REASON_NEVER_CONFIRMED_ALIVE);
+        assert_eq!(rec.failed_sha, "bbb222");
+    }
+
+    /// The kill and the second window are reserved for the path where the
+    /// body is gone; the four rows of the rule, read directly.
+    #[test]
+    fn only_a_body_that_is_gone_is_taken_down() {
+        // Gone (however it went) → taken down, reason unchanged.
+        assert_eq!(ending(REASON_CRASHED, false), (true, REASON_CRASHED.to_string()));
+        assert_eq!(ending(REASON_NEVER_CONFIRMED, false), (true, REASON_NEVER_CONFIRMED.to_string()));
+        // Crashed, but something of it lingers → taken down, stragglers killed.
+        assert_eq!(ending(REASON_CRASHED, true), (true, REASON_CRASHED.to_string()));
+        // Running, and merely never said so → left alone, and the record says
+        // that, not that LOOM already came home.
+        assert_eq!(
+            ending(REASON_NEVER_CONFIRMED, true),
+            (false, REASON_NEVER_CONFIRMED_ALIVE.to_string())
+        );
+    }
+
+    #[test]
+    fn a_body_that_crashed_is_healed_and_the_app_reopened() {
+        let fx = fixture();
+        let mut w = FakeWorld::new();
+        w.sentinel = vec![(0, "applied"), (2, "booting")];
+        // Three empty samples in a row: gone.
+        w.pids = vec![(0, Some(vec![4242])), (4, Some(vec![]))];
+        let v = watch(&fx.job, &mut w, &fx.home);
+        assert_eq!(v, Verdict::Healed { reason: REASON_CRASHED.into() });
+        assert!(w.ticks >= 6, "three consecutive empty samples, not one");
+        assert_eq!(w.opens.len(), 2, "opened, then opened again after the heal");
+        assert_eq!(fx.exe(), "old body");
+    }
+
+    /// Round-1 review, Finding 6. `open -n` can refuse transiently —
+    /// LaunchServices busy, the bundle still settling. One refusal is not a
+    /// failed birth, and the heal's own reopen used to fail the same way,
+    /// leaving no LOOM running at all.
+    #[test]
+    fn a_transient_open_refusal_is_retried_not_a_failed_birth() {
+        let fx = fixture();
+        let mut w = FakeWorld::new();
+        w.open_fails = OPEN_ATTEMPTS - 1;
+        w.sentinel = vec![(0, "applied"), (2, "booting"), (8, "ok")];
+        assert_eq!(watch(&fx.job, &mut w, &fx.home), Verdict::Confirmed);
+        assert_eq!(w.opens.len(), OPEN_ATTEMPTS as usize, "asked again before giving up");
+        assert_eq!(fx.exe(), "new body");
+        assert!(!fx.home.recovery_json().exists());
+    }
+
+    #[test]
+    fn an_open_that_never_works_still_brings_loom_home() {
+        let fx = fixture();
+        let mut w = FakeWorld::new();
+        w.open_fails = u32::MAX;
+        w.pids = vec![(0, Some(vec![]))];
+        let v = watch(&fx.job, &mut w, &fx.home);
+        assert_eq!(v, Verdict::Healed { reason: REASON_NEVER_CONFIRMED.into() });
+        assert_eq!(
+            w.opens.len(),
+            (OPEN_ATTEMPTS * 2) as usize,
+            "retried at the birth and again at the reopen"
+        );
+        assert_eq!(fx.exe(), "old body");
+    }
+
+    /// Round-1 review, Finding 5. The warden's pid is what tells the pre-main
+    /// backstop that this birth already has a guard. A warden that could not
+    /// record it is invisible, and both healers would act on the same body.
+    /// It stops instead of watching.
+    #[test]
+    fn a_warden_that_cannot_record_its_pid_does_not_watch() {
+        let fx = fixture();
+        let job_path = fx.home.warden_json();
+        threads::write_json_atomic(&job_path, &fx.job).unwrap();
+        let dir = job_path.parent().unwrap().to_path_buf();
+        let ro = std::fs::Permissions::from_mode(0o500);
+        let rw = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(&dir, ro).unwrap();
+        if std::fs::write(dir.join(".probe"), "x").is_ok() {
+            // Running as a user the mode bits do not bind (root): staging this
+            // is impossible, and running on would spawn a real `open`.
+            std::fs::set_permissions(&dir, rw).unwrap();
+            return;
+        }
+        let code = run_warden(&job_path);
+        std::fs::set_permissions(&dir, rw).unwrap();
+        assert_eq!(code, 1, "a warden that cannot be seen must not watch");
+        assert_eq!(fx.exe(), "new body", "it healed nothing");
+        assert!(!fx.home.recovery_json().exists());
     }
 
     #[test]
@@ -635,7 +887,7 @@ mod tests {
         let fx = fixture();
         std::fs::remove_file(fx.home.reweave_json()).unwrap();
         let mut w = FakeWorld::new();
-        w.pids = vec![(0, vec![4242]), (3, vec![])];
+        w.pids = vec![(0, Some(vec![4242])), (3, Some(vec![]))];
         assert!(matches!(watch(&fx.job, &mut w, &fx.home), Verdict::Healed { .. }));
         assert!(read_recovery(&fx.home).unwrap().log_tail.is_empty());
     }
@@ -645,7 +897,7 @@ mod tests {
         let fx = fixture();
         std::fs::remove_file(fx.home.generation_exe("aaa111")).unwrap();
         let mut w = FakeWorld::new();
-        w.pids = vec![(0, vec![4242]), (3, vec![])];
+        w.pids = vec![(0, Some(vec![4242])), (3, Some(vec![]))];
         assert!(matches!(watch(&fx.job, &mut w, &fx.home), Verdict::HealFailed(_)));
         assert_eq!(fx.exe(), "new body", "a failed copy leaves the file as it was");
         assert_eq!(sentinel_status(&fx.home).as_deref(), Some("rollback-failed"));
@@ -671,7 +923,7 @@ mod tests {
     fn take_recovery_surfaces_once() {
         let fx = fixture();
         let mut w = FakeWorld::new();
-        w.pids = vec![(0, vec![4242]), (3, vec![])];
+        w.pids = vec![(0, Some(vec![4242])), (3, Some(vec![]))];
         watch(&fx.job, &mut w, &fx.home);
         assert!(take_recovery(&fx.home).is_some());
         assert!(!fx.home.recovery_json().exists());
