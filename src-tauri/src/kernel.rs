@@ -95,6 +95,10 @@ const PROTECTED_PREFIXES: &[&str] = &[
     // Phase 23 (Rebirth): the bundled genome (genome.bundle + genome.json) —
     // gitignored build output, but a path LOOM must never write.
     "src-tauri/genome/",
+    // Phase 23 (Rebirth): the TS side of the reweave — starts a binary swap
+    // and returns bodies; a self-edit here could weave without consent.
+    "src/lib/loom/reweave",           // reweave orchestration (+ tests)
+    "src/lib/loom/generations",       // generations orchestration (+ tests)
 ];
 
 /// tsconfig*.json — matched by name pattern (tsconfig.json, tsconfig.node.json…).
@@ -150,11 +154,21 @@ const PROTECTED_RUST_BASENAMES: &[&str] = &[
     "cargo.lock",
 ];
 
+/// `.cargo/config.toml` at ANY depth is protected (Phase 23 / Rebirth): it is
+/// where threading pins the vendored source and `net.offline`; an edit there
+/// could point cargo at an arbitrary registry or reopen the network.
+fn is_cargo_config(rel_lower: &str) -> bool {
+    rel_lower == ".cargo/config.toml" || rel_lower.ends_with("/.cargo/config.toml")
+}
+
 /// True if `rel_lower` (already normalized + lowercased) is a Rust-side safety
 /// file that LOOM must never edit — the enumerated core paths OR a protected
 /// basename anywhere. Checked BEFORE the positive Rust whitelist (deny wins).
 fn is_protected_rust(rel_lower: &str) -> bool {
     if PROTECTED_RUST.contains(&rel_lower) {
+        return true;
+    }
+    if is_cargo_config(rel_lower) {
         return true;
     }
     let base = rel_lower.rsplit('/').next().unwrap_or(rel_lower);
@@ -2077,6 +2091,20 @@ mod tests {
             "package-lock.json", // dependency lock
             "vite.config.ts",    // constructs the frontend build
         ];
+        // Phase 23 sweep: the protected TS orchestration prefixes and
+        // `.cargo/config.toml` at any depth.
+        for f in [
+            "src/lib/loom/reweave.ts",
+            "src/lib/loom/reweave.test.ts",
+            "src/lib/loom/generations.ts",
+            "src/lib/loom/generations.test.ts",
+            ".cargo/config.toml",
+            "src-tauri/.cargo/config.toml",
+            "deep/er/.cargo/config.toml",
+        ] {
+            assert!(!is_editable(f), "rebirth TS/config file must be protected: {f}");
+            assert!(!is_editable(&f.to_uppercase()), "uppercase-collision must be protected: {f}");
+        }
         for f in rebirth_safety_files {
             assert!(!is_editable(f), "rebirth safety file must be protected: {f}");
             assert!(!is_editable(&f.to_lowercase()), "case-collision must be protected: {f}");
