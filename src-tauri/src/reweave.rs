@@ -570,7 +570,17 @@ fn ctx_for(app: &tauri::AppHandle) -> Result<(Home, Mode, PathBuf, Option<AppLay
     Ok((home, mode, source, layout))
 }
 
-/// Spawn the job thread; the slot is already ours. Releases it at the end.
+/// PURE: does the job thread give the exec slot back? (Round-1 review,
+/// Finding 7.) A job that handed the body over to the warden holds the slot
+/// until the process exits — the slot released 1.5 s before `app.exit(0)`
+/// was a window in which `generations_return` could start a second swap on
+/// top of a just-armed one. Every other ending, live or failed, releases it.
+pub fn releases_the_slot(fin: &Result<Finish, LoomError>) -> bool {
+    !matches!(fin, Ok(Finish::Relaunching { .. }))
+}
+
+/// Spawn the job thread; the slot is already ours. Releases it at the end —
+/// except on the handover, which keeps it until the app exits.
 fn spawn_job(app: tauri::AppHandle, home: Home, mode: Mode, source: PathBuf, layout: Option<AppLayout>, kind: Kind) {
     use tauri::Emitter;
     ACTIVE.store(true, Ordering::SeqCst);
@@ -590,9 +600,12 @@ fn spawn_job(app: tauri::AppHandle, home: Home, mode: Mode, source: PathBuf, lay
         };
         let fin = run_job(&ctx, kind, &mut ExecRunner, &mut emit);
         ACTIVE.store(false, Ordering::SeqCst);
-        JOB.release();
-        if let Ok(Finish::Relaunching { .. }) = fin {
-            // The card has its line; the warden is waiting for this pid.
+        if releases_the_slot(&fin) {
+            JOB.release();
+        } else {
+            // The card has its line; the warden is waiting for this pid. The
+            // slot is NOT given back: nothing may start a second swap over
+            // the one already armed in the seconds before we exit.
             std::thread::sleep(RELAUNCH_GRACE);
             app.exit(0);
         }
@@ -1062,6 +1075,20 @@ mod tests {
         assert_eq!(argv, vec!["--warden".to_string(), fx.home.warden_json().to_string_lossy().into_owned()]);
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(std::fs::read_to_string(fx.root.join("warden-body.txt")).unwrap(), "newer body");
+    }
+
+    /// Round-1 review, Finding 7. The job slot was given back before the
+    /// 1.5 s countdown, so a second swap could be planned on top of a
+    /// just-armed one — with the sentinel and the ledger already naming a
+    /// birth that had not happened yet. The handover keeps the slot.
+    #[test]
+    fn the_handover_keeps_the_slot_until_the_app_exits() {
+        assert!(!releases_the_slot(&Ok(Finish::Relaunching { warden_pid: 42 })));
+        // Every other ending gives it back: dev's built-and-shelved, and
+        // every failure, cancel included.
+        assert!(releases_the_slot(&Ok(Finish::Built)));
+        assert!(releases_the_slot(&Err(LoomError::Parse("cancelled".into()))));
+        assert!(releases_the_slot(&Err(LoomError::Unsupported(platform::UNSUPPORTED_SWAP.into()))));
     }
 
     #[test]
