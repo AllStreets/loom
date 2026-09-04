@@ -14,14 +14,19 @@
 //!
 //! No shell is ever spawned: a version probe is `<absolute path> --version`
 //! through `exec::run_checked`. `codesign` has no `--version`; it is recorded
-//! as `present`.
+//! as `present`. npm is the one exception to "an absolute path is enough":
+//! it is a `#!/usr/bin/env node` shim, so every npm spawn — the probe and the
+//! ceremony's own — carries a PATH pair leading with the recorded node's
+//! directory (`npm_path_env`).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::error::LoomError;
-use crate::loomhome::Home;
+use crate::exec::Slot;
+use crate::loomhome::{Home, Mode};
 
 // ── The tool table ────────────────────────────────────────────────────────────
 
@@ -187,10 +192,42 @@ pub fn locate(spec: &ToolSpec, home_dir: &Path, path_env: &str) -> Option<PathBu
     None
 }
 
+/// The PATH value every `npm` spawn carries: the directory of the RECORDED
+/// node, then everything this process already had.
+///
+/// npm is a `#!/usr/bin/env node` shim — an absolute npm path still resolves
+/// `node` through PATH. A Finder-launched macOS app inherits
+/// `/usr/bin:/bin:/usr/sbin:/sbin`, which holds neither nvm nor homebrew, so
+/// npm answered `env: node: No such file or directory` (exit 127) and the
+/// packaged self-rebuild could not take its first step.
+///
+/// Both halves are LOOM's own — the parent of a path the tool table found,
+/// and this process's PATH — so the pair keeps exec's fixed-env contract:
+/// nothing here is composed from model output. `None` when the node path has
+/// no directory to name.
+pub fn npm_path_env(node: &Path) -> Option<String> {
+    let dir = node.parent().filter(|d| !d.as_os_str().is_empty())?;
+    let mut dirs: Vec<PathBuf> = vec![dir.to_path_buf()];
+    dirs.extend(std::env::split_paths(&path_env()));
+    std::env::join_paths(dirs).ok().map(|v| v.to_string_lossy().into_owned())
+}
+
+/// The PATH pair for `npm`, discovered alongside it; empty for every other
+/// tool, which needs nothing but its absolute path.
+fn probe_envs(spec: &ToolSpec, home_dir: &Path, path_env: &str) -> Vec<(String, String)> {
+    if spec.name != "npm" {
+        return Vec::new();
+    }
+    locate(&NODE, home_dir, path_env)
+        .and_then(|node| npm_path_env(&node))
+        .map(|v| vec![("PATH".to_string(), v)])
+        .unwrap_or_default()
+}
+
 /// The first line of `<path> <version_args>`, trimmed; `present` when the
 /// tool has no version flag; `None` if the probe fails (a found tool that
 /// cannot answer is reported, not hidden — the drift check will flag it).
-fn probe_version(path: &Path, spec: &ToolSpec) -> Option<String> {
+fn probe_version(path: &Path, spec: &ToolSpec, envs: &[(&str, &str)]) -> Option<String> {
     if spec.version_args.is_empty() {
         return Some("present".into());
     }
@@ -198,7 +235,7 @@ fn probe_version(path: &Path, spec: &ToolSpec) -> Option<String> {
     let mut argv: Vec<&str> = vec![p];
     argv.extend_from_slice(spec.version_args);
     let root = Path::new("/");
-    let out = crate::exec::run_checked(&argv, root, root, VERSION_TIMEOUT).ok()?;
+    let out = crate::exec::run_checked_env(&argv, root, root, VERSION_TIMEOUT, envs).ok()?;
     if out.code != 0 {
         return None;
     }
@@ -212,7 +249,9 @@ fn probe_version(path: &Path, spec: &ToolSpec) -> Option<String> {
 /// build a whole machine in a tempdir.
 pub fn discover(spec: &ToolSpec, home_dir: &Path, path_env: &str) -> Tool {
     let path = locate(spec, home_dir, path_env);
-    let version = path.as_deref().and_then(|p| probe_version(p, spec));
+    let owned = probe_envs(spec, home_dir, path_env);
+    let envs: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let version = path.as_deref().and_then(|p| probe_version(p, spec, &envs));
     Tool {
         name: spec.name.to_string(),
         path: path.map(|p| p.to_string_lossy().into_owned()),
@@ -233,6 +272,73 @@ fn path_env() -> String {
 /// Fresh discovery of a spec'd tool on this machine (no manifest consulted).
 pub fn locate_now(name: &str) -> Option<PathBuf> {
     locate(spec(name)?, &owner_home(), &path_env())
+}
+
+// ── The sherpa cache ──────────────────────────────────────────────────────────
+
+/// The name `thread_status` reports when the sherpa cache has gone.
+pub const SHERPA_DRIFT: &str = "sherpa cache";
+
+/// The key `threads.json` keeps the resolved cache path under.
+const SHERPA_KEY: &str = "sherpaCache";
+
+/// Where sherpa-rs keeps the prebuilt archive its build script downloads.
+///
+/// The spec says it lands in the target's OUT_DIR and stays; it does not. It
+/// is a user cache — `~/Library/Caches/sherpa-rs/<triple>/<hash>/<dist>` on
+/// macOS, `~/.cache/sherpa-rs` elsewhere — outside loomhome, uncounted by
+/// `loomhome_bytes`, and purgeable by the OS under disk pressure. It also
+/// arrives over HTTP at build time, so once the network is gone it cannot
+/// arrive again.
+pub fn sherpa_cache_root(home_dir: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        home_dir.join("Library").join("Caches").join("sherpa-rs")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        home_dir.join(".cache").join("sherpa-rs")
+    }
+}
+
+/// The deepest single-child directory under the cache root — the extracted
+/// distribution itself when one target built here, the root when several
+/// did. `None` when nothing was ever downloaded, or when the root is empty.
+/// Threading records what this resolves to; `thread_status` later reports
+/// that exact path as drift when it is gone, so an offline weave fails early
+/// and honestly instead of opaquely, minutes in.
+pub fn resolve_sherpa_cache(home_dir: &Path) -> Option<PathBuf> {
+    let root = sherpa_cache_root(home_dir);
+    if !root.is_dir() {
+        return None;
+    }
+    let mut here = root.clone();
+    loop {
+        let mut children = std::fs::read_dir(&here).ok()?.filter_map(|e| e.ok());
+        let Some(first) = children.next() else {
+            // An empty root is a cache that was purged, not one that is here.
+            return if here == root { None } else { Some(here) };
+        };
+        if children.next().is_some() || !first.path().is_dir() {
+            return Some(here);
+        }
+        here = first.path();
+    }
+}
+
+/// The cache as it stands on this machine, for the owner running LOOM.
+fn sherpa_cache_now() -> Option<String> {
+    resolve_sherpa_cache(&owner_home()).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Has a recorded cache gone? A path that is no longer a directory, or one
+/// that is now empty, cannot serve an offline build.
+fn sherpa_gone(recorded: &str) -> bool {
+    let p = Path::new(recorded);
+    if !p.is_dir() {
+        return true;
+    }
+    std::fs::read_dir(p).map(|mut d| d.next().is_none()).unwrap_or(true)
 }
 
 // ── The manifest ──────────────────────────────────────────────────────────────
@@ -292,8 +398,31 @@ pub fn read(home: &Home) -> Option<Threads> {
     serde_json::from_str(&raw).ok()
 }
 
+/// The sherpa cache path recorded at threading, if any.
+///
+/// It sits beside the manifest rather than inside `Threads` because it does
+/// not describe a tool LOOM found and can find again: it is a cache LOOM
+/// cannot rebuild once the network is gone, recorded once and thereafter only
+/// checked. `write` carries whatever is on disk forward, so no later step of
+/// the ceremony can drop it.
+pub fn read_sherpa(home: &Home) -> Option<String> {
+    let raw = std::fs::read_to_string(home.threads_json()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get(SHERPA_KEY)?.as_str().map(|s| s.to_string())
+}
+
 pub fn write(home: &Home, t: &Threads) -> Result<(), LoomError> {
-    write_json_atomic(&home.threads_json(), t)
+    let kept = read_sherpa(home);
+    write_sherpa(home, t, kept)
+}
+
+/// Write the manifest and the sherpa cache path together.
+pub fn write_sherpa(home: &Home, t: &Threads, sherpa: Option<String>) -> Result<(), LoomError> {
+    let mut v = serde_json::to_value(t).map_err(|e| LoomError::Parse(e.to_string()))?;
+    if let (Some(obj), Some(p)) = (v.as_object_mut(), sherpa) {
+        obj.insert(SHERPA_KEY.to_string(), serde_json::Value::String(p));
+    }
+    write_json_atomic(&home.threads_json(), &v)
 }
 
 /// A recorded tool's path if it still exists on disk; otherwise a fresh
@@ -326,6 +455,11 @@ pub struct ThreadStatus {
     pub drifted: Vec<String>,
     pub steps: ThreadSteps,
     pub needs_network: bool,
+    /// Where threading found the sherpa prebuilt archive. When it is gone it
+    /// also appears in `drifted` as `sherpa cache`: no weave can fetch it
+    /// again offline, and the owner should hear that before the weave, not
+    /// minutes into one.
+    pub sherpa_cache: Option<String>,
 }
 
 /// Discover every spec now and compare against the manifest. `specs`,
@@ -350,6 +484,10 @@ pub fn status_with(home: &Home, specs: &[ToolSpec], home_dir: &Path, path_env: &
             }
         }
     }
+    let sherpa = read_sherpa(home);
+    if sherpa.as_deref().map_or(false, sherpa_gone) {
+        drifted.push(SHERPA_DRIFT.to_string());
+    }
     let steps = recorded.as_ref().map(|r| r.steps).unwrap_or_default();
     ThreadStatus {
         threaded: recorded.as_ref().map_or(false, |r| r.threaded),
@@ -358,6 +496,7 @@ pub fn status_with(home: &Home, specs: &[ToolSpec], home_dir: &Path, path_env: &
         drifted,
         steps,
         needs_network: !steps.deps || !steps.vendor,
+        sherpa_cache: sherpa,
     }
 }
 
@@ -402,6 +541,13 @@ pub const THREAD_EVENT: &str = "loom-thread";
 /// The one honest line about the network (spec §Threading, step 2).
 pub const NEEDS_NETWORK: &str = "threading needs the network once — after that LOOM weaves offline.";
 
+/// What a cancelled ceremony says. The step that was running stays unmarked,
+/// so the next `thread_loom` resumes from it.
+pub const CANCELLED: &str = "threading was cancelled — run it again to continue.";
+
+/// What `thread_cancel` says when threading is not the job in flight.
+pub const NOTHING_TO_CANCEL: &str = "nothing to cancel — the loom isn't being threaded";
+
 const DEPS_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const VENDOR_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const ASSETS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -427,10 +573,96 @@ fn need_tool(tools: &dyn Fn(&str) -> Option<PathBuf>, name: &str) -> Result<Stri
     }
 }
 
+/// npm's absolute path plus the PATH value that lets its shebang find node.
+/// A machine with npm but no node cannot run npm at all, so it stops here
+/// with node's own install line rather than at a shim's exit 127.
+fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String, String), LoomError> {
+    let npm = need_tool(tools, "npm")?;
+    let node = need_tool(tools, "node")?;
+    let path = npm_path_env(Path::new(&node))
+        .ok_or_else(|| LoomError::NotFound(format!("node has no directory to lead PATH: {node}")))?;
+    Ok((npm, path))
+}
+
+/// Every step of the ceremony runs through the slot-registering streamed
+/// runner. A spawn `thread_cancel` cannot reach is a stop button that does
+/// not stop — and `npm ci` and `cargo vendor` are the only two steps in the
+/// whole product that talk to the internet. Returns the tool's exit plus the
+/// last lines it printed, which the caller emits as the step's progress.
+#[allow(clippy::too_many_arguments)]
+fn run_step(
+    slot: &Slot,
+    step: &str,
+    detail: &str,
+    argv: &[&str],
+    cwd: &Path,
+    root: &Path,
+    timeout: Duration,
+    envs: &[(&str, &str)],
+    emit: &mut dyn FnMut(&str, &str, &[String]),
+) -> Result<(crate::exec::ExecOut, Vec<String>), LoomError> {
+    let mut tail: Vec<String> = Vec::new();
+    let mut last: Option<Instant> = None;
+    let out = crate::exec::run_job_stream(slot, argv, cwd, root, timeout, envs, &mut |line| {
+        if line.trim().is_empty() {
+            return;
+        }
+        if tail.len() == TAIL_LINES {
+            tail.remove(0);
+        }
+        tail.push(line.to_string());
+        if last.map_or(true, |t: Instant| t.elapsed() >= TAIL_EVERY) {
+            emit(step, detail, &tail);
+            last = Some(Instant::now());
+        }
+    })?;
+    Ok((out, tail))
+}
+
+/// Between every step. A cancel that lands while a tool runs kills the tool;
+/// a cancel that lands between them must still stop the ceremony instead of
+/// letting the next step start.
+fn cancel_check(slot: &Slot) -> Result<(), Failed> {
+    if slot.cancelled() {
+        return Err(LoomError::Parse(CANCELLED.into()).into());
+    }
+    Ok(())
+}
+
 fn tail_of(text: &str) -> Vec<String> {
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     let skip = lines.len().saturating_sub(TAIL_LINES);
     lines[skip..].iter().map(|l| l.to_string()).collect()
+}
+
+/// Where the ceremony works, per mode (spec §Modes).
+///
+/// Dev is the checkout LOOM is running from — `resolve_source_repo_at`
+/// canonicalizes it and asserts it is a git work dir. Packaged is
+/// `loomhome/source`, named rather than resolved: on the first threading it
+/// does not exist yet — seed is the step that creates it — and a resolution
+/// that canonicalizes would refuse the ceremony before it could start.
+///
+/// `loomhome/source` in dev is nobody's: seed never writes it, so binding it
+/// for both modes made every dev threading die in `checked_cwd` and left
+/// `threaded` false forever — and with it every reweave the spec calls "how
+/// CI and the owner prove it".
+pub fn ceremony_source(home: &Home, mode: Mode) -> Result<PathBuf, LoomError> {
+    match mode {
+        Mode::Packaged => Ok(home.source()),
+        Mode::Dev => crate::kernel::resolve_source_repo_at(mode, None, Some(home)),
+    }
+}
+
+/// The allowed root for every spawn in the ceremony. Packaged: loomhome,
+/// which contains the source and the vendor and target dirs. Dev: the
+/// checkout itself — it lives wherever the owner keeps it, and a root that
+/// does not contain the cwd refuses every spawn.
+fn ceremony_root(home: &Home, mode: Mode, source: &Path) -> PathBuf {
+    match mode {
+        Mode::Packaged => home.root.clone(),
+        Mode::Dev => source.to_path_buf(),
+    }
 }
 
 /// The vendored-source replacement written after `cargo vendor`. PROTECTED
@@ -444,6 +676,10 @@ fn cargo_config(vendor: &Path) -> String {
 
 /// The ceremony, factored so a test can stage fake tools in a tempdir.
 ///
+/// - `source` is the genome to work in: the checkout in dev, `loomhome/source`
+///   in packaged mode (`ceremony_source`).
+/// - `slot` is the job slot this ceremony holds (`exec::JOB` in the app): every
+///   spawn registers its pid there, so `thread_cancel` reaches all of them.
 /// - `tools(name)` resolves a tool to its absolute path (`tool_path` in the
 ///   app; a closure over fakes in tests).
 /// - `exe` is the running executable, shelved as generation 0 at register.
@@ -454,9 +690,12 @@ fn cargo_config(vendor: &Path) -> String {
 ///
 /// Returns the failure so the caller can also surface it; the `failed`
 /// event has already been emitted by then.
+#[allow(clippy::too_many_arguments)]
 pub fn run_ceremony(
     home: &Home,
-    mode: crate::loomhome::Mode,
+    mode: Mode,
+    source: &Path,
+    slot: &Slot,
     tools: &dyn Fn(&str) -> Option<PathBuf>,
     exe: &Path,
     bundle: Option<&Path>,
@@ -469,7 +708,7 @@ pub fn run_ceremony(
         tools: vec![],
         steps: ThreadSteps::default(),
     });
-    match ceremony_steps(home, mode, tools, exe, bundle, emit, &mut t) {
+    match ceremony_steps(home, mode, source, slot, tools, exe, bundle, emit, &mut t) {
         Ok(()) => {
             emit("done", "the loom is threaded — it weaves offline from here.", &[]);
             Ok(())
@@ -510,20 +749,20 @@ fn step_failed(what: &str, out: &crate::exec::ExecOut) -> Failed {
     Failed { err: LoomError::Parse(format!("{what} failed (exit {})", out.code)), tail }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ceremony_steps(
     home: &Home,
-    mode: crate::loomhome::Mode,
+    mode: Mode,
+    source: &Path,
+    slot: &Slot,
     tools: &dyn Fn(&str) -> Option<PathBuf>,
     exe: &Path,
     bundle: Option<&Path>,
     emit: &mut dyn FnMut(&str, &str, &[String]),
     t: &mut Threads,
 ) -> Result<(), Failed> {
-    use crate::exec::{run_checked_env, run_job_stream, JOB};
-    use crate::loomhome::Mode;
-
-    let root = home.root.clone();
-    let source = home.source();
+    let root = ceremony_root(home, mode, source);
+    let source = source.to_path_buf();
     let core = source.join("src-tauri");
     let sha = crate::loomhome::genome_sha();
     let none: &[String] = &[];
@@ -559,20 +798,33 @@ fn ceremony_steps(
         t.steps.seed = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 2 · deps (network, once)
     if t.steps.deps {
         emit("deps", "dependencies already installed", none);
     } else {
         emit("deps", "npm ci — this is the step that needs the network", none);
-        let npm = need_tool(tools, "npm")?;
-        let out = run_checked_env(&[&npm, "ci", "--no-audit", "--no-fund"], &source, &root, DEPS_TIMEOUT, &[])?;
+        let (npm, node_path) = npm_with_node(tools)?;
+        let (out, _) = run_step(
+            slot,
+            "deps",
+            "npm ci",
+            &[&npm, "ci", "--no-audit", "--no-fund"],
+            &source,
+            &root,
+            DEPS_TIMEOUT,
+            &[("PATH", &node_path)],
+            emit,
+        )?;
         if out.code != 0 {
+            cancel_check(slot)?;
             return Err(step_failed("npm ci", &out));
         }
         t.steps.deps = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 3 · vendor (network, once)
     if t.steps.vendor {
@@ -581,14 +833,19 @@ fn ceremony_steps(
         emit("vendor", "cargo vendor — every crate, kept locally", none);
         let cargo = need_tool(tools, "cargo")?;
         let vendor_dir = home.vendor().to_string_lossy().into_owned();
-        let out = run_checked_env(
+        let (out, _) = run_step(
+            slot,
+            "vendor",
+            "vendoring the crates",
             &[&cargo, "vendor", "--versioned-dirs", &vendor_dir],
             &core,
             &root,
             VENDOR_TIMEOUT,
             &[],
+            emit,
         )?;
         if out.code != 0 {
+            cancel_check(slot)?;
             return Err(step_failed("cargo vendor", &out));
         }
         let cfg = source.join(".cargo").join("config.toml");
@@ -598,53 +855,56 @@ fn ceremony_steps(
         t.steps.vendor = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 4 · warm (the long one)
     if t.steps.warm {
         emit("warm", "the build is already warm", none);
     } else {
         emit("warm", "building the assets", none);
-        let npm = need_tool(tools, "npm")?;
-        let out = run_checked_env(&[&npm, "run", "build"], &source, &root, ASSETS_TIMEOUT, &[])?;
+        let (npm, node_path) = npm_with_node(tools)?;
+        let (out, _) = run_step(
+            slot,
+            "warm",
+            "building the assets",
+            &[&npm, "run", "build"],
+            &source,
+            &root,
+            ASSETS_TIMEOUT,
+            &[("PATH", &node_path)],
+            emit,
+        )?;
         if out.code != 0 {
+            cancel_check(slot)?;
             return Err(step_failed("npm run build", &out));
         }
+        cancel_check(slot)?;
         emit("warm", "compiling the core — native deps compile once", none);
         let cargo = need_tool(tools, "cargo")?;
         let target = home.target().to_string_lossy().into_owned();
-        let mut tail: Vec<String> = Vec::new();
-        let mut last_emit: Option<Instant> = None;
-        let out = run_job_stream(
-            &JOB,
+        let (out, tail) = run_step(
+            slot,
+            "warm",
+            "compiling the core",
             &[&cargo, "build", "--release", "--offline"],
             &core,
             &root,
             CORE_TIMEOUT,
             &[("CARGO_TARGET_DIR", &target), ("CARGO_NET_OFFLINE", "true")],
-            &mut |line| {
-                if line.trim().is_empty() {
-                    return;
-                }
-                if tail.len() == TAIL_LINES {
-                    tail.remove(0);
-                }
-                tail.push(line.to_string());
-                if last_emit.map_or(true, |t| t.elapsed() >= TAIL_EVERY) {
-                    emit("warm", "compiling the core", &tail);
-                    last_emit = Some(Instant::now());
-                }
-            },
+            emit,
         )?;
         if out.code != 0 {
-            if JOB.cancelled() {
-                return Err(LoomError::Parse("threading was cancelled — run it again to continue.".into()).into());
-            }
+            cancel_check(slot)?;
             return Err(step_failed("cargo build", &out));
         }
         emit("warm", "the core is built", &tail);
+        // The sherpa archive came down over HTTP during this build and will
+        // not come down again offline. Record where it landed, so status can
+        // report its absence before a weave discovers it the hard way.
         t.steps.warm = true;
-        write(home, t)?;
+        write_sherpa(home, t, sherpa_cache_now())?;
     }
+    cancel_check(slot)?;
 
     // 5 · register — the running body becomes generation 0
     if t.steps.register {
@@ -660,6 +920,7 @@ fn ceremony_steps(
         t.steps.register = true;
         write(home, t)?;
     }
+    cancel_check(slot)?;
 
     // 6 · stamp — threaded only now
     emit("stamp", "writing threads.json", none);
@@ -670,6 +931,27 @@ fn ceremony_steps(
     Ok(())
 }
 
+/// Is the job in flight THREADING's? `exec::JOB` says a job holds the slot,
+/// not whose it is; `thread_cancel` must never reach a weave.
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Raises the flag for as long as it lives and lowers it on drop — an
+/// unwinding job thread leaves nothing standing.
+struct Active;
+
+impl Active {
+    fn take() -> Active {
+        ACTIVE.store(true, Ordering::SeqCst);
+        Active
+    }
+}
+
+impl Drop for Active {
+    fn drop(&mut self) {
+        ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Start the ceremony as a background job. Refuses if threading or reweave
 /// is already in flight (they share `exec::JOB`). Progress arrives as
 /// `loom-thread` events; the command itself returns at once.
@@ -677,9 +959,11 @@ fn ceremony_steps(
 pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
     use tauri::Emitter;
     let home = Home::from_app(&app)?;
-    if !crate::exec::JOB.try_take() {
+    // The slot is held by an RAII guard from here on: every early return
+    // below, and a panic in the job thread, releases it.
+    let Some(slot) = crate::exec::SlotGuard::take(&crate::exec::JOB) else {
         return Err(LoomError::Parse("threading already in flight".into()));
-    }
+    };
     // Record the machine's tools (paths + versions) before the first step,
     // so drift has a baseline and every spawn below uses a recorded path.
     if read(&home).is_none() {
@@ -691,21 +975,27 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
             tools: discovered,
             steps: ThreadSteps::default(),
         };
-        if let Err(e) = write(&home, &fresh) {
-            crate::exec::JOB.release();
-            return Err(e);
-        }
+        write(&home, &fresh)?;
     }
     let mode = crate::loomhome::mode();
     let bundle = match mode {
-        crate::loomhome::Mode::Packaged => home.genome_bundle_resource(&app).ok(),
-        crate::loomhome::Mode::Dev => None,
+        Mode::Packaged => home.genome_bundle_resource(&app).ok(),
+        Mode::Dev => None,
     };
-    let exe = std::env::current_exe().map_err(|e| {
-        crate::exec::JOB.release();
-        LoomError::NotFound(format!("current exe: {e}"))
-    })?;
+    let started = (|| {
+        let source = ceremony_source(&home, mode)?;
+        let exe = std::env::current_exe()
+            .map_err(|e| LoomError::NotFound(format!("current exe: {e}")))?;
+        Ok::<(PathBuf, PathBuf), LoomError>((source, exe))
+    })();
+    let (source, exe) = started?;
     std::thread::spawn(move || {
+        // Both are RAII: this thread ending — by return or by panic — lowers
+        // the flag first and frees the slot second, so there is never a
+        // moment where a reweave holds the slot while threading still claims
+        // the right to cancel it.
+        let held = slot;
+        let _active = Active::take();
         let tools = |name: &str| tool_path(&home, name);
         let mut emit = |step: &str, detail: &str, tail: &[String]| {
             let _ = app.emit(
@@ -713,16 +1003,31 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
                 ThreadEvent { step: step.into(), detail: detail.into(), tail: tail.to_vec() },
             );
         };
-        let _ = run_ceremony(&home, mode, &tools, &exe, bundle.as_deref(), &mut emit);
-        crate::exec::JOB.release();
+        let _ = run_ceremony(
+            &home,
+            mode,
+            &source,
+            held.slot(),
+            &tools,
+            &exe,
+            bundle.as_deref(),
+            &mut emit,
+        );
     });
     Ok(())
 }
 
 /// Stop a running ceremony: group-kills the current tool. The step that was
 /// running stays unmarked, so the next `thread_loom` resumes from it.
+///
+/// Refused unless threading is the job in flight. The slot is shared with
+/// reweave, and a weave past its cancellable stages is not threading's to
+/// kill — the spec's point of return belongs to the reweave card.
 #[tauri::command]
 pub fn thread_cancel() -> Result<(), LoomError> {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return Err(LoomError::Parse(NOTHING_TO_CANCEL.into()));
+    }
     crate::exec::JOB.kill();
     Ok(())
 }
@@ -740,6 +1045,18 @@ mod tests {
         std::fs::create_dir_all(dir).unwrap();
         let p = dir.join(name);
         std::fs::write(&p, format!("#!/bin/sh\necho \"{line}\"\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    /// A fake executable with a body of its own (the shebang interpreter
+    /// runs it; LOOM never spawns a shell itself).
+    #[cfg(unix)]
+    fn fake_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
     }
@@ -814,6 +1131,45 @@ mod tests {
             Some(nvm.join("v22.3.0").join("bin").join("node").to_str().unwrap())
         );
         assert_eq!(tool.version.as_deref(), Some("v22.3.0"));
+    }
+
+    #[test]
+    fn npm_path_env_puts_the_recorded_node_first() {
+        let v = npm_path_env(Path::new("/opt/loom/node/v22.3.0/bin/node")).unwrap();
+        let mut entries = std::env::split_paths(&v);
+        assert_eq!(
+            entries.next().unwrap(),
+            PathBuf::from("/opt/loom/node/v22.3.0/bin"),
+            "the recorded node's own directory leads: {v}"
+        );
+        // Nothing the process already had is dropped — the pair prepends.
+        let rest: Vec<PathBuf> = entries.collect();
+        for dir in std::env::split_paths(&std::env::var("PATH").unwrap_or_default()) {
+            assert!(rest.contains(&dir), "{} was dropped from PATH", dir.display());
+        }
+        assert_eq!(npm_path_env(Path::new("node")), None, "a bare name has no directory");
+    }
+
+    /// npm is a `#!/usr/bin/env node` shim: an absolute npm path is not
+    /// enough, node has to be ON PATH. A Finder-launched app's PATH is
+    /// `/usr/bin:/bin:/usr/sbin:/sbin`, which has neither nvm nor homebrew,
+    /// so the probe answered `env: node: No such file or directory` and the
+    /// table showed npm with a valid path and no version.
+    #[cfg(unix)]
+    #[test]
+    fn npm_version_probe_carries_the_recorded_node() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let bin = home.join(".nvm").join("versions").join("node").join("v22.3.0").join("bin");
+        fake_exe(&bin, "node", "v22.3.0");
+        fake_script(&bin, "npm", "command -v node");
+        let tool = discover(spec_for("npm"), &home, "");
+        assert_eq!(tool.path.as_deref(), Some(bin.join("npm").to_str().unwrap()));
+        assert_eq!(
+            tool.version.as_deref(),
+            Some(bin.join("node").to_str().unwrap()),
+            "the probe must see the RECORDED node, not whatever PATH the app inherited"
+        );
     }
 
     #[cfg(unix)]
@@ -896,6 +1252,87 @@ mod tests {
         assert!(tool_path(&home, "git").map_or(true, |p| p != git));
     }
 
+    /// CANCEL on the threading card must not reach a weave: `exec::JOB` says
+    /// a job holds the slot, not whose it is, and a reweave past its
+    /// cancellable stages is nobody's to kill.
+    #[test]
+    fn cancel_is_refused_unless_threading_owns_the_job() {
+        match thread_cancel().unwrap_err() {
+            LoomError::Parse(m) => assert_eq!(m, NOTHING_TO_CANCEL),
+            e => panic!("expected the honest refusal, got {e:?}"),
+        }
+        // While the ceremony runs the flag says so; it lowers on drop, so a
+        // job thread that panics leaves nothing cancellable behind.
+        {
+            let _active = Active::take();
+            assert!(ACTIVE.load(Ordering::SeqCst));
+        }
+        assert!(!ACTIVE.load(Ordering::SeqCst));
+        assert!(thread_cancel().is_err(), "refused again once the ceremony ended");
+    }
+
+    #[test]
+    fn the_sherpa_cache_resolves_to_the_deepest_single_child() {
+        let d = tempfile::tempdir().unwrap();
+        let home_dir = d.path();
+        // Nothing downloaded yet.
+        assert_eq!(resolve_sherpa_cache(home_dir), None);
+
+        let root = sherpa_cache_root(home_dir);
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(resolve_sherpa_cache(home_dir), None, "an empty root is a purged cache");
+
+        // One target, one hash, one distribution: the deepest one wins.
+        let dist = root.join("aarch64-apple-darwin").join("e3f3596b").join("sherpa-onnx-v1.12.9");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("lib.a"), b"x").unwrap();
+        assert_eq!(resolve_sherpa_cache(home_dir).as_deref(), Some(dist.as_path()));
+
+        // Two targets: the walk stops where the tree forks.
+        std::fs::create_dir_all(root.join("x86_64-apple-darwin")).unwrap();
+        assert_eq!(resolve_sherpa_cache(home_dir).as_deref(), Some(root.as_path()));
+    }
+
+    /// The archive comes down over HTTP once and never again offline. A
+    /// recorded path that has gone is drift, said before the weave rather
+    /// than discovered minutes into one.
+    #[test]
+    fn a_vanished_sherpa_cache_is_reported_as_drift() {
+        let d = tempfile::tempdir().unwrap();
+        let home = crate::loomhome::Home::at(d.path().join("loom"));
+        let cache = d.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("lib.a"), b"x").unwrap();
+
+        let t = Threads {
+            threaded: true,
+            threaded_at: None,
+            threaded_sha: None,
+            tools: vec![],
+            steps: ThreadSteps { seed: true, deps: true, vendor: true, warm: true, register: true },
+        };
+        write_sherpa(&home, &t, Some(cache.to_string_lossy().into_owned())).unwrap();
+        assert_eq!(read_sherpa(&home).as_deref(), Some(cache.to_str().unwrap()));
+
+        let s = status_with(&home, &[], d.path(), "");
+        assert_eq!(s.sherpa_cache.as_deref(), Some(cache.to_str().unwrap()));
+        assert!(s.drifted.is_empty(), "the cache is there: {:?}", s.drifted);
+
+        // A later step of the ceremony must not drop the record.
+        write(&home, &t).unwrap();
+        assert_eq!(read_sherpa(&home).as_deref(), Some(cache.to_str().unwrap()));
+
+        // macOS purges it under disk pressure; loomhome_bytes never counted it.
+        std::fs::remove_dir_all(&cache).unwrap();
+        let s = status_with(&home, &[], d.path(), "");
+        assert_eq!(s.drifted, vec![SHERPA_DRIFT.to_string()]);
+        assert_eq!(s.sherpa_cache.as_deref(), Some(cache.to_str().unwrap()), "status still names it");
+
+        // An emptied directory is just as useless as a missing one.
+        std::fs::create_dir_all(&cache).unwrap();
+        assert!(status_with(&home, &[], d.path(), "").drifted.contains(&SHERPA_DRIFT.to_string()));
+    }
+
     #[test]
     fn write_json_atomic_leaves_no_temp_file() {
         let d = tempfile::tempdir().unwrap();
@@ -966,6 +1403,7 @@ mod tests {
             drifted: vec![],
             steps: ThreadSteps::default(),
             needs_network: true,
+            sherpa_cache: None,
         };
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["needsNetwork"], true);
@@ -981,9 +1419,17 @@ mod tests {
     struct Stage {
         _dir: tempfile::TempDir,
         home: Home,
+        /// This ceremony's own job slot. The app runs in `exec::JOB`; a test
+        /// that shared it could group-kill another test's tools.
+        slot: &'static Slot,
+        /// The dev checkout — where the owner keeps it, NOT under loomhome.
+        /// `loomhome/source` is seed's work, and seed runs in packaged mode
+        /// only; a fixture that pre-creates it hides that dev has no source.
+        source: PathBuf,
         log: PathBuf,
         markers: PathBuf,
         npm: PathBuf,
+        node: PathBuf,
         cargo: PathBuf,
         exe: PathBuf,
     }
@@ -1008,16 +1454,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("loom");
         let home = Home::at(root.clone());
-        std::fs::create_dir_all(home.source().join("src-tauri")).unwrap();
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+        assert!(slot.try_take(), "the ceremony holds its slot, as thread_loom does");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = dir.path().join("checkout");
+        std::fs::create_dir_all(source.join("src-tauri")).unwrap();
         let log = dir.path().join("calls.log");
         let markers = dir.path().join("markers");
         std::fs::create_dir_all(&markers).unwrap();
         let bin = dir.path().join("bin");
         let npm = fake_tool(&bin, "npm", &log, &markers, npm_extra);
+        let node = fake_exe(&bin, "node", "v22.3.0");
         let cargo = fake_tool(&bin, "cargo", &log, &markers, cargo_extra);
         let exe = dir.path().join("loom-body");
         std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
-        Stage { _dir: dir, home, log, markers, npm, cargo, exe }
+        Stage { _dir: dir, home, slot, source, log, markers, npm, node, cargo, exe }
     }
 
     #[cfg(unix)]
@@ -1025,6 +1476,7 @@ mod tests {
         fn tools(&self) -> impl Fn(&str) -> Option<PathBuf> + '_ {
             move |name: &str| match name {
                 "npm" => Some(self.npm.clone()),
+                "node" => Some(self.node.clone()),
                 "cargo" => Some(self.cargo.clone()),
                 _ => None,
             }
@@ -1037,7 +1489,9 @@ mod tests {
             let tools = self.tools();
             let res = run_ceremony(
                 &self.home,
-                crate::loomhome::Mode::Dev,
+                Mode::Dev,
+                &self.source,
+                self.slot,
                 &tools,
                 &self.exe,
                 None,
@@ -1101,6 +1555,21 @@ fi"#;
             .expect("a warm event carries a 3-line tail");
         assert_eq!(warm_tail, vec!["Compiling b", "Compiling c", "Compiling d"]);
 
+        // The warm build is where the sherpa archive lands; the manifest
+        // records where, so a later status can miss it.
+        assert_eq!(
+            read_sherpa(&st.home),
+            resolve_sherpa_cache(&owner_home()).map(|p| p.to_string_lossy().into_owned()),
+            "the warm step records the cache this machine has"
+        );
+
+        // Dev works in the checkout; loomhome/source is seed's, and seed
+        // does not run in dev. Nothing may have created it.
+        assert!(
+            !st.home.source().exists(),
+            "dev threading must never look for a source under loomhome"
+        );
+
         // Stamped: every marker, threaded, sha + time recorded.
         let t = read(&st.home).unwrap();
         assert!(t.threaded);
@@ -1119,6 +1588,22 @@ fi"#;
         let meta: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(st.home.generation_meta(sha)).unwrap()).unwrap();
         assert_eq!(meta["reason"], "threaded");
+    }
+
+    #[test]
+    fn the_source_and_the_root_are_resolved_per_mode() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        // Packaged names loomhome/source without asking whether it exists —
+        // on the first threading it does not, seed is what creates it.
+        assert!(!home.source().exists());
+        assert_eq!(ceremony_source(&home, Mode::Packaged).unwrap(), home.source());
+        // Packaged spawns are contained by loomhome, which holds the source.
+        assert_eq!(ceremony_root(&home, Mode::Packaged, &home.source()), home.root);
+        // Dev's checkout lives wherever the owner keeps it, so the allowed
+        // root is the checkout — loomhome would refuse every spawn.
+        let checkout = d.path().join("checkout");
+        assert_eq!(ceremony_root(&home, Mode::Dev, &checkout), checkout);
     }
 
     #[cfg(unix)]
@@ -1177,13 +1662,126 @@ fi"#;
         let st = stage("", CARGO_BUILD_FAKE);
         let (res, _) = st.run();
         assert!(res.is_ok(), "{res:?}");
-        let cfg = std::fs::read_to_string(st.home.source().join(".cargo").join("config.toml")).unwrap();
+        let cfg = std::fs::read_to_string(st.source.join(".cargo").join("config.toml")).unwrap();
         let expected = format!(
             "[source.crates-io]\nreplace-with = \"vendored\"\n[source.vendored]\ndirectory = \"{}\"\n[net]\noffline = true\n",
             st.home.vendor().display()
         );
         assert_eq!(cfg, expected);
         assert!(st.markers.join("cargo-vendor").exists());
+    }
+
+    /// Both npm spawns in the ceremony — deps and the warm assets build —
+    /// carry the pair, or the packaged self-rebuild dies at `npm ci`.
+    #[cfg(unix)]
+    #[test]
+    fn every_npm_spawn_carries_the_recorded_node_on_path() {
+        let st = stage(
+            r#"echo "npm-saw=${PATH%%:*}" >> "$(dirname "$0")/../calls.log""#,
+            CARGO_BUILD_FAKE,
+        );
+        let (res, _) = st.run();
+        assert!(res.is_ok(), "{res:?}");
+        let bin = st.node.parent().unwrap().to_string_lossy().into_owned();
+        let log = st.log();
+        let saw: Vec<&str> = log.lines().filter(|l| l.starts_with("npm-saw=")).collect();
+        let want = format!("npm-saw={bin}");
+        assert_eq!(
+            saw,
+            vec![want.as_str(), want.as_str()],
+            "npm ci and npm run build both lead PATH with the recorded node's directory"
+        );
+    }
+
+    /// node is what makes npm runnable, so a machine without it stops at the
+    /// same wall as a machine without npm — with node's own install line.
+    #[cfg(unix)]
+    #[test]
+    fn npm_without_node_stops_with_nodes_install_line() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        let mut events: Vec<(String, String, Vec<String>)> = Vec::new();
+        let npm_only = |name: &str| if name == "npm" { Some(st.npm.clone()) } else { None };
+        let res = run_ceremony(
+            &st.home,
+            Mode::Dev,
+            &st.source,
+            st.slot,
+            &npm_only,
+            &st.exe,
+            None,
+            &mut |s, d, t| events.push((s.into(), d.into(), t.to_vec())),
+        );
+        assert!(res.is_err());
+        let last = events.last().unwrap();
+        assert_eq!(last.0, "failed");
+        assert!(last.1.contains("node is missing"), "{:?}", last.1);
+        assert!(last.1.contains("brew install node"), "{:?}", last.1);
+        assert!(st.log().is_empty(), "nothing spawned");
+    }
+
+    /// `npm ci` is the longest step that reaches the internet. CANCEL during
+    /// it has to take the process down — with `run_checked_env` no pid was
+    /// ever registered, so the stop button stopped nothing and LOOM kept
+    /// talking to the registry.
+    #[cfg(unix)]
+    #[test]
+    fn cancel_during_npm_ci_kills_it_and_stops_the_ceremony() {
+        let st = stage(r#"if [ "$1" = ci ]; then sleep 30; fi"#, CARGO_BUILD_FAKE);
+        let slot = st.slot;
+        let home = Home::at(st.home.root.clone());
+        let source = st.source.clone();
+        let exe = st.exe.clone();
+        let npm = st.npm.clone();
+        let node = st.node.clone();
+        let cargo = st.cargo.clone();
+        let job = std::thread::spawn(move || {
+            let tools = move |name: &str| match name {
+                "npm" => Some(npm.clone()),
+                "node" => Some(node.clone()),
+                "cargo" => Some(cargo.clone()),
+                _ => None,
+            };
+            run_ceremony(&home, Mode::Dev, &source, slot, &tools, &exe, None, &mut |_, _, _| {})
+        });
+
+        let start = Instant::now();
+        while slot.pid().is_none() && start.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid = slot.pid().expect("npm ci registers its pid — otherwise CANCEL reaches nothing");
+        slot.kill();
+        let res = job.join().unwrap();
+
+        assert!(start.elapsed() < Duration::from_secs(20), "the kill lands promptly");
+        match res {
+            Err(LoomError::Parse(m)) => assert_eq!(m, CANCELLED),
+            other => panic!("expected the cancelled line, got {other:?}"),
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(
+            unsafe { libc::kill(pid as i32, 0) } != 0,
+            "the npm tree must be dead after CANCEL"
+        );
+        let log = st.log();
+        assert!(!log.contains("cargo vendor"), "nothing after the cancelled step runs: {log}");
+        assert!(!read(&st.home).unwrap().steps.deps, "the cancelled step stays unmarked");
+    }
+
+    /// A cancel that lands between two steps stops the ceremony too — the
+    /// warm build was the only place the mark was ever read.
+    #[cfg(unix)]
+    #[test]
+    fn a_cancel_between_steps_stops_before_the_next_one() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        st.slot.kill(); // marks cancelled; no child is running
+        let (res, events) = st.run();
+        match res {
+            Err(LoomError::Parse(m)) => assert_eq!(m, CANCELLED),
+            other => panic!("expected the cancelled line, got {other:?}"),
+        }
+        assert_eq!(events.last().unwrap().0, "failed");
+        assert!(st.log().is_empty(), "no tool was spawned: {:?}", st.log());
+        assert!(!read(&st.home).unwrap().threaded);
     }
 
     #[cfg(unix)]
@@ -1194,7 +1792,9 @@ fi"#;
         let none = |_: &str| None::<PathBuf>;
         let res = run_ceremony(
             &st.home,
-            crate::loomhome::Mode::Dev,
+            Mode::Dev,
+            &st.source,
+            st.slot,
             &none,
             &st.exe,
             None,
