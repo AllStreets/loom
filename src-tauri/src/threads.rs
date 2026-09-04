@@ -274,6 +274,73 @@ pub fn locate_now(name: &str) -> Option<PathBuf> {
     locate(spec(name)?, &owner_home(), &path_env())
 }
 
+// ── The sherpa cache ──────────────────────────────────────────────────────────
+
+/// The name `thread_status` reports when the sherpa cache has gone.
+pub const SHERPA_DRIFT: &str = "sherpa cache";
+
+/// The key `threads.json` keeps the resolved cache path under.
+const SHERPA_KEY: &str = "sherpaCache";
+
+/// Where sherpa-rs keeps the prebuilt archive its build script downloads.
+///
+/// The spec says it lands in the target's OUT_DIR and stays; it does not. It
+/// is a user cache — `~/Library/Caches/sherpa-rs/<triple>/<hash>/<dist>` on
+/// macOS, `~/.cache/sherpa-rs` elsewhere — outside loomhome, uncounted by
+/// `loomhome_bytes`, and purgeable by the OS under disk pressure. It also
+/// arrives over HTTP at build time, so once the network is gone it cannot
+/// arrive again.
+pub fn sherpa_cache_root(home_dir: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        home_dir.join("Library").join("Caches").join("sherpa-rs")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        home_dir.join(".cache").join("sherpa-rs")
+    }
+}
+
+/// The deepest single-child directory under the cache root — the extracted
+/// distribution itself when one target built here, the root when several
+/// did. `None` when nothing was ever downloaded, or when the root is empty.
+/// Threading records what this resolves to; `thread_status` later reports
+/// that exact path as drift when it is gone, so an offline weave fails early
+/// and honestly instead of opaquely, minutes in.
+pub fn resolve_sherpa_cache(home_dir: &Path) -> Option<PathBuf> {
+    let root = sherpa_cache_root(home_dir);
+    if !root.is_dir() {
+        return None;
+    }
+    let mut here = root.clone();
+    loop {
+        let mut children = std::fs::read_dir(&here).ok()?.filter_map(|e| e.ok());
+        let Some(first) = children.next() else {
+            // An empty root is a cache that was purged, not one that is here.
+            return if here == root { None } else { Some(here) };
+        };
+        if children.next().is_some() || !first.path().is_dir() {
+            return Some(here);
+        }
+        here = first.path();
+    }
+}
+
+/// The cache as it stands on this machine, for the owner running LOOM.
+fn sherpa_cache_now() -> Option<String> {
+    resolve_sherpa_cache(&owner_home()).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Has a recorded cache gone? A path that is no longer a directory, or one
+/// that is now empty, cannot serve an offline build.
+fn sherpa_gone(recorded: &str) -> bool {
+    let p = Path::new(recorded);
+    if !p.is_dir() {
+        return true;
+    }
+    std::fs::read_dir(p).map(|mut d| d.next().is_none()).unwrap_or(true)
+}
+
 // ── The manifest ──────────────────────────────────────────────────────────────
 
 /// Which ceremony steps have completed. Each step checks its own marker, so
@@ -331,8 +398,31 @@ pub fn read(home: &Home) -> Option<Threads> {
     serde_json::from_str(&raw).ok()
 }
 
+/// The sherpa cache path recorded at threading, if any.
+///
+/// It sits beside the manifest rather than inside `Threads` because it does
+/// not describe a tool LOOM found and can find again: it is a cache LOOM
+/// cannot rebuild once the network is gone, recorded once and thereafter only
+/// checked. `write` carries whatever is on disk forward, so no later step of
+/// the ceremony can drop it.
+pub fn read_sherpa(home: &Home) -> Option<String> {
+    let raw = std::fs::read_to_string(home.threads_json()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get(SHERPA_KEY)?.as_str().map(|s| s.to_string())
+}
+
 pub fn write(home: &Home, t: &Threads) -> Result<(), LoomError> {
-    write_json_atomic(&home.threads_json(), t)
+    let kept = read_sherpa(home);
+    write_sherpa(home, t, kept)
+}
+
+/// Write the manifest and the sherpa cache path together.
+pub fn write_sherpa(home: &Home, t: &Threads, sherpa: Option<String>) -> Result<(), LoomError> {
+    let mut v = serde_json::to_value(t).map_err(|e| LoomError::Parse(e.to_string()))?;
+    if let (Some(obj), Some(p)) = (v.as_object_mut(), sherpa) {
+        obj.insert(SHERPA_KEY.to_string(), serde_json::Value::String(p));
+    }
+    write_json_atomic(&home.threads_json(), &v)
 }
 
 /// A recorded tool's path if it still exists on disk; otherwise a fresh
@@ -365,6 +455,11 @@ pub struct ThreadStatus {
     pub drifted: Vec<String>,
     pub steps: ThreadSteps,
     pub needs_network: bool,
+    /// Where threading found the sherpa prebuilt archive. When it is gone it
+    /// also appears in `drifted` as `sherpa cache`: no weave can fetch it
+    /// again offline, and the owner should hear that before the weave, not
+    /// minutes into one.
+    pub sherpa_cache: Option<String>,
 }
 
 /// Discover every spec now and compare against the manifest. `specs`,
@@ -389,6 +484,10 @@ pub fn status_with(home: &Home, specs: &[ToolSpec], home_dir: &Path, path_env: &
             }
         }
     }
+    let sherpa = read_sherpa(home);
+    if sherpa.as_deref().map_or(false, sherpa_gone) {
+        drifted.push(SHERPA_DRIFT.to_string());
+    }
     let steps = recorded.as_ref().map(|r| r.steps).unwrap_or_default();
     ThreadStatus {
         threaded: recorded.as_ref().map_or(false, |r| r.threaded),
@@ -397,6 +496,7 @@ pub fn status_with(home: &Home, specs: &[ToolSpec], home_dir: &Path, path_env: &
         drifted,
         steps,
         needs_network: !steps.deps || !steps.vendor,
+        sherpa_cache: sherpa,
     }
 }
 
@@ -798,8 +898,11 @@ fn ceremony_steps(
             return Err(step_failed("cargo build", &out));
         }
         emit("warm", "the core is built", &tail);
+        // The sherpa archive came down over HTTP during this build and will
+        // not come down again offline. Record where it landed, so status can
+        // report its absence before a weave discovers it the hard way.
         t.steps.warm = true;
-        write(home, t)?;
+        write_sherpa(home, t, sherpa_cache_now())?;
     }
     cancel_check(slot)?;
 
@@ -1165,6 +1268,68 @@ mod tests {
     }
 
     #[test]
+    fn the_sherpa_cache_resolves_to_the_deepest_single_child() {
+        let d = tempfile::tempdir().unwrap();
+        let home_dir = d.path();
+        // Nothing downloaded yet.
+        assert_eq!(resolve_sherpa_cache(home_dir), None);
+
+        let root = sherpa_cache_root(home_dir);
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(resolve_sherpa_cache(home_dir), None, "an empty root is a purged cache");
+
+        // One target, one hash, one distribution: the deepest one wins.
+        let dist = root.join("aarch64-apple-darwin").join("e3f3596b").join("sherpa-onnx-v1.12.9");
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("lib.a"), b"x").unwrap();
+        assert_eq!(resolve_sherpa_cache(home_dir).as_deref(), Some(dist.as_path()));
+
+        // Two targets: the walk stops where the tree forks.
+        std::fs::create_dir_all(root.join("x86_64-apple-darwin")).unwrap();
+        assert_eq!(resolve_sherpa_cache(home_dir).as_deref(), Some(root.as_path()));
+    }
+
+    /// The archive comes down over HTTP once and never again offline. A
+    /// recorded path that has gone is drift, said before the weave rather
+    /// than discovered minutes into one.
+    #[test]
+    fn a_vanished_sherpa_cache_is_reported_as_drift() {
+        let d = tempfile::tempdir().unwrap();
+        let home = crate::loomhome::Home::at(d.path().join("loom"));
+        let cache = d.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("lib.a"), b"x").unwrap();
+
+        let t = Threads {
+            threaded: true,
+            threaded_at: None,
+            threaded_sha: None,
+            tools: vec![],
+            steps: ThreadSteps { seed: true, deps: true, vendor: true, warm: true, register: true },
+        };
+        write_sherpa(&home, &t, Some(cache.to_string_lossy().into_owned())).unwrap();
+        assert_eq!(read_sherpa(&home).as_deref(), Some(cache.to_str().unwrap()));
+
+        let s = status_with(&home, &[], d.path(), "");
+        assert_eq!(s.sherpa_cache.as_deref(), Some(cache.to_str().unwrap()));
+        assert!(s.drifted.is_empty(), "the cache is there: {:?}", s.drifted);
+
+        // A later step of the ceremony must not drop the record.
+        write(&home, &t).unwrap();
+        assert_eq!(read_sherpa(&home).as_deref(), Some(cache.to_str().unwrap()));
+
+        // macOS purges it under disk pressure; loomhome_bytes never counted it.
+        std::fs::remove_dir_all(&cache).unwrap();
+        let s = status_with(&home, &[], d.path(), "");
+        assert_eq!(s.drifted, vec![SHERPA_DRIFT.to_string()]);
+        assert_eq!(s.sherpa_cache.as_deref(), Some(cache.to_str().unwrap()), "status still names it");
+
+        // An emptied directory is just as useless as a missing one.
+        std::fs::create_dir_all(&cache).unwrap();
+        assert!(status_with(&home, &[], d.path(), "").drifted.contains(&SHERPA_DRIFT.to_string()));
+    }
+
+    #[test]
     fn write_json_atomic_leaves_no_temp_file() {
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("nested").join("threads.json");
@@ -1234,6 +1399,7 @@ mod tests {
             drifted: vec![],
             steps: ThreadSteps::default(),
             needs_network: true,
+            sherpa_cache: None,
         };
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["needsNetwork"], true);
@@ -1384,6 +1550,14 @@ fi"#;
             .find(|t| t.len() == 3)
             .expect("a warm event carries a 3-line tail");
         assert_eq!(warm_tail, vec!["Compiling b", "Compiling c", "Compiling d"]);
+
+        // The warm build is where the sherpa archive lands; the manifest
+        // records where, so a later status can miss it.
+        assert_eq!(
+            read_sherpa(&st.home),
+            resolve_sherpa_cache(&owner_home()).map(|p| p.to_string_lossy().into_owned()),
+            "the warm step records the cache this machine has"
+        );
 
         // Dev works in the checkout; loomhome/source is seed's, and seed
         // does not run in dev. Nothing may have created it.
