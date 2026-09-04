@@ -112,6 +112,12 @@ const PROTECTED_PREFIXES: &[&str] = &[
     "src/lib/loom/validate",          // manifest wall + the owner-facing labels
     "src/components/chrome/reweave",  // the reweave card — CANCEL lives here
     "src/organs/seeds/settings",      // the generations list: the road home
+    // Round-1 fixes moved the consent for a body change out of the organ API
+    // and into shell-owned chrome. That chrome is now the ONLY wall between an
+    // organ and the binary swap, so it joins the set it replaced.
+    "src/lib/organs/bodygate",        // an organ may ask; this is the asking
+    "src/components/chrome/bodyrequest", // the shell answers — the only caller
+    "src/components/chrome/consentcard", // the card the owner actually reads
 ];
 
 /// tsconfig*.json — matched by name pattern (tsconfig.json, tsconfig.node.json…).
@@ -2164,6 +2170,10 @@ mod tests {
         // Phase 23 sweep: the protected TS orchestration prefixes and
         // `.cargo/config.toml` at any depth.
         for f in [
+            "src/lib/organs/bodyGate.ts",
+            "src/lib/organs/bodyGate.test.ts",
+            "src/components/chrome/BodyRequest.tsx",
+            "src/components/chrome/ConsentCard.tsx",
             "src/lib/organs/api.ts",
             "src/lib/organs/api.test.ts",
             "src/lib/organs/budgets.ts",
