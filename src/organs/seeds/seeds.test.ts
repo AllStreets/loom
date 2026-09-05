@@ -453,14 +453,38 @@ describe("settings seed — LOOM page", () => {
     );
   });
 
-  it("REWEAVE stays hidden when HEAD has not moved, though the baked sha differs", async () => {
+  it("REWEAVE stays hidden when HEAD is the running body, whatever the ledger says", async () => {
     const { el } = await renderSettings(
       selfMock({
         identity: async () =>
-          threadedDev({ mode: "packaged", genomeSha: SHA_B, generation: SHA_A, genomeHead: SHA_A }),
+          threadedDev({ mode: "packaged", genomeSha: SHA_A, generation: SHA_B, genomeHead: SHA_A }),
       }),
     );
     expect(el.querySelector('[data-action="self-reweave"]')).toBeNull();
+  });
+
+  /**
+   * Round-4 review, Finding 1, at the surface that hid the button.
+   *
+   * The swap writes the ledger before the new body has ever booted, so a swap
+   * that died at its last step leaves `generation` naming the new sha while
+   * the OLD body still runs. Settings compared HEAD with the ledger and hid
+   * REWEAVE, the note said the body matched the genome, and the RETURN the
+   * failure message pointed at is refused by the core for the same reason.
+   * The comparison is against the running body — `genomeSha` — as the core's
+   * own `check_start` does it.
+   */
+  it("REWEAVE appears when the ledger led the body and the swap died", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () =>
+          threadedDev({ mode: "packaged", genomeSha: SHA_A, generation: SHA_B, genomeHead: SHA_B }),
+      }),
+    );
+    expect(el.querySelector('[data-action="self-reweave"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="loom-page"]')!.textContent).not.toContain(
+      "the body matches the genome",
+    );
   });
 
   it("the identity block names the body, the ledger and the genome's head apart", async () => {
@@ -475,6 +499,51 @@ describe("settings seed — LOOM page", () => {
     expect(id.textContent).toContain("generation");
     expect(id.textContent).toContain("genome head");
     expect(id.textContent).toContain(SHA_B.slice(0, 7));
+  });
+
+  /**
+   * Round-4 review, findings 3 and 4, at the shelf.
+   *
+   * The warden's heal writes `{ current: prev, previous: <the failed sha> }`,
+   * so after a heal the ledger's PREVIOUS is the body that would not boot.
+   * Badging it as the way home invites the owner to go back to it.
+   */
+  it("a generation that failed to be born is badged as such, and is not the PREVIOUS one", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () => threadedDev({ mode: "packaged", generation: SHA_A, genomeSha: SHA_A }),
+        generations: async () => [
+          { sha: SHA_B, wovenAt: new Date().toISOString(), sizeBytes: 42, reason: "reweave", commitSubject: "b", isCurrent: false, isPrevious: true, failedToBoot: true, failedReason: "crashed" },
+          { sha: SHA_A, wovenAt: new Date().toISOString(), sizeBytes: 41, reason: "reweave", commitSubject: "a", isCurrent: true, isPrevious: false, failedToBoot: false, failedReason: null },
+        ],
+      }),
+    );
+    await tick();
+    const failed = el.querySelector('[data-testid="loom-generation-' + SHA_B.slice(0, 7) + '"]') as HTMLElement;
+    expect(failed.textContent).toContain("DIDN'T BOOT");
+    expect(failed.textContent).not.toContain("PREVIOUS");
+    // It stays on the shelf with its RETURN: a deliberate, named choice is
+    // still the owner's to make — what is withdrawn is the invitation.
+    expect(failed.querySelector('[data-action^="self-return-"]')).not.toBeNull();
+  });
+
+  /** And the note above REWEAVE says so before the owner presses it. */
+  it("the reweave note says when the head is the weave that did not hold", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () =>
+          threadedDev({ mode: "packaged", genomeSha: SHA_A, generation: SHA_A, genomeHead: SHA_B }),
+        generations: async () => [
+          { sha: SHA_B, wovenAt: new Date().toISOString(), sizeBytes: 42, reason: "reweave", commitSubject: "b", isCurrent: false, isPrevious: true, failedToBoot: true, failedReason: "crashed" },
+          { sha: SHA_A, wovenAt: new Date().toISOString(), sizeBytes: 41, reason: "reweave", commitSubject: "a", isCurrent: true, isPrevious: false, failedToBoot: false, failedReason: null },
+        ],
+      }),
+    );
+    await tick();
+    expect(el.querySelector('[data-action="self-reweave"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="loom-reweave-note"]')!.textContent).toContain(
+      "didn't boot last time",
+    );
   });
 
   /**
@@ -507,7 +576,7 @@ describe("settings seed — LOOM page", () => {
     // carries the sentence. The organ no longer holds a second confirm strip
     // that would ask the same question twice in the same words.
     const reweave = vi.fn(async () => ({ ok: true }));
-    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", generation: SHA_B }), reweave }));
+    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", genomeHead: SHA_B }), reweave }));
     const btn = el.querySelector('[data-action="self-reweave"]') as HTMLButtonElement;
     expect(btn).not.toBeNull();
     expect(btn.textContent).toBe("REWEAVE");
@@ -522,7 +591,7 @@ describe("settings seed — LOOM page", () => {
 
   it("a refused reweave states the reason inline", async () => {
     const reweave = vi.fn(async () => ({ ok: false, reason: "a weave is already under way" }));
-    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", generation: SHA_B }), reweave }));
+    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", genomeHead: SHA_B }), reweave }));
     (el.querySelector('[data-action="self-reweave"]') as HTMLButtonElement).click();
     await tick();
     expect(el.querySelector('[data-testid="loom-reweave-note"]')!.textContent).toContain("a weave is already under way");
@@ -530,7 +599,7 @@ describe("settings seed — LOOM page", () => {
 
   it("a declined reweave states the owner's own answer, not a failure", async () => {
     const reweave = vi.fn(async () => { throw new Error("you said not now — the body stays as it is"); });
-    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", generation: SHA_B }), reweave }));
+    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", genomeHead: SHA_B }), reweave }));
     (el.querySelector('[data-action="self-reweave"]') as HTMLButtonElement).click();
     await tick();
     const note = el.querySelector('[data-testid="loom-reweave-note"]') as HTMLElement;

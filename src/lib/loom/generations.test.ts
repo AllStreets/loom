@@ -14,6 +14,7 @@ import type { Generation } from "../core";
 import {
   listGenerations,
   returnToGeneration,
+  previousGeneration,
   describe as describeGeneration,
   relativeTime,
 } from "./generations";
@@ -26,6 +27,8 @@ const gen = (over: Partial<Generation> = {}): Generation => ({
   commitSubject: "fix the orb pulse",
   isCurrent: true,
   isPrevious: false,
+  failedToBoot: false,
+  failedReason: null,
   ...over,
 });
 
@@ -49,6 +52,49 @@ describe("returnToGeneration", () => {
     core.generationsReturn.mockResolvedValue(undefined);
     await returnToGeneration("3f2a1c9d");
     expect(core.generationsReturn).toHaveBeenCalledWith("3f2a1c9d");
+  });
+});
+
+/**
+ * Round-4 review, Finding 3. After a heal the ledger's `previous` IS the body
+ * that just failed to boot — the warden writes `{ current: prev, previous:
+ * <the failed sha> }` — so "return to the previous generation" pointed LOOM at
+ * the generation it had just come home from: close, swap in the body that
+ * would not start, and lean on the warden to bring it home again.
+ */
+describe("previousGeneration — the way home", () => {
+  const A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const C = "cccccccccccccccccccccccccccccccccccccccc";
+
+  it("is the ledger's previous, when that body was born whole", () => {
+    const rows = [gen({ sha: A, isCurrent: true }), gen({ sha: B, isCurrent: false, isPrevious: true })];
+    expect(previousGeneration(rows)?.sha).toBe(B);
+  });
+
+  it("is never the generation LOOM just healed away from", () => {
+    // The shelf a heal leaves, newest first: the failed body is `previous`.
+    const rows = [
+      gen({ sha: C, isCurrent: false, isPrevious: true, failedToBoot: true, failedReason: "crashed" }),
+      gen({ sha: A, isCurrent: true }),
+      gen({ sha: B, isCurrent: false }),
+    ];
+    const home = previousGeneration(rows);
+    expect(home?.sha).toBe(B);
+    expect(home?.failedToBoot).toBe(false);
+  });
+
+  it("the running body is not somewhere to return to, and neither is nothing", () => {
+    expect(previousGeneration([gen({ sha: A, isCurrent: true })])).toBeNull();
+    expect(previousGeneration([])).toBeNull();
+    // A shelf of nothing but failures has no way home either — the honest
+    // answer is that there is none, not the body that would not start.
+    expect(
+      previousGeneration([
+        gen({ sha: A, isCurrent: true }),
+        gen({ sha: C, isCurrent: false, isPrevious: true, failedToBoot: true }),
+      ]),
+    ).toBeNull();
   });
 });
 

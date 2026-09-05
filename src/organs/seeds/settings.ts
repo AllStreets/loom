@@ -408,6 +408,8 @@ const ORGAN_JS = `export default {
     loomPage.appendChild(gensWrap);
 
     function renderGenerations(list) {
+      bodyGens = list;
+      paintReweaveNote();
       clear(gensWrap);
       if (!list || list.length === 0) {
         gensWrap.appendChild(quiet("no generations yet — the first reweave weaves one."));
@@ -432,7 +434,13 @@ const ORGAN_JS = `export default {
           shaEl.textContent = short;
           line.appendChild(shaEl);
           if (g.isCurrent) line.appendChild(ui.badge("CURRENT", "accent"));
-          else if (g.isPrevious) line.appendChild(ui.badge("PREVIOUS", "go"));
+          // Round-4 review, Finding 3: the warden's heal writes
+          // { current: prev, previous: <the failed sha> }, so after a heal the
+          // ledger's PREVIOUS is the body that would not boot. It keeps its
+          // row and its RETURN — a named, deliberate choice is still the
+          // owner's — but it is not badged as the way home.
+          else if (g.isPrevious && !g.failedToBoot) line.appendChild(ui.badge("PREVIOUS", "go"));
+          if (g.failedToBoot) line.appendChild(ui.badge("DIDN'T BOOT", "warn"));
           var desc = document.createElement("span");
           desc.style.fontSize = "12px";
           desc.style.color = ui.tokens.t2;
@@ -538,6 +546,40 @@ const ORGAN_JS = `export default {
     loomPage.appendChild(storageLine);
 
     // -- fill ---------------------------------------------------------------------
+    // The shelf, kept so the reweave note can say whether the head about to be
+    // woven is one that already failed to be born (round-4 review, Finding 4).
+    var bodyGens = null;
+
+    function isAhead(id) {
+      return id.threaded && (id.genomeHead === null || id.genomeHead !== id.genomeSha);
+    }
+
+    /** Has the sha a weave would build already been woven and refused to boot? */
+    function headFailed() {
+      if (!bodyId || !bodyId.genomeHead || !bodyGens) return false;
+      for (var i = 0; i < bodyGens.length; i++) {
+        if (bodyGens[i].sha === bodyId.genomeHead && bodyGens[i].failedToBoot) return true;
+      }
+      return false;
+    }
+
+    // Both reads paint this line — identity says whether there is a weave, the
+    // shelf says whether that weave has failed before — and either may land
+    // first.
+    function paintReweaveNote() {
+      if (!bodyId) return;
+      reweaveNote.style.color = ui.tokens.t3;
+      if (isAhead(bodyId)) {
+        reweaveNote.textContent = headFailed()
+          ? "this weave didn't boot last time — the body came home from it."
+          : "";
+        return;
+      }
+      reweaveNote.textContent = bodyId.threaded
+        ? "the body matches the genome — nothing new to weave."
+        : "thread the loom before the first weave.";
+    }
+
     function renderIdentity(id) {
       // Everything that describes what a body change will DO reads this.
       bodyId = id;
@@ -563,15 +605,18 @@ const ORGAN_JS = `export default {
       // it, so the two are always equal in the steady state and the button
       // was hidden forever after the first weave. It is the genome's HEAD
       // that moves, and the same comparison reweaveReadiness makes.
-      var ahead = id.threaded && (id.genomeHead === null || id.genomeHead !== id.generation);
+      //
+      // Round-4 review, Finding 1: and what HEAD is compared AGAINST is the
+      // running body's baked sha, not the ledger's claim about disk. The swap
+      // writes the ledger before the new body has booted, so a swap that died
+      // at its last step left the ledger naming a body that is not running —
+      // and this hid REWEAVE while the core would have allowed the weave.
+      var ahead = isAhead(id);
       if (ahead && !reweaveBtn.parentNode) reweaveWrap.insertBefore(reweaveBtn, reweaveNote);
       if (!ahead && reweaveBtn.parentNode) reweaveWrap.removeChild(reweaveBtn);
       reweaveBtn.style.display = "";
       reweaveBtn.disabled = false;
-      reweaveNote.style.color = ui.tokens.t3;
-      reweaveNote.textContent = ahead ? "" : id.threaded
-        ? "the body matches the genome — nothing new to weave."
-        : "thread the loom before the first weave.";
+      paintReweaveNote();
       if (!id.threaded && !threadBtn.parentNode) threadWrap.insertBefore(threadBtn, threadNet);
       if (id.threaded && threadBtn.parentNode) threadWrap.removeChild(threadBtn);
       threadWrap.style.display = id.threaded ? "none" : "block";

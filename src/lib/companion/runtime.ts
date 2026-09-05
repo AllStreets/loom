@@ -9,7 +9,7 @@ import {
   type ThreadStatus,
 } from "../core";
 import { reweaveReadiness, type Readiness } from "../loom/reweave";
-import { listGenerations } from "../loom/generations";
+import { listGenerations, previousGeneration } from "../loom/generations";
 import { COMPANION_SYSTEM, windowMessages } from "./persona";
 import { buildCatalog, helpText } from "../shuttle/catalog";
 
@@ -104,13 +104,20 @@ export const missingToolLine = (tool: string, install: string) =>
  *
  * A `null` head (no source cloned, or git silent) is not named at all: LOOM
  * does not put a sha in the owner's sentence that it could not read.
+ *
+ * Round-4 review, Finding 4: `failedBefore` is the shelf's memory that this
+ * exact generation was woven, swapped in, and did not boot. LOOM will still
+ * weave it — the failure can be environmental and the fix may be what the
+ * owner just committed — but it does not offer it as if nothing had happened.
  */
 export const reweaveConsentLine = (
   genomeHead: string | null,
   mode: Identity["mode"],
   canSwap: boolean,
+  failedBefore = false,
 ) => {
-  const head = genomeHead ? `weave generation ${short(genomeHead)}` : "weave the genome's head";
+  const named = genomeHead ? `weave generation ${short(genomeHead)}` : "weave the genome's head";
+  const head = failedBefore ? `${named} again — it didn't boot last time` : named;
   if (mode === "dev") return `${head} — in dev the body stays; restart tauri dev to become it`;
   if (!canSwap) {
     return `${head} — the swap is macOS-only in this generation; the build and the ledger still work, the body stays`;
@@ -129,8 +136,25 @@ export const returnConsentLine = (sha: string, mode: Identity["mode"], canSwap: 
   }
   return `${head} — LOOM will close and return`;
 };
+/** What `build.rs` bakes into a body built outside the genome. */
+export const UNNAMED_SHA = "unknown";
+
+/**
+ * "which generation is this".
+ *
+ * Round-4 review, Finding 2: this read `id.generation` — the LEDGER's claim
+ * about which body is on disk. The ledger is allowed to lag the body (the
+ * swap writes it before the new body has ever booted, and the warden writes
+ * it back after a heal), so in the state a half-finished swap leaves behind
+ * it names the body that is NOT running, and a torn ledger reads `null` and
+ * called a real woven body "unwoven". `genomeSha` is compiled into the
+ * binary that is answering: it cannot be wrong about which body that is.
+ *
+ * The one body that genuinely cannot name itself is one built outside the
+ * genome, whose baked sha is the literal `"unknown"`.
+ */
 export const identityLine = (id: Identity) =>
-  `generation ${id.generation === null ? "unwoven" : short(id.generation)} · ${id.mode} · ${id.threaded ? "threaded" : "not threaded"}`;
+  `generation ${id.genomeSha === UNNAMED_SHA ? "unnamed" : short(id.genomeSha)} · ${id.mode} · ${id.threaded ? "threaded" : "not threaded"}`;
 
 export async function handle(
   utterance: string,
@@ -153,7 +177,12 @@ export async function handle(
       return {
         kind: "consent",
         consent: "reweave_consent",
-        line: reweaveConsentLine(ready.genomeHead, ready.mode, ready.canSwap),
+        line: reweaveConsentLine(
+          ready.genomeHead,
+          ready.mode,
+          ready.canSwap,
+          ready.failedBefore,
+        ),
       };
     }
 
@@ -176,7 +205,9 @@ export async function handle(
     }
 
     case "generation_return": {
-      const previous = (await body.generations()).find((g) => g.isPrevious);
+      // Not `find(g => g.isPrevious)`: after a heal the ledger's PREVIOUS is
+      // the body that just failed to boot (round-4 review, Finding 3).
+      const previous = previousGeneration(await body.generations());
       if (!previous) return { kind: "reply", text: LINE_NO_PREVIOUS };
       const id = await body.identity();
       return {

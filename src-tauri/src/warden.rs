@@ -46,6 +46,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::LoomError;
 use crate::exec;
+use crate::generations;
 use crate::kernel::{self, Sentinel};
 use crate::loomhome::Home;
 use crate::platform::{self, AppLayout, Step};
@@ -494,6 +495,17 @@ pub fn heal(
         reason: reason.to_string(),
         log_tail: log_tail(home),
     };
+    // The shelf remembers, before anything else happens. Round-4 review,
+    // findings 3 and 4: `recovery.json` is surfaced once and deleted, so
+    // without this nothing durable said that this generation did not boot —
+    // and the ledger, which does survive, names it `previous`, the very row
+    // "return to the previous generation" takes. Written FIRST so a heal
+    // interrupted anywhere (or one that fails outright) still leaves the mark
+    // on a generation that did, in fact, fail to be born; and best-effort,
+    // because coming home matters more than the note about why.
+    if let Err(e) = generations::mark_failed(home, new_sha, reason) {
+        eprintln!("[warden] the failed generation could not be marked on the shelf: {e}");
+    }
     let plan = heal_plan(home, layout, new_sha, prev_sha);
     // The heal itself. Only THIS failing means LOOM did not come home — a
     // heal whose last step wrote the terminal `healed` has come home, and
@@ -892,6 +904,16 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(fx.home.recovery_json()).unwrap()).unwrap();
         assert_eq!(v["failedSha"], "bbb222");
         assert!(v["logTail"].is_array());
+        // Round-4 review, findings 3 and 4: the shelf itself remembers that
+        // this generation failed to be born. The recovery record is surfaced
+        // once and deleted; this outlives it, so "return to the previous
+        // generation" and the next weave's consent line can both be honest
+        // about a sha that did not hold.
+        let shelf = generations::list(&fx.home).unwrap();
+        let failed = shelf.iter().find(|r| r.sha == "bbb222").expect("still kept");
+        assert!(failed.failed_to_boot);
+        assert_eq!(failed.failed_reason.as_deref(), Some(REASON_CRASHED));
+        assert!(!shelf.iter().find(|r| r.sha == "aaa111").unwrap().failed_to_boot);
         // No `.weaving` staging file remains beside the executable.
         let names: Vec<String> = std::fs::read_dir(fx.job.exe_path.parent().unwrap())
             .unwrap()
@@ -1238,6 +1260,11 @@ mod tests {
         assert_eq!(rec.failed_sha, "bbb222");
         assert_eq!(rec.prev_sha, "aaa111");
         assert!(!rec.log_tail.is_empty(), "what the weave said before the body failed");
+        // The mark is written before the heal is attempted, so a heal that
+        // could not come home still leaves the failure on the shelf — the
+        // generation did fail to be born, whatever happened next.
+        let shelf = generations::list(&fx.home).unwrap();
+        assert!(shelf.iter().find(|r| r.sha == "bbb222").unwrap().failed_to_boot);
         // Once — the same one-shot the healed record uses.
         assert!(take_recovery(&fx.home).is_some());
         assert!(take_recovery(&fx.home).is_none());
