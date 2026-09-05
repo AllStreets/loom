@@ -919,7 +919,8 @@ describe("Desktop", () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, writable: true, value: 800 });
 
     // Persist the window at a position that is valid for 1280x800 but off-screen for 400x400
-    localStorage.setItem("loom.win.notes", JSON.stringify({ x: 800, y: 600, w: 420, h: 360, collapsed: false }));
+    const SEEDED = JSON.stringify({ x: 800, y: 600, w: 420, h: 360, collapsed: false });
+    localStorage.setItem("loom.win.notes", SEEDED);
 
     const offsetWidthDescriptor  = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
     const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
@@ -959,7 +960,12 @@ describe("Desktop", () => {
       // Wait for state to settle and check persisted position is clamped
       await waitFor(() => {
         const saved = localStorage.getItem("loom.win.notes");
-        if (!saved) return; // not yet persisted — let waitFor retry
+        // Absent OR still the seed means the clamp has not been written yet —
+        // let waitFor retry. Reading the seed as if it were a result is how
+        // this test failed once under load: the organ's blob-URL import lost a
+        // race, nothing re-persisted, and the assertion ran against the value
+        // the test itself had planted.
+        if (!saved || saved === SEEDED) return;
         const parsed = JSON.parse(saved);
         // With planeW=400, w clamped to 400; maxX = 0 (planeW-w = 400-400=0)
         // With planeH=400, h clamped to 400-72=328; maxY = 400-72-28=300

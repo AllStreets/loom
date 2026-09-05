@@ -46,7 +46,7 @@ The binary knows the sha it was woven from: `build.rs` emits `LOOM_GENOME_SHA` (
   kernel-boot.json    the sentinel (exists since 21)
 ```
 
-The genome ships inside the app: `scripts/genome-bundle.mjs` runs in `beforeBuildCommand`, writes `src-tauri/genome/genome.bundle` (`git bundle create … --all`, ~20 MB) and `genome.json` `{ sha }`, both listed as Tauri bundle resources and gitignored. First packaged launch (or any launch where `loomhome/source` is missing) clones the bundle into `source/` and checks out the sha the binary was woven from. The Tapestry keeps its full history.
+The genome ships inside the app: `scripts/genome-bundle.mjs` runs in `beforeBuildCommand`, writes `src-tauri/genome/genome.bundle` (`git bundle create … --all`, ~20 MB) and `genome.json` `{ sha }`, both listed as Tauri bundle resources and gitignored. Threading's first step clones the bundle into `source/` and checks out the sha the bundle itself records. (An earlier draft of this spec said a packaged launch does it; it does not — `seed_source` has one caller, the ceremony.) The Tapestry keeps its full history.
 
 ## Threading (the one-time ceremony)
 
@@ -67,7 +67,7 @@ Missing tools are reported with the exact install line (`xcode-select --install`
 1. **seed** — clone `genome.bundle` into `source/` if absent; checkout `LOOM_GENOME_SHA`.
 2. **deps** — `npm ci` in `source/` (network once). If offline: stop with "threading needs the network once — after that LOOM weaves offline."
 3. **vendor** — `cargo vendor --versioned-dirs ../vendor` from `source/src-tauri`; write `source/.cargo/config.toml` with `[source.crates-io] replace-with = "vendored"` and `[net] offline = true`.
-4. **warm** — `npm run build` then `cargo build --release --offline` with `CARGO_TARGET_DIR=loomhome/target`. This is the long step (native deps compile once; the sherpa prebuilt archive downloads once into the target's OUT_DIR and stays). Progress shows cargo's own "Compiling x/y" tail.
+4. **warm** — `npm run build` then `cargo build --release --offline` with `CARGO_TARGET_DIR=loomhome/target`. This is the long step (native deps compile once; the sherpa prebuilt archive is fetched over HTTP into `~/Library/Caches/sherpa-rs` — a user cache LOOM does not own, outside loomhome, uncounted, and purgeable by macOS. If it is purged, an offline weave refuses to start until the network returns). Progress shows cargo's own "Compiling x/y" tail.
 5. **register** — copy the *running* executable into `generations/<genomeSha>/loom` as generation 0, write the ledger.
 6. **stamp** — write `threads.json`. `threaded` is true only when every step succeeded.
 
@@ -79,7 +79,7 @@ Unchanged in shape from 21/22; three packaged differences:
 
 - **source root** — `resolve_source_repo` gains a packaged branch returning `loomhome/source`. The `kernel.sourceRepo` override is dev-only.
 - **tools** — `cargo_path()` / `npx_path()` read `threads.json` first (absolute, recorded at threading), then fall back to the existing search. Cargo commands add `--offline`. `exec.rs` gains `run_checked_env(argv, cwd, root, timeout, envs)` — a fixed list of `(&str, &str)` pairs the caller composes from constants and LOOM-owned paths, never model output. Reweave and validation set `CARGO_TARGET_DIR` and `CARGO_NET_OFFLINE=true`.
-- **shared target** — validation worktrees under `loomhome/worktrees/` use the shared `target/`. Dependencies compile once at threading; a core edit then validates in incremental time. The path-escape concern from the Phase-23 backlog is met because both the worktree and the target dir are inside loomhome, both canonicalized, and the env pair is composed in Rust from constants. **Found during recon:** Phase 21's temp worktree has no `node_modules`, so `npx tsc` there resolved through npx's own cache — an unstated network dependency that would break offline. Phase 23 closes it: every validation worktree gets a `node_modules` symlink to `source/node_modules` (dev: the cwd's), and validation invokes `<worktree>/node_modules/.bin/tsc` and `.bin/vitest` through the recorded `node` binary, never `npx`. This applies in dev too.
+- **shared target** — validation worktrees under `loomhome/worktrees/` use the shared `target/`. Dependencies compile once at threading; a core edit then validates in incremental time. The path-escape concern from the Phase-23 backlog is met because both the worktree and the target dir are inside loomhome, both canonicalized, and the env pair is composed in Rust from constants. **Found during recon:** Phase 21's temp worktree has no `node_modules`, so `npx tsc` there resolved through npx's own cache — an unstated network dependency that would break offline. Phase 23 closes it: every validation worktree gets a `node_modules` symlink to `source/node_modules` (dev: the cwd's), and validation invokes `<worktree>/node_modules/typescript/bin/tsc` and `node_modules/vitest/vitest.mjs` through the recorded `node` binary, never `npx`. This applies in dev too.
 
 Approval and commit are unchanged. In packaged mode the diff card's applied state reads: **"woven into source — reweave to become it"** with a REWEAVE action. Setting `kernel.autoReweave` (default off) chains apply → reweave without the second click.
 
@@ -167,7 +167,7 @@ Installing toolchains (rustup/node) from inside the app · Developer-ID signing 
 
 **Rust (unit, tempdirs, no network):** threads — candidate-dir search + version parse from fixture output, drift detection; genome — bundle clone into a tempdir and sha checkout (real git); ledger — prune rules never drop current/previous; `swap_plan` — the step list for first swap (no generation 0 yet), ordinary swap, return-to-generation, unsupported platform; sentinel decision table with `armedBy: "reweave"` and warden-alive ownership; warden — with `open`/`pgrep` injected as fakes and a fake sentinel writer: confirmed → exits clean; crashed → heals, writes record, relaunches; timeout → heals; the protected-set enumeration; `run_checked_env` rejects a cwd escape and passes envs.
 
-**Rust (skip-guarded integration, real tools when present):** reweave stages 1–3 on a tiny fixture crate with a shared target dir prove the env plumbing and `--offline` (skip when cargo is absent or slow); `kernel_validate` against the shared target dir.
+**Rust (skip-guarded integration, real tools when present):** `kernel_validate` against real `cargo` on a fixture crate, proving the validation wall catches breakage (skipped when cargo is absent or slow). Reweave and threading are proven against fake tool scripts, not real ones — stated plainly because it is the gap the owner ceremony below closes.
 
 **Node:** `scripts/genome-bundle.mjs` produces a bundle a fresh clone can restore to the same sha.
 

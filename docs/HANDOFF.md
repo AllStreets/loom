@@ -22,7 +22,7 @@ Connor's standing verdict (be governed by this): **no decorative widgets, no cop
 - **18 · Excision** — **AGORA removed entirely by owner verdict. Never reintroduce it.** The Coinbase order-book floor survived and lives in the Terminal (click a crypto-strip symbol → `src/components/terminal/Floor.tsx` overlay). Four decks: void · globe · terminal · ember.
 - **19 · Vigor** — organs got six real powers behind the `need()` grant seam: `market · watch · timeline · voice · notify · pulse` (`src/lib/organs/api.ts`, budgets in `budgets.ts`, toasts in `chrome/Notices.tsx`). Manifest declares `powers`, permission card lists them plainly, revocable live from the organ title bar, token-bucket budgets with a THROTTLED chip, deterministic sandbox mocks so generated tests are grounded (`loom.notify.sent`, `loom.voice.said`, `loom.pulse.registered`). Builder prompts teach the APIs conditionally (`requestImpliesPowers`) with a BTC-5%-drop few-shot. "Alert me when BTC drops 5%" now builds a real, running tool.
 
-Gate state at handoff: `npm run check` fully green — **1332 vitest + 112 cargo** (1 ignored live test). Working tree clean on `main`.
+Gate state at handoff: `npm run check` fully green — **1218 vitest + 212 cargo** (1 ignored live test) on `phase-23-rebirth`.
 
 ## Why: Connor said "this still just isn't that impressive"
 

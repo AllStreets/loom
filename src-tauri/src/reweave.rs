@@ -10,7 +10,8 @@
 //!
 //! 1. `assets`   — `npm run build` in `source/` (10 min).
 //! 2. `core`     — `cargo build --release --offline` in `source/src-tauri`,
-//!                 `CARGO_TARGET_DIR = loomhome/target` (30 min), tail streamed.
+//!                 `CARGO_TARGET_DIR = loomhome/target` (30 min), tail streamed,
+//!                 carrying the recorded toolchain's PATH + `CMAKE`.
 //! 3. `stage`    — the body goes on the shelf (`generations::record`) and is
 //!                 ad-hoc signed. Dev mode stops here, honestly: `tauri dev`
 //!                 owns the binary.
@@ -488,12 +489,19 @@ fn job_steps(
             }
 
             // 2 · core — `--offline` is appended by `cargo_argv`, always.
+            // The same lesson as the assets stage, on the other half of the
+            // toolchain: an absolute cargo path is not enough either. cargo
+            // resolves rustc by name, and `whisper-rs-sys`'s build script asks
+            // the `cmake` crate for the literal "cmake", which it looks up on
+            // PATH. Same pair the ceremony's warm step carries, same helper.
             p.stage("core", true);
-            let cargo = need_tool(ctx.tools, "cargo")?;
-            let argv = kernel::cargo_argv(Path::new(&cargo), &["build", "--release"]);
+            let spawn = cargo_with_path(ctx.tools)?;
+            let argv = kernel::cargo_argv(Path::new(&spawn.cargo), &["build", "--release"]);
             let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
             let target_dir = home.target().to_string_lossy().into_owned();
-            let envs = [("CARGO_TARGET_DIR", target_dir.as_str()), ("CARGO_NET_OFFLINE", "true")];
+            let mut envs: Vec<(&str, &str)> =
+                vec![("CARGO_TARGET_DIR", target_dir.as_str()), ("CARGO_NET_OFFLINE", "true")];
+            envs.extend(spawn.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
             let core = source.join("src-tauri");
             let out = run(runner, p, "core", &argv, &core, source, &envs)?;
             if out.code != 0 {
@@ -589,6 +597,13 @@ fn job_steps(
 /// with node's install line instead of at a shim's exit 127.
 fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String, String), Failed> {
     threads::npm_with_node(tools).map_err(|e| failed(format!("{e}; {UNTOUCHED}"), e))
+}
+
+/// cargo's absolute path plus the env pairs that let it find its toolchain
+/// and cmake — `threads::cargo_with_path`, the ceremony's own helper, so the
+/// two surfaces can never drift apart.
+fn cargo_with_path(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<threads::CargoSpawn, Failed> {
+    threads::cargo_with_path(tools).map_err(|e| failed(format!("{e}; {UNTOUCHED}"), e))
 }
 
 fn need_tool(tools: &dyn Fn(&str) -> Option<PathBuf>, name: &str) -> Result<String, Failed> {
@@ -887,6 +902,9 @@ mod tests {
         head: String,
         lay: AppLayout,
         bin: PathBuf,
+        /// Deliberately OUTSIDE `bin`: the only way a spawn reaches it is
+        /// the PATH the core stage's cargo pair injects.
+        cmake: PathBuf,
     }
 
     fn git(args: &[&str], cwd: &Path) -> String {
@@ -938,15 +956,21 @@ mod tests {
         ));
         // cargo: record argv, honour CARGO_TARGET_DIR, produce the body.
         script(&bin.join("cargo"), &format!(
-            "printf '%s\\n' \"$@\" > '{}'\nmkdir -p \"$CARGO_TARGET_DIR/release\"\nprintf 'new body' > \"$CARGO_TARGET_DIR/release/loom\"\nchmod 755 \"$CARGO_TARGET_DIR/release/loom\"\necho 'Compiling loom v0.1.0'\necho 'Finished release'",
-            root.join("cargo-argv.txt").display()
+            "printf '%s\\n' \"$@\" > '{}'\nprintf '%s' \"$PATH\" > '{}'\nprintf '%s\\n%s\\n' \"$(command -v cmake)\" \"$CMAKE\" > '{}'\nmkdir -p \"$CARGO_TARGET_DIR/release\"\nprintf 'new body' > \"$CARGO_TARGET_DIR/release/loom\"\nchmod 755 \"$CARGO_TARGET_DIR/release/loom\"\necho 'Compiling loom v0.1.0'\necho 'Finished release'",
+            root.join("cargo-argv.txt").display(),
+            root.join("cargo-path.txt").display(),
+            root.join("cargo-cmake.txt").display()
         ));
+        // cmake: NOT on `bin`. whisper-rs-sys's build script asks the cmake
+        // crate for the literal "cmake", which it resolves through PATH.
+        let cmake = root.join("cmake-bin").join("cmake");
+        script(&cmake, "echo 'cmake version 3.30.0-fake'");
         // codesign: append argv (it runs twice on a full weave).
         script(&bin.join("codesign"), &format!(
             "printf '%s\\n' \"$@\" >> '{}'",
             root.join("codesign-argv.txt").display()
         ));
-        Fx { _dir: dir, root, home, head, lay, bin }
+        Fx { _dir: dir, root, home, head, lay, bin, cmake }
     }
 
     impl Fx {
@@ -954,6 +978,7 @@ mod tests {
             move |name: &str| match name {
                 "git" => Some(PathBuf::from("git")),
                 "npm" | "node" | "cargo" | "codesign" => Some(self.bin.join(name)),
+                "cmake" => Some(self.cmake.clone()),
                 _ => None,
             }
         }
@@ -1461,6 +1486,83 @@ mod tests {
             std::env::split_paths(value).next() == Some(fx.bin.clone()),
             "the pair leads with the recorded node's directory, got {value:?}"
         );
+    }
+
+    // ── round-3 review ──
+
+    /// Round-3 review, Finding 1. Round 1's own lesson, left unapplied to the
+    /// other half of the toolchain: the core stage spawned cargo with only
+    /// `CARGO_TARGET_DIR` and `CARGO_NET_OFFLINE`. `whisper-rs-sys`'s build
+    /// script drives the `cmake` crate, which resolves the literal `"cmake"`
+    /// through PATH — and a Finder-launched app's PATH
+    /// (`/usr/bin:/bin:/usr/sbin:/sbin`) holds no cmake, no cargo, no rustc.
+    /// Every packaged weave died in the core stage with cmake's "command not
+    /// found" surfaced as a bare cargo exit code.
+    #[test]
+    fn the_core_stage_lets_cargo_find_the_recorded_cmake() {
+        let fx = fixture();
+        let tools = fx.tools();
+        let ctx = fx.ctx(Mode::Dev, &tools);
+        let mut seen = Vec::new();
+        run_job(&ctx, Kind::Weave, &mut ExecRunner, &mut fx.states(&mut seen)).unwrap();
+
+        let path = std::fs::read_to_string(fx.root.join("cargo-path.txt"))
+            .expect("the core stage hands cargo a PATH");
+        let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        assert!(
+            dirs.contains(&fx.cmake.parent().unwrap().to_path_buf()),
+            "the recorded cmake's directory must be on cargo's PATH, got {path:?}"
+        );
+        assert!(dirs.len() > 1, "the process's own PATH is kept behind it, got {path:?}");
+
+        let seen_cmake = std::fs::read_to_string(fx.root.join("cargo-cmake.txt")).unwrap();
+        let mut lines = seen_cmake.lines();
+        assert_eq!(
+            lines.next(),
+            Some(fx.cmake.to_str().unwrap()),
+            "the fake cmake is reachable ONLY through the injected PATH, and must be what resolves"
+        );
+        assert_eq!(
+            lines.next(),
+            Some(fx.cmake.to_str().unwrap()),
+            "CMAKE names it outright — the cmake crate honours that before searching"
+        );
+        // The argv is unchanged: still the fixed, always-offline cargo build.
+        assert_eq!(fx.argv("cargo"), vec!["build", "--release", "--offline"]);
+    }
+
+    /// The same finding at the argv/env boundary: the pairs are what the
+    /// runner is handed, alongside — not instead of — the two it already had.
+    #[test]
+    fn the_core_argv_carries_the_cargo_pairs() {
+        let fx = fixture();
+        let tools = fx.tools();
+        let ctx = fx.ctx(Mode::Dev, &tools);
+        let mut runner = FakeRunner {
+            script: HashMap::from([("stage", (0, vec![]))]),
+            calls: vec![],
+            detached: vec![],
+        };
+        let mut seen = Vec::new();
+        let _ = run_job(&ctx, Kind::Weave, &mut runner, &mut fx.states(&mut seen));
+
+        let (_, argv, envs) = runner
+            .calls
+            .iter()
+            .find(|(stage, _, _)| stage == "core")
+            .expect("the core stage spawned");
+        assert_eq!(&argv[1..], &["build".to_string(), "--release".to_string(), "--offline".to_string()]);
+        let keys: Vec<&str> = envs.iter().map(|(k, _)| k.as_str()).collect();
+        for want in ["CARGO_TARGET_DIR", "CARGO_NET_OFFLINE", "PATH", "CMAKE"] {
+            assert!(keys.contains(&want), "the core stage passes {want}, got {keys:?}");
+        }
+        let (_, path) = envs.iter().find(|(k, _)| k == "PATH").unwrap();
+        assert!(
+            std::env::split_paths(path).any(|d| d == fx.cmake.parent().unwrap()),
+            "the pair carries the recorded cmake's directory, got {path:?}"
+        );
+        let (_, cmake) = envs.iter().find(|(k, _)| k == "CMAKE").unwrap();
+        assert_eq!(cmake.as_str(), fx.cmake.to_str().unwrap());
     }
 
     /// Round-2 review, Finding 2. `ACTIVE` was raised before `run_job` and

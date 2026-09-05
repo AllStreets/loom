@@ -9,5 +9,57 @@ jobs:
         with: { node-version: 20 }
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
+      # `npm test` is `vitest run`, which transpiles without typechecking: a
+      # type error passed CI and then broke `npm run build` — which is
+      # reweave's own stage 1, the first step of every self-rebuild. The same
+      # command is the first half of `npm run check`, so the local gate and
+      # this one agree.
+      - run: npx tsc --noEmit
       - run: npm test
       - run: cd src-tauri && cargo test
+
+  # The class of bug round 1 found by hand — deployment target, rpaths, dylib
+  # staging, the genome resource — is invisible to `cargo test`: it only
+  # appears when the bundle is assembled. The branch's own rule is "build it
+  # and launch it before calling it shipped", and until now nothing but a
+  # human enforced it. This job costs minutes; a hollow .app costs a release.
+  build:
+    runs-on: macos-14
+    steps:
+      # Full history: `beforeBuildCommand` runs scripts/genome-bundle.mjs,
+      # which packs `git bundle create --all` into the binary. A shallow
+      # clone would ship a LOOM that cannot seed its own source.
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: dtolnay/rust-toolchain@stable
+      # The native deps (whisper.cpp via whisper-rs-sys) compile once and
+      # dominate the wall clock; without a cache this job is ~30 minutes every
+      # push. Keyed on the lockfile, so a dependency bump is the only miss.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-tauri-build-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-tauri-build-
+      - run: npm ci
+      # `--bundles app` only. The .app is what LOOM swaps, relaunches and
+      # reweaves; the .dmg is a delivery wrapper that adds minutes and a
+      # flaky hdiutil to a check about the body itself.
+      - run: npm run tauri build -- --bundles app
+      # Assembled, and carrying the genome it must reweave from. A build that
+      # "succeeds" and produces nothing is the failure this job exists to catch.
+      - name: the .app exists and carries its genome
+        run: |
+          app="src-tauri/target/release/bundle/macos/LOOM.app"
+          test -d "$app" || { echo "no .app was produced at $app"; exit 1; }
+          test -x "$app/Contents/MacOS/loom" || { echo "$app has no executable"; exit 1; }
+          test -f "$app/Contents/Resources/genome/genome.bundle" \
+            || { echo "$app ships without its genome — it could never reweave"; exit 1; }
+          for lib in libonnxruntime.1.17.1.dylib libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib; do
+            test -f "$app/Contents/Frameworks/$lib" || { echo "$app is missing $lib"; exit 1; }
+          done
+          echo "built $app"

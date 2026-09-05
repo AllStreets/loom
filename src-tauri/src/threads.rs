@@ -17,7 +17,10 @@
 //! as `present`. npm is the one exception to "an absolute path is enough":
 //! it is a `#!/usr/bin/env node` shim, so every npm spawn — the probe and the
 //! ceremony's own — carries a PATH pair leading with the recorded node's
-//! directory (`npm_path_env`).
+//! directory (`npm_path_env`). cargo needs the same treatment for its own
+//! reason: it resolves rustc by name, and native build scripts resolve cmake
+//! by name (`whisper-rs-sys` through the `cmake` crate), so every cargo spawn
+//! carries the recorded toolchain directories plus `CMAKE` (`cargo_with_path`).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -607,6 +610,74 @@ pub fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String,
     Ok((npm, path))
 }
 
+/// The tools whose RECORDED directories lead every cargo spawn's PATH, in
+/// this order. cargo and rustc because cargo finds its own toolchain by name;
+/// cmake and clang because native build scripts do.
+const CARGO_PATH_TOOLS: &[&str] = &["cargo", "rustc", "cmake", "clang"];
+
+/// The PATH value every `cargo` spawn carries: the directories of the tools
+/// the table RECORDED, then everything this process already had.
+///
+/// The same lesson npm taught, on the other half of the toolchain. An
+/// absolute cargo path is not enough: `whisper-rs-sys`'s build script drives
+/// the `cmake` crate, which on unix resolves the literal `"cmake"` through
+/// PATH — there is no absolute-path escape hatch. A Finder-launched macOS app
+/// inherits `/usr/bin:/bin:/usr/sbin:/sbin`, which holds neither homebrew nor
+/// rustup: cmake, cargo, rustc, node and npm are all absent there, while cc,
+/// clang and codesign are present. So the warm step — the long one, spent
+/// after `npm ci` and `cargo vendor` have used the owner's single network
+/// trip — died with cmake's "command not found" surfaced as a bare cargo exit
+/// code, and `threaded` never turned true.
+///
+/// Every entry is LOOM's own: the parent of a path the tool table found, or a
+/// directory this process already had. Nothing is composed from model output,
+/// so the pair keeps exec's fixed-env contract. `None` only when the joined
+/// value cannot be built at all.
+pub fn cargo_path_env(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Option<String> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for name in CARGO_PATH_TOOLS {
+        let Some(dir) = tools(name)
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .filter(|d| !d.as_os_str().is_empty())
+        else {
+            continue;
+        };
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs.extend(std::env::split_paths(&path_env()));
+    std::env::join_paths(dirs).ok().map(|v| v.to_string_lossy().into_owned())
+}
+
+/// cargo's absolute path plus the env pairs every cargo spawn needs: the
+/// PATH the toolchain lives on, and — when the table recorded one — `CMAKE`
+/// naming the exact cmake binary. The `cmake` crate honours `CMAKE` before it
+/// searches, which is stronger than a PATH hit.
+///
+/// cmake is optional here on purpose: a machine without it can still build
+/// everything that does not need a native dep, and a missing cmake already
+/// has its own row and its own install line in the tool table.
+#[derive(Debug, Clone)]
+pub struct CargoSpawn {
+    pub cargo: String,
+    pub envs: Vec<(String, String)>,
+}
+
+/// The pair for `cargo`, from the recorded table. Public because the ceremony
+/// is not the only caller: `reweave`'s core stage compiles the same crate on
+/// the same machine and needs the same env. Round 1 fixed only npm.
+pub fn cargo_with_path(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<CargoSpawn, LoomError> {
+    let cargo = need_tool(tools, "cargo")?;
+    let path = cargo_path_env(tools)
+        .ok_or_else(|| LoomError::NotFound("cargo's PATH could not be composed".to_string()))?;
+    let mut envs = vec![("PATH".to_string(), path)];
+    if let Some(cmake) = tools("cmake") {
+        envs.push(("CMAKE".to_string(), cmake.to_string_lossy().into_owned()));
+    }
+    Ok(CargoSpawn { cargo, envs })
+}
+
 /// Every step of the ceremony runs through the slot-registering streamed
 /// runner. A spawn `thread_cancel` cannot reach is a stop button that does
 /// not stop — and `npm ci` and `cargo vendor` are the only two steps in the
@@ -854,17 +925,22 @@ fn ceremony_steps(
         emit("vendor", "crates already vendored", none);
     } else {
         emit("vendor", "cargo vendor — every crate, kept locally", none);
-        let cargo = need_tool(tools, "cargo")?;
+        // cargo resolves its own toolchain by NAME: even vendoring asks rustc
+        // for the target spec. The pair that lets the warm step find cmake is
+        // what lets this step find rustc at all.
+        let spawn = cargo_with_path(tools)?;
         let vendor_dir = home.vendor().to_string_lossy().into_owned();
+        let envs: Vec<(&str, &str)> =
+            spawn.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         let (out, _) = run_step(
             slot,
             "vendor",
             "vendoring the crates",
-            &[&cargo, "vendor", "--versioned-dirs", &vendor_dir],
+            &[&spawn.cargo, "vendor", "--versioned-dirs", &vendor_dir],
             &core,
             &root,
             VENDOR_TIMEOUT,
-            &[],
+            &envs,
             emit,
         )?;
         if out.code != 0 {
@@ -916,17 +992,23 @@ fn ceremony_steps(
         }
         cancel_check(slot)?;
         emit("warm", "compiling the core — native deps compile once", none);
-        let cargo = need_tool(tools, "cargo")?;
+        // The long step, and the one that compiles the native deps: cmake has
+        // to be findable or `whisper-rs-sys` fails minutes in, after the
+        // owner's single network trip has already been spent.
+        let spawn = cargo_with_path(tools)?;
         let target = home.target().to_string_lossy().into_owned();
+        let mut envs: Vec<(&str, &str)> =
+            vec![("CARGO_TARGET_DIR", &target), ("CARGO_NET_OFFLINE", "true")];
+        envs.extend(spawn.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         let (out, tail) = run_step(
             slot,
             "warm",
             "compiling the core",
-            &[&cargo, "build", "--release", "--offline"],
+            &[&spawn.cargo, "build", "--release", "--offline"],
             &core,
             &root,
             CORE_TIMEOUT,
-            &[("CARGO_TARGET_DIR", &target), ("CARGO_NET_OFFLINE", "true")],
+            &envs,
             emit,
         )?;
         if out.code != 0 {
@@ -1220,6 +1302,70 @@ mod tests {
         );
     }
 
+    /// Round-3 review, Finding 1. Round 1 taught npm to carry a PATH and
+    /// wrote down why; cargo was left with none. `whisper-rs-sys`'s build
+    /// script drives the `cmake` crate, which resolves the literal `"cmake"`
+    /// through PATH — there is no absolute-path escape on unix. A
+    /// Finder-launched app inherits `/usr/bin:/bin:/usr/sbin:/sbin`, which
+    /// holds no cmake, no cargo and no rustc: the warm step died minutes in,
+    /// after the owner's single network trip, with cmake's "command not
+    /// found" surfaced as a bare cargo exit code.
+    #[test]
+    fn cargo_path_env_leads_with_the_recorded_tool_dirs() {
+        let tools = |name: &str| match name {
+            "cargo" => Some(PathBuf::from("/opt/loom/.cargo/bin/cargo")),
+            "rustc" => Some(PathBuf::from("/opt/loom/.cargo/bin/rustc")),
+            "cmake" => Some(PathBuf::from("/opt/homebrew/bin/cmake")),
+            "clang" => Some(PathBuf::from("/usr/bin/clang")),
+            _ => None,
+        };
+        let v = cargo_path_env(&tools).unwrap();
+        let entries: Vec<PathBuf> = std::env::split_paths(&v).collect();
+        // Every recorded directory leads, in table order, deduplicated.
+        assert_eq!(
+            &entries[..3],
+            &[
+                PathBuf::from("/opt/loom/.cargo/bin"),
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/bin"),
+            ],
+            "the recorded tool directories lead: {v}"
+        );
+        // Nothing the process already had is dropped — the pair prepends.
+        for dir in std::env::split_paths(&std::env::var("PATH").unwrap_or_default()) {
+            assert!(entries.contains(&dir), "{} was dropped from PATH", dir.display());
+        }
+        // A machine with none of them recorded still gets its own PATH.
+        let none = |_: &str| None;
+        assert!(cargo_path_env(&none).is_some(), "an empty table still composes a PATH");
+    }
+
+    /// The cmake crate honours `CMAKE` directly, which beats a PATH search:
+    /// the pair names the exact binary the tool table recorded.
+    #[test]
+    fn cargo_with_path_names_the_recorded_cmake() {
+        let tools = |name: &str| match name {
+            "cargo" => Some(PathBuf::from("/opt/loom/.cargo/bin/cargo")),
+            "cmake" => Some(PathBuf::from("/opt/homebrew/bin/cmake")),
+            _ => None,
+        };
+        let spawn = cargo_with_path(&tools).unwrap();
+        assert_eq!(spawn.cargo, "/opt/loom/.cargo/bin/cargo");
+        let cmake = spawn.envs.iter().find(|(k, _)| k == "CMAKE").expect("CMAKE is passed");
+        assert_eq!(cmake.1, "/opt/homebrew/bin/cmake");
+        assert!(spawn.envs.iter().any(|(k, _)| k == "PATH"), "and the PATH pair rides with it");
+
+        // No cmake recorded: no CMAKE pair invented, and cargo still spawns.
+        let thin = |name: &str| (name == "cargo").then(|| PathBuf::from("/opt/loom/.cargo/bin/cargo"));
+        let spawn = cargo_with_path(&thin).unwrap();
+        assert!(spawn.envs.iter().all(|(k, _)| k != "CMAKE"), "nothing is invented");
+
+        // No cargo at all: the install line, not a spawn.
+        let empty = |_: &str| None;
+        let err = cargo_with_path(&empty).unwrap_err().to_string();
+        assert!(err.contains("cargo is missing"), "got {err}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn drift_detects_moved_tool() {
@@ -1484,6 +1630,9 @@ mod tests {
         npm: PathBuf,
         node: PathBuf,
         cargo: PathBuf,
+        /// Deliberately NOT in `bin`: the only way a spawn can reach it is
+        /// the PATH the cargo pair injects.
+        cmake: PathBuf,
         exe: PathBuf,
     }
 
@@ -1519,9 +1668,10 @@ mod tests {
         let npm = fake_tool(&bin, "npm", &log, &markers, npm_extra);
         let node = fake_exe(&bin, "node", "v22.3.0");
         let cargo = fake_tool(&bin, "cargo", &log, &markers, cargo_extra);
+        let cmake = fake_exe(&dir.path().join("cmake-bin"), "cmake", "cmake version 3.30.0-fake");
         let exe = dir.path().join("loom-body");
         std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
-        Stage { _dir: dir, home, slot, token, source, log, markers, npm, node, cargo, exe }
+        Stage { _dir: dir, home, slot, token, source, log, markers, npm, node, cargo, cmake, exe }
     }
 
     #[cfg(unix)]
@@ -1531,6 +1681,7 @@ mod tests {
                 "npm" => Some(self.npm.clone()),
                 "node" => Some(self.node.clone()),
                 "cargo" => Some(self.cargo.clone()),
+                "cmake" => Some(self.cmake.clone()),
                 _ => None,
             }
         }
@@ -1641,6 +1792,39 @@ fi"#;
         let meta: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(st.home.generation_meta(sha)).unwrap()).unwrap();
         assert_eq!(meta["reason"], "threaded");
+    }
+
+    /// The cargo fake reports what the injected PATH resolves `cmake` to and
+    /// what `CMAKE` names — the two things the cmake crate consults.
+    const CARGO_CMAKE_FAKE: &str = r#"if [ "$1" = build ]; then
+  echo "cmake_on_path=$(command -v cmake)" >> "$(dirname "$0")/../calls.log"
+  echo "CMAKE=$CMAKE" >> "$(dirname "$0")/../calls.log"
+fi"#;
+
+    /// Round-3 review, Finding 1, end to end. The warm step is the long one,
+    /// spent AFTER `npm ci` and `cargo vendor` have used the owner's single
+    /// network trip. With no PATH pair, `whisper-rs-sys`'s build script asked
+    /// the cmake crate for the literal `"cmake"`, PATH held none, and the
+    /// ceremony died with a bare cargo exit code — `threaded` never turned
+    /// true, so nothing else in Phase 23 unlocked.
+    #[cfg(unix)]
+    #[test]
+    fn the_warm_step_lets_cargo_find_the_recorded_cmake() {
+        let st = stage("", CARGO_CMAKE_FAKE);
+        let (res, events) = st.run();
+        assert!(res.is_ok(), "ceremony failed: {res:?}\nevents: {events:?}");
+        let log = st.log();
+        // Resolved through the injected PATH, not through whatever a
+        // Finder-launched app inherited: the fake cmake is outside `bin`.
+        assert!(
+            log.contains(&format!("cmake_on_path={}", st.cmake.display())),
+            "the recorded cmake must be the one PATH resolves; log:\n{log}"
+        );
+        // And named outright, which the cmake crate honours before searching.
+        assert!(
+            log.contains(&format!("CMAKE={}", st.cmake.display())),
+            "the recorded cmake must be named in CMAKE; log:\n{log}"
+        );
     }
 
     #[test]

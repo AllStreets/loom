@@ -101,3 +101,28 @@ describe("RecoveryNotice — a generation that couldn't be born", () => {
     expect(screen.queryByTestId("recovery-notice")).not.toBeInTheDocument();
   });
 });
+
+describe("RecoveryNotice — when it could not come home", () => {
+  it("renders the failure, which carries no sha because there is no home to name", async () => {
+    render(<RecoveryNotice />);
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(RECOVERY_EVENT, { detail: { sha: "", failed: true } }),
+      );
+    });
+    const body = screen.getByTestId("recovery-body");
+    expect(body).toHaveTextContent("LOOM tried to come home and couldn't");
+    // fact — hinge — remedy: it says what to do next.
+    expect(body).toHaveTextContent(/Return to a kept generation from Settings/);
+    expect(screen.getByTestId("recovery-notice")).toHaveTextContent("couldn't come home");
+    expect(body.textContent).not.toContain("!");
+  });
+
+  it("still drops an empty event that claims nothing at all", async () => {
+    render(<RecoveryNotice />);
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(RECOVERY_EVENT, { detail: { sha: "" } }));
+    });
+    expect(screen.queryByTestId("recovery-notice")).not.toBeInTheDocument();
+  });
+});
