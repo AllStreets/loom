@@ -15,7 +15,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "selftest": "SELFTEST=1 vitest run src/selftest",
-    "check": "vitest run && (cd src-tauri && cargo test)"
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && vitest run && (cd src-tauri && cargo test)"
   },
   "dependencies": {
     "@react-three/fiber": "^9.7.0",
