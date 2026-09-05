@@ -339,7 +339,9 @@ const ORGAN_JS = `export default {
         verEl.style.fontSize = "12.5px";
         verEl.style.color = present ? ui.tokens.t2 : ui.tokens.warn;
         verEl.textContent = present ? (t.version || "present") : "missing";
-        if (present && drifted.indexOf(t.name) !== -1) verEl.textContent += " · changed since threading";
+        // A recorded tool that moved or changed version is reported, not
+        // refused: a weave runs against the one found now. Say so plainly.
+        if (present && drifted.indexOf(t.name) !== -1) verEl.textContent += " · changed since threading — a weave uses this one, not the recorded one";
         var pathEl = document.createElement("span");
         pathEl.style.fontSize = "12px";
         pathEl.style.fontFamily = "monospace";
@@ -356,6 +358,36 @@ const ORGAN_JS = `export default {
         row.appendChild(verEl);
         row.appendChild(pathEl);
         grid.appendChild(row);
+      }
+      // Not every drift names a tool. "sherpa cache" is the voice engine's
+      // prebuilt archive: it came down over HTTP at threading and cannot come
+      // down again offline, so its absence stops a weave before it starts.
+      // Matched against tool names only, the row never rendered at all.
+      for (var d = 0; d < drifted.length; d++) {
+        (function(name) {
+          for (var k = 0; k < tools.length; k++) if (tools[k].name === name) return;
+          var row = document.createElement("div");
+          row.style.display = "contents";
+          row.dataset.testid = "loom-drift-" + name.replace(/\s+/g, "-");
+          var nameEl = document.createElement("span");
+          nameEl.style.fontFamily = "monospace";
+          nameEl.style.fontSize = "12.5px";
+          nameEl.style.color = ui.tokens.warn;
+          nameEl.textContent = name;
+          var verEl = document.createElement("span");
+          verEl.style.fontSize = "12.5px";
+          verEl.style.color = ui.tokens.warn;
+          verEl.textContent = "gone since threading";
+          var whereEl = document.createElement("span");
+          whereEl.style.fontSize = "12px";
+          whereEl.style.color = ui.tokens.warn;
+          whereEl.style.wordBreak = "break-all";
+          whereEl.textContent = "no weave can fetch it offline — thread the loom again while the network is there";
+          row.appendChild(nameEl);
+          row.appendChild(verEl);
+          row.appendChild(whereEl);
+          grid.appendChild(row);
+        })(String(drifted[d]));
       }
       toolsWrap.appendChild(grid);
       if (tools.length === 0) toolsWrap.appendChild(quiet("no tools reported yet."));

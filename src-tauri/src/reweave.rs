@@ -35,7 +35,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::error::LoomError;
@@ -260,6 +260,11 @@ impl Runner for ExecRunner {
 pub const NOT_THREADED: &str = "the loom isn't threaded — open Settings";
 pub const NOTHING_NEW: &str = "nothing new to weave — the body already matches the genome";
 pub const IN_FLIGHT: &str = "a weave is already under way";
+/// The prebuilt archive the voice engine compiles against came down over HTTP
+/// at threading and cannot come down again offline. Gone, the core stage
+/// fails minutes in with someone else's error; said here, it fails at once.
+pub const SHERPA_GONE: &str =
+    "the voice engine's build cache is gone — thread the loom again while the network is there";
 pub const PAST_RETURN: &str = "past the point of return — the swap is under way";
 pub const NOTHING_TO_CANCEL: &str = "nothing to cancel — no weave is under way";
 
@@ -269,12 +274,29 @@ fn running_sha(current: Option<&str>) -> String {
     current.map(str::to_string).unwrap_or_else(|| loomhome::genome_sha().to_string())
 }
 
-/// `reweave_start`'s rules (spec §Reweave): threaded; in packaged mode the
-/// genome's HEAD must differ from the running body unless `force`. Dev never
-/// swaps, so it always has something to prove.
-pub fn check_start(threaded: bool, mode: Mode, head: &str, current: Option<&str>, force: bool) -> Result<(), LoomError> {
+/// `reweave_start`'s rules (spec §Reweave): threaded; the voice engine's
+/// build cache still on the machine; in packaged mode the genome's HEAD must
+/// differ from the running body unless `force`. Dev never swaps, so it always
+/// has something to prove.
+///
+/// `sherpa_gone` is the round-2 amendment (Finding 4). Threading recorded
+/// where the prebuilt archive landed precisely so a weave could refuse before
+/// spending thirty minutes discovering it; round 1 recorded it and gated on
+/// nothing. `force` does not lift it: force means "weave although nothing
+/// changed", never "weave although the build cannot finish".
+pub fn check_start(
+    threaded: bool,
+    sherpa_gone: bool,
+    mode: Mode,
+    head: &str,
+    current: Option<&str>,
+    force: bool,
+) -> Result<(), LoomError> {
     if !threaded {
         return Err(LoomError::Parse(NOT_THREADED.into()));
+    }
+    if sherpa_gone {
+        return Err(LoomError::NotFound(SHERPA_GONE.into()));
     }
     if mode == Mode::Packaged && !force && head == running_sha(current) {
         return Err(LoomError::Parse(NOTHING_NEW.into()));
@@ -411,10 +433,22 @@ fn job_steps(
 
     match kind {
         Kind::Weave => {
-            // 1 · assets
+            // 1 · assets — npm is a `#!/usr/bin/env node` shim, so its
+            // absolute path is not enough: the recorded node's directory has
+            // to lead PATH or a Finder-launched app answers exit 127 here,
+            // at the first step of every packaged weave. Same pair the
+            // ceremony's deps and warm steps carry, from the same helper.
             p.stage("assets", true);
-            let npm = need_tool(ctx.tools, "npm")?;
-            let out = run(runner, p, "assets", &[&npm, "run", "build"], source, source, &[])?;
+            let (npm, node_path) = npm_with_node(ctx.tools)?;
+            let out = run(
+                runner,
+                p,
+                "assets",
+                &[&npm, "run", "build"],
+                source,
+                source,
+                &[("PATH", node_path.as_str())],
+            )?;
             if out.code != 0 {
                 return Err(exit_failed(runner, "assets", "the assets did not build", &out));
             }
@@ -513,6 +547,14 @@ fn job_steps(
     Ok(Finish::Relaunching { warden_pid })
 }
 
+/// npm's absolute path plus the PATH that lets its shebang find node —
+/// `threads::npm_with_node`, the ceremony's own helper, so the two surfaces
+/// can never drift apart again. A machine with npm but no node stops here
+/// with node's install line instead of at a shim's exit 127.
+fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String, String), Failed> {
+    threads::npm_with_node(tools).map_err(|e| failed(format!("{e}; {UNTOUCHED}"), e))
+}
+
 fn need_tool(tools: &dyn Fn(&str) -> Option<PathBuf>, name: &str) -> Result<String, Failed> {
     match tools(name) {
         Some(p) => Ok(p.to_string_lossy().into_owned()),
@@ -567,9 +609,40 @@ fn exit_failed(runner: &dyn Runner, stage: &str, fact: &str, out: &ExecOut) -> F
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
-/// Is a job thread of THIS process alive? `exec::JOB` says whether any job
-/// holds the slot (threading too); this says whether it is ours.
-static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Is a job thread of THIS process alive, and which tenancy of the slot is
+/// it? `exec::JOB` says whether any job holds the slot (threading too); this
+/// says whether it is ours, and names it. Zero means no weave is running.
+///
+/// It carries the token rather than a bare flag because reading it and
+/// killing are two steps: between them the weave can end and a ceremony can
+/// claim the slot. `Slot::kill` checks the token, so a cancel pressed a
+/// moment too late reaches nothing (round-2 review, Finding 3).
+static ACTIVE: AtomicU64 = AtomicU64::new(0);
+
+/// Raises the in-flight flag for as long as it lives and lowers it on drop.
+///
+/// Round-2 review, Finding 2: this used to be a bare `store(true)` before
+/// `run_job` and a `store(false)` after it, so an unwind skipped the
+/// lowering. A panicking weave then left `ACTIVE` standing while
+/// `reweave.json` still read cancellable — both halves of `reweave_cancel`'s
+/// gate open forever, on a slot the next job owns. Threading has had this
+/// guard since round 1; the weave has it now, and drops it BEFORE the
+/// `SlotGuard`, so there is never a moment where a weave claims the right to
+/// cancel a slot it has already given back.
+struct Active;
+
+impl Active {
+    fn take(token: crate::exec::JobToken) -> Active {
+        ACTIVE.store(token, Ordering::SeqCst);
+        Active
+    }
+}
+
+impl Drop for Active {
+    fn drop(&mut self) {
+        ACTIVE.store(0, Ordering::SeqCst);
+    }
+}
 
 fn ctx_for(app: &tauri::AppHandle) -> Result<(Home, Mode, PathBuf, Option<AppLayout>), LoomError> {
     let home = Home::from_app(app)?;
@@ -605,8 +678,15 @@ fn spawn_job(
     guard: crate::exec::SlotGuard<'static>,
 ) {
     use tauri::Emitter;
-    ACTIVE.store(true, Ordering::SeqCst);
+    // Raised here, on the caller's thread, so the command has not returned
+    // before a cancel could find the weave; carried into the job thread,
+    // where its Drop lowers it on every ending, panic included.
+    let active = Active::take(guard.token());
     std::thread::spawn(move || {
+        // Declared in this order so they unwind in the other one: the
+        // in-flight flag goes down first, the slot is given back second.
+        let held = guard;
+        let active = active;
         let tools = |name: &str| threads::tool_path(&home, name);
         let ctx = Ctx {
             home: &home,
@@ -621,23 +701,26 @@ fn spawn_job(
             let _ = app.emit(REWEAVE_EVENT, s.clone());
         };
         let fin = run_job(&ctx, kind, &mut ExecRunner, &mut emit);
-        ACTIVE.store(false, Ordering::SeqCst);
+        // The flag comes down first in every ending: this weave is over, and
+        // nothing that follows may be cancelled in its name.
+        drop(active);
         if releases_the_slot(&fin) {
-            drop(guard);
+            drop(held);
         } else {
             // The card has its line; the warden is waiting for this pid. The
             // slot is NOT given back: nothing may start a second swap over the
             // one already armed in the seconds before we exit. Forgetting the
             // guard is how "held until the process dies" is spelled — process
             // exit is the release.
-            std::mem::forget(guard);
+            std::mem::forget(held);
             std::thread::sleep(RELAUNCH_GRACE);
             app.exit(0);
         }
-        // A panic anywhere in run_job unwinds THROUGH the guard, so the slot
-        // comes back and LOOM can be asked to weave again. Before the guard,
-        // a panicking weave wedged every later threading and reweave until
-        // the app was restarted.
+        // A panic anywhere in run_job unwinds THROUGH both guards — the flag
+        // down, then the slot back — so LOOM can be asked to weave again.
+        // Before them, a panicking weave wedged every later threading and
+        // reweave until the app was restarted, and left a cancel gate open
+        // over a slot it no longer owned.
     });
 }
 
@@ -652,20 +735,33 @@ pub fn reweave_start(app: tauri::AppHandle, force: bool) -> Result<(), LoomError
     // can never leave the slot held.
     let head = kernel::head_sha(&source)?;
     let current = generations::read(&home).current;
-    check_start(loomhome::read_threaded(&home), mode, &head, current.as_deref(), force)?;
+    check_start(
+        loomhome::read_threaded(&home),
+        threads::sherpa_missing(&home),
+        mode,
+        &head,
+        current.as_deref(),
+        force,
+    )?;
     spawn_job(app, home, mode, source, layout, Kind::Weave, guard);
     Ok(())
 }
 
 /// Kill the job tree — only before the point of return.
+///
+/// The kill carries this weave's own token: the gate is read, then the kill
+/// is issued, and in between the weave can end and a ceremony can take the
+/// slot. `Slot::kill` refuses every token but the one it holds, so the worst
+/// a late CANCEL can do is nothing (round-2 review, Finding 3).
 #[tauri::command]
 pub fn reweave_cancel(app: tauri::AppHandle) -> Result<(), LoomError> {
     let home = Home::from_app(&app)?;
-    if !ACTIVE.load(Ordering::SeqCst) {
+    let token = ACTIVE.load(Ordering::SeqCst);
+    if token == 0 {
         return Err(LoomError::Parse(NOTHING_TO_CANCEL.into()));
     }
     cancel_with(&read_state(&home, loomhome::mode()))?;
-    JOB.kill();
+    JOB.kill(token);
     Ok(())
 }
 
@@ -676,7 +772,7 @@ pub fn reweave_state(app: tauri::AppHandle) -> Result<ReweaveState, LoomError> {
     let running = generations::read(&home).current;
     Ok(settle(
         read_state(&home, loomhome::mode()),
-        ACTIVE.load(Ordering::SeqCst),
+        ACTIVE.load(Ordering::SeqCst) != 0,
         Some(&running_sha(running.as_deref())),
     ))
 }
@@ -797,10 +893,13 @@ mod tests {
         std::fs::set_permissions(&lay.exe_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let bin = root.join("bin");
-        // npm: record argv, print a line.
+        // node: the interpreter npm's shebang goes looking for on PATH.
+        script(&bin.join("node"), "echo 'v22.3.0'");
+        // npm: record argv AND the PATH it was handed, print a line.
         script(&bin.join("npm"), &format!(
-            "printf '%s\\n' \"$@\" > '{}'\necho 'vite built dist/'",
-            root.join("npm-argv.txt").display()
+            "printf '%s\\n' \"$@\" > '{}'\nprintf '%s' \"$PATH\" > '{}'\necho 'vite built dist/'",
+            root.join("npm-argv.txt").display(),
+            root.join("npm-path.txt").display()
         ));
         // cargo: record argv, honour CARGO_TARGET_DIR, produce the body.
         script(&bin.join("cargo"), &format!(
@@ -819,7 +918,7 @@ mod tests {
         fn tools(&self) -> impl Fn(&str) -> Option<PathBuf> + '_ {
             move |name: &str| match name {
                 "git" => Some(PathBuf::from("git")),
-                "npm" | "cargo" | "codesign" => Some(self.bin.join(name)),
+                "npm" | "node" | "cargo" | "codesign" => Some(self.bin.join(name)),
                 _ => None,
             }
         }
@@ -870,9 +969,11 @@ mod tests {
     }
 
     /// A scripted runner: per stage, an exit code and the lines it "prints".
+    /// Every call is recorded with its argv AND its env pairs — the pairs are
+    /// how the assets stage tells npm where node lives.
     struct FakeRunner {
         script: HashMap<&'static str, (i32, Vec<&'static str>)>,
-        calls: Vec<(String, Vec<String>)>,
+        calls: Vec<(String, Vec<String>, Vec<(String, String)>)>,
         detached: Vec<Vec<String>>,
     }
 
@@ -883,10 +984,14 @@ mod tests {
             argv: &[&str],
             _cwd: &Path,
             _root: &Path,
-            _envs: &[(&str, &str)],
+            envs: &[(&str, &str)],
             on_line: &mut dyn FnMut(&str),
         ) -> Result<ExecOut, LoomError> {
-            self.calls.push((stage.to_string(), argv.iter().map(|s| s.to_string()).collect()));
+            self.calls.push((
+                stage.to_string(),
+                argv.iter().map(|s| s.to_string()).collect(),
+                envs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ));
             let (code, lines) = self.script.get(stage).cloned().unwrap_or((0, vec![]));
             for l in &lines {
                 on_line(l);
@@ -977,7 +1082,7 @@ mod tests {
         assert!(!last.cancellable);
         assert_eq!(&persisted(&fx.home), last);
         // Only assets and core were asked for; nothing was staged, swapped or launched.
-        let stages_called: Vec<&str> = runner.calls.iter().map(|(s, _)| s.as_str()).collect();
+        let stages_called: Vec<&str> = runner.calls.iter().map(|(s, _, _)| s.as_str()).collect();
         assert_eq!(stages_called, vec!["assets", "core"]);
         assert!(runner.detached.is_empty());
         assert!(!fx.home.generation_exe(&fx.head).exists());
@@ -989,32 +1094,32 @@ mod tests {
 
     #[test]
     fn start_refuses_when_not_threaded() {
-        let err = check_start(false, Mode::Packaged, "aaa", Some("bbb"), false).unwrap_err();
+        let err = check_start(false, false, Mode::Packaged, "aaa", Some("bbb"), false).unwrap_err();
         match err {
             LoomError::Parse(m) => assert!(m.contains("isn't threaded"), "msg was {m}"),
             other => panic!("expected Parse, got {other:?}"),
         }
         // force does not bypass threading; neither does dev mode.
-        assert!(check_start(false, Mode::Packaged, "aaa", Some("bbb"), true).is_err());
-        assert!(check_start(false, Mode::Dev, "aaa", None, true).is_err());
-        assert!(check_start(true, Mode::Packaged, "aaa", Some("bbb"), false).is_ok());
+        assert!(check_start(false, false, Mode::Packaged, "aaa", Some("bbb"), true).is_err());
+        assert!(check_start(false, false, Mode::Dev, "aaa", None, true).is_err());
+        assert!(check_start(true, false, Mode::Packaged, "aaa", Some("bbb"), false).is_ok());
     }
 
     #[test]
     fn start_refuses_when_head_equals_current_unless_force() {
-        let err = check_start(true, Mode::Packaged, "aaa", Some("aaa"), false).unwrap_err();
+        let err = check_start(true, false, Mode::Packaged, "aaa", Some("aaa"), false).unwrap_err();
         match err {
             LoomError::Parse(m) => assert!(m.contains("nothing new to weave"), "msg was {m}"),
             other => panic!("expected Parse, got {other:?}"),
         }
-        assert!(check_start(true, Mode::Packaged, "aaa", Some("aaa"), true).is_ok(), "force weaves anyway");
-        assert!(check_start(true, Mode::Packaged, "bbb", Some("aaa"), false).is_ok());
+        assert!(check_start(true, false, Mode::Packaged, "aaa", Some("aaa"), true).is_ok(), "force weaves anyway");
+        assert!(check_start(true, false, Mode::Packaged, "bbb", Some("aaa"), false).is_ok());
         // Generation 0 predates the ledger: the running body is the baked sha.
         let g0 = crate::loomhome::genome_sha();
-        assert!(check_start(true, Mode::Packaged, g0, None, false).is_err());
-        assert!(check_start(true, Mode::Packaged, "bbb", None, false).is_ok());
+        assert!(check_start(true, false, Mode::Packaged, g0, None, false).is_err());
+        assert!(check_start(true, false, Mode::Packaged, "bbb", None, false).is_ok());
         // Dev never swaps, so the head/current rule does not apply.
-        assert!(check_start(true, Mode::Dev, "aaa", Some("aaa"), false).is_ok());
+        assert!(check_start(true, false, Mode::Dev, "aaa", Some("aaa"), false).is_ok());
     }
 
     #[test]
@@ -1190,6 +1295,115 @@ mod tests {
         assert!(seen.len() < 1000, "line pushes are throttled, not emitted one by one ({})", seen.len());
         assert!(seen.iter().all(|s| s.tail.len() <= TAIL_CAP));
         assert_eq!(on_disk.target_sha.as_deref(), Some("abc"));
+    }
+
+    // ── round-2 review ──
+
+    /// Round-2 review, Finding 1. Round 1 taught the CEREMONY to lead npm's
+    /// PATH with the recorded node, and its commit message claimed the same
+    /// fix covered "reweave's assets stage — the packaged self-rebuild". It
+    /// did not: the stage ran `npm run build` with an EMPTY env list, and npm
+    /// is a `#!/usr/bin/env node` shim. A Finder-launched app inherits
+    /// `/usr/bin:/bin:/usr/sbin:/sbin`, which holds neither nvm nor homebrew,
+    /// so the first stage of every packaged weave exited 127.
+    #[test]
+    fn the_assets_stage_leads_npms_path_with_the_recorded_node() {
+        let fx = fixture();
+        let tools = fx.tools();
+        let ctx = fx.ctx(Mode::Dev, &tools);
+        let mut seen = Vec::new();
+        run_job(&ctx, Kind::Weave, &mut ExecRunner, &mut fx.states(&mut seen)).unwrap();
+
+        let path = std::fs::read_to_string(fx.root.join("npm-path.txt"))
+            .expect("the assets stage hands npm a PATH");
+        let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        assert_eq!(
+            dirs.first().map(PathBuf::as_path),
+            Some(fx.bin.as_path()),
+            "the recorded node's directory must lead npm's PATH, got {path:?}"
+        );
+        assert!(dirs.len() > 1, "the process's own PATH is kept behind it, got {path:?}");
+        // The argv is unchanged: still the fixed `npm run build`.
+        assert_eq!(fx.argv("npm"), vec!["run", "build"]);
+    }
+
+    /// Round-2 review, Finding 1, at the argv/env boundary: the pair is what
+    /// the runner is handed, not something npm happened to inherit.
+    #[test]
+    fn the_assets_argv_carries_a_path_pair() {
+        let fx = fixture();
+        let tools = fx.tools();
+        let ctx = fx.ctx(Mode::Dev, &tools);
+        let mut runner = FakeRunner {
+            script: HashMap::from([("core", (101, vec!["error: could not compile `loom`"]))]),
+            calls: vec![],
+            detached: vec![],
+        };
+        let mut seen = Vec::new();
+        let _ = run_job(&ctx, Kind::Weave, &mut runner, &mut fx.states(&mut seen));
+
+        let (_, argv, envs) = runner
+            .calls
+            .iter()
+            .find(|(stage, _, _)| stage == "assets")
+            .expect("the assets stage spawned");
+        assert_eq!(&argv[1..], &["run".to_string(), "build".to_string()]);
+        let (_, value) = envs
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .expect("the assets stage passes the PATH pair, as the ceremony does");
+        assert!(
+            std::env::split_paths(value).next() == Some(fx.bin.clone()),
+            "the pair leads with the recorded node's directory, got {value:?}"
+        );
+    }
+
+    /// Round-2 review, Finding 2. `ACTIVE` was raised before `run_job` and
+    /// lowered after it, so an unwind skipped the lowering: after a panicking
+    /// weave the flag stood, `reweave.json` still read cancellable, and BOTH
+    /// halves of `reweave_cancel`'s gate were permanently open. The cancel
+    /// then called the SHARED `JOB.kill()`, which group-killed whatever job
+    /// held the slot next — including a threading ceremony's `npm ci`, the
+    /// one network step in the product. Threading already had this guard.
+    #[test]
+    fn a_panicking_weave_lowers_the_in_flight_flag() {
+        let job = std::thread::spawn(|| {
+            let _active = Active::take(7);
+            assert_eq!(ACTIVE.load(Ordering::SeqCst), 7, "the flag names the tenancy while the weave runs");
+            panic!("a stage blew up mid-weave");
+        });
+        assert!(job.join().is_err(), "the weave thread panicked");
+        assert_eq!(
+            ACTIVE.load(Ordering::SeqCst),
+            0,
+            "an unwinding weave must not leave the flag standing — the cancel gate would stay open on a job that is not ours"
+        );
+    }
+
+    /// Round-2 review, Finding 4. Round 1 recorded the sherpa cache and said
+    /// the weave would then "fail early and honestly, or not start". Nothing
+    /// acted on it: `check_start` gated only on `threaded`, so a purged cache
+    /// still produced an opaque failure minutes into the core stage — and
+    /// nothing offline can fetch the archive again.
+    #[test]
+    fn start_refuses_when_the_sherpa_cache_is_gone() {
+        let err = check_start(true, true, Mode::Packaged, "bbb", Some("aaa"), false).unwrap_err();
+        match err {
+            LoomError::NotFound(m) => assert_eq!(m, SHERPA_GONE),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+        // Dev compiles the same core against the same cache: it refuses too.
+        assert!(check_start(true, true, Mode::Dev, "aaa", None, false).is_err());
+        // force means "weave although nothing changed", never "weave although
+        // the build cannot succeed".
+        assert!(check_start(true, true, Mode::Packaged, "bbb", Some("aaa"), true).is_err());
+        // A cache that is still there does not block anything.
+        assert!(check_start(true, false, Mode::Packaged, "bbb", Some("aaa"), false).is_ok());
+        // Unthreaded is still the first thing said.
+        match check_start(false, true, Mode::Packaged, "bbb", Some("aaa"), false).unwrap_err() {
+            LoomError::Parse(m) => assert_eq!(m, NOT_THREADED),
+            other => panic!("expected Parse, got {other:?}"),
+        }
     }
 
     // ── beyond the seven ──

@@ -259,6 +259,12 @@ export type ThreadSteps = {
  * What the threading card reads. `missing` = not found now; `drifted` = a
  * recorded tool whose path is gone or whose version changed; `needsNetwork`
  * = deps or vendor have not completed (the only steps that touch the net).
+ *
+ * `drifted` also carries entries that name no tool — today one: `"sherpa
+ * cache"`, the voice engine's prebuilt archive, recorded at threading and
+ * gone since. It arrived over HTTP and cannot arrive again offline, so
+ * `reweave_start` refuses on it rather than letting the core stage discover
+ * it half an hour in. The Settings tool table renders those rows too.
  */
 export type ThreadStatus = {
   threaded: boolean;
@@ -267,6 +273,9 @@ export type ThreadStatus = {
   drifted: string[];
   steps: ThreadSteps;
   needsNetwork: boolean;
+  /** Where threading found the voice engine's prebuilt archive; `null` if
+   *  it never recorded one. Present in `drifted` when it has since gone. */
+  sherpaCache: string | null;
 };
 
 /** Discover the machine's tools now and compare with `threads.json`. */

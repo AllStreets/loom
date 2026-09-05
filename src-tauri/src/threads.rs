@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::error::LoomError;
@@ -425,10 +425,29 @@ pub fn write_sherpa(home: &Home, t: &Threads, sherpa: Option<String>) -> Result<
     write_json_atomic(&home.threads_json(), &v)
 }
 
+/// Was a sherpa cache recorded at threading, and has it since gone?
+///
+/// The archive arrives over HTTP at build time and cannot arrive again once
+/// the network is gone, so its absence is not a warning — it is the reason a
+/// weave will fail, and `reweave::check_start` refuses on it. A LOOM that
+/// never recorded one is not blocked: `false` is the honest answer to "was
+/// something here and is it gone".
+pub fn sherpa_missing(home: &Home) -> bool {
+    read_sherpa(home).as_deref().map_or(false, sherpa_gone)
+}
+
 /// A recorded tool's path if it still exists on disk; otherwise a fresh
 /// discovery. This is what every later spawn (validation, reweave) asks for
-/// argv[0], so a recorded path that vanished never becomes a silent PATH walk
-/// without the status surface also reporting the drift.
+/// argv[0].
+///
+/// The fallback deliberately swaps toolchains: when the recorded node or
+/// cargo is gone (an nvm bump moves node's whole directory), the weave runs
+/// against whatever the search finds NOW, which may not be what
+/// `threads.json` recorded. Round-2 review, Finding 8 — considered and kept,
+/// because refusing would strand the owner: re-threading does not re-record
+/// the tool table, so there would be no remedy to offer. It is stated rather
+/// than hidden — `status_with` reports the tool as drifted and the Settings
+/// row says a weave uses the one found now, not the one recorded.
 pub fn tool_path(home: &Home, name: &str) -> Option<PathBuf> {
     if let Some(t) = read(home) {
         if let Some(p) = t.tools.iter().find(|t| t.name == name).and_then(|t| t.path.as_deref()) {
@@ -485,7 +504,7 @@ pub fn status_with(home: &Home, specs: &[ToolSpec], home_dir: &Path, path_env: &
         }
     }
     let sherpa = read_sherpa(home);
-    if sherpa.as_deref().map_or(false, sherpa_gone) {
+    if sherpa_missing(home) {
         drifted.push(SHERPA_DRIFT.to_string());
     }
     let steps = recorded.as_ref().map(|r| r.steps).unwrap_or_default();
@@ -576,7 +595,11 @@ fn need_tool(tools: &dyn Fn(&str) -> Option<PathBuf>, name: &str) -> Result<Stri
 /// npm's absolute path plus the PATH value that lets its shebang find node.
 /// A machine with npm but no node cannot run npm at all, so it stops here
 /// with node's own install line rather than at a shim's exit 127.
-fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String, String), LoomError> {
+///
+/// Public because the ceremony is not the only caller: `reweave`'s assets
+/// stage runs the same `npm run build` on the same machine and needs the same
+/// pair. Round 1 fixed only the ceremony and said it had fixed both.
+pub fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String, String), LoomError> {
     let npm = need_tool(tools, "npm")?;
     let node = need_tool(tools, "node")?;
     let path = npm_path_env(Path::new(&node))
@@ -852,6 +875,19 @@ fn ceremony_steps(
         std::fs::create_dir_all(cfg.parent().unwrap()).map_err(|e| LoomError::Git(e.to_string()))?;
         std::fs::write(&cfg, cargo_config(&home.vendor()))
             .map_err(|e| LoomError::Git(format!("write {}: {e}", cfg.display())))?;
+        // Say what was left behind. In dev this file lands in the owner's own
+        // checkout, where every later `cargo` — LOOM's and theirs — reads it
+        // and builds from the vendored crates with the network switched off.
+        // Round-2 review, Finding 6: an untracked file that silently changes
+        // how a checkout builds must be announced, not discovered.
+        emit(
+            "vendor",
+            &format!(
+                "wrote {} — cargo in this checkout now builds from the vendored crates, offline",
+                cfg.display()
+            ),
+            none,
+        );
         t.steps.vendor = true;
         write(home, t)?;
     }
@@ -931,24 +967,30 @@ fn ceremony_steps(
     Ok(())
 }
 
-/// Is the job in flight THREADING's? `exec::JOB` says a job holds the slot,
-/// not whose it is; `thread_cancel` must never reach a weave.
-static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Is the job in flight THREADING's, and which tenancy of the slot is it?
+/// `exec::JOB` says a job holds the slot, not whose it is; `thread_cancel`
+/// must never reach a weave. Zero means no ceremony is running.
+///
+/// It holds the token rather than a bare flag because reading the flag and
+/// killing are two steps: between them the ceremony can end and a weave can
+/// claim the slot. The token the ceremony was given is what `Slot::kill`
+/// checks, so a late stop button reaches nothing.
+static ACTIVE: AtomicU64 = AtomicU64::new(0);
 
 /// Raises the flag for as long as it lives and lowers it on drop — an
 /// unwinding job thread leaves nothing standing.
 struct Active;
 
 impl Active {
-    fn take() -> Active {
-        ACTIVE.store(true, Ordering::SeqCst);
+    fn take(token: crate::exec::JobToken) -> Active {
+        ACTIVE.store(token, Ordering::SeqCst);
         Active
     }
 }
 
 impl Drop for Active {
     fn drop(&mut self) {
-        ACTIVE.store(false, Ordering::SeqCst);
+        ACTIVE.store(0, Ordering::SeqCst);
     }
 }
 
@@ -995,7 +1037,7 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
         // moment where a reweave holds the slot while threading still claims
         // the right to cancel it.
         let held = slot;
-        let _active = Active::take();
+        let _active = Active::take(held.token());
         let tools = |name: &str| tool_path(&home, name);
         let mut emit = |step: &str, detail: &str, tail: &[String]| {
             let _ = app.emit(
@@ -1023,12 +1065,18 @@ pub fn thread_loom(app: tauri::AppHandle) -> Result<(), LoomError> {
 /// Refused unless threading is the job in flight. The slot is shared with
 /// reweave, and a weave past its cancellable stages is not threading's to
 /// kill — the spec's point of return belongs to the reweave card.
+///
+/// The kill carries the ceremony's own token: reading the flag and killing
+/// are two steps, and between them the ceremony can end and a weave can take
+/// the slot. `Slot::kill` refuses any token but the one it currently holds,
+/// so a stop button pressed a moment too late reaches nothing at all.
 #[tauri::command]
 pub fn thread_cancel() -> Result<(), LoomError> {
-    if !ACTIVE.load(Ordering::SeqCst) {
+    let token = ACTIVE.load(Ordering::SeqCst);
+    if token == 0 {
         return Err(LoomError::Parse(NOTHING_TO_CANCEL.into()));
     }
-    crate::exec::JOB.kill();
+    crate::exec::JOB.kill(token);
     Ok(())
 }
 
@@ -1261,13 +1309,15 @@ mod tests {
             LoomError::Parse(m) => assert_eq!(m, NOTHING_TO_CANCEL),
             e => panic!("expected the honest refusal, got {e:?}"),
         }
-        // While the ceremony runs the flag says so; it lowers on drop, so a
-        // job thread that panics leaves nothing cancellable behind.
+        // While the ceremony runs the flag names its tenancy of the slot; it
+        // lowers on drop, so a job thread that panics leaves nothing
+        // cancellable behind — and a cancel issued after it can carry no
+        // token the slot will honour.
         {
-            let _active = Active::take();
-            assert!(ACTIVE.load(Ordering::SeqCst));
+            let _active = Active::take(11);
+            assert_eq!(ACTIVE.load(Ordering::SeqCst), 11);
         }
-        assert!(!ACTIVE.load(Ordering::SeqCst));
+        assert_eq!(ACTIVE.load(Ordering::SeqCst), 0);
         assert!(thread_cancel().is_err(), "refused again once the ceremony ended");
     }
 
@@ -1422,6 +1472,9 @@ mod tests {
         /// This ceremony's own job slot. The app runs in `exec::JOB`; a test
         /// that shared it could group-kill another test's tools.
         slot: &'static Slot,
+        /// The token naming this ceremony's tenancy of the slot: `kill` takes
+        /// it, so a stale cancel cannot land on a job that is not this one.
+        token: crate::exec::JobToken,
         /// The dev checkout — where the owner keeps it, NOT under loomhome.
         /// `loomhome/source` is seed's work, and seed runs in packaged mode
         /// only; a fixture that pre-creates it hides that dev has no source.
@@ -1455,7 +1508,7 @@ mod tests {
         let root = dir.path().join("loom");
         let home = Home::at(root.clone());
         let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
-        assert!(slot.try_take(), "the ceremony holds its slot, as thread_loom does");
+        let token = slot.try_take().expect("the ceremony holds its slot, as thread_loom does");
         std::fs::create_dir_all(&root).unwrap();
         let source = dir.path().join("checkout");
         std::fs::create_dir_all(source.join("src-tauri")).unwrap();
@@ -1468,7 +1521,7 @@ mod tests {
         let cargo = fake_tool(&bin, "cargo", &log, &markers, cargo_extra);
         let exe = dir.path().join("loom-body");
         std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
-        Stage { _dir: dir, home, slot, source, log, markers, npm, node, cargo, exe }
+        Stage { _dir: dir, home, slot, token, source, log, markers, npm, node, cargo, exe }
     }
 
     #[cfg(unix)]
@@ -1671,6 +1724,47 @@ fi"#;
         assert!(st.markers.join("cargo-vendor").exists());
     }
 
+    /// Round-2 review, Finding 6. In dev the ceremony writes
+    /// `.cargo/config.toml` into the OWNER'S OWN CHECKOUT, where every later
+    /// cargo command — LOOM's and the owner's — reads it and builds from the
+    /// vendored crates with `[net] offline = true`. A file that changes how a
+    /// checkout builds must be announced, not discovered.
+    #[cfg(unix)]
+    #[test]
+    fn the_vendor_step_says_what_it_left_in_the_checkout() {
+        let st = stage("", CARGO_BUILD_FAKE);
+        let (res, events) = st.run();
+        assert!(res.is_ok(), "{res:?}");
+        let cfg = st.source.join(".cargo").join("config.toml");
+        let said = events
+            .iter()
+            .filter(|(step, _, _)| step == "vendor")
+            .any(|(_, detail, _)| {
+                detail.contains(&cfg.display().to_string())
+                    && detail.contains("vendored")
+                    && detail.contains("offline")
+            });
+        assert!(
+            said,
+            "the vendor step must name the file it wrote and what it does, saw {:?}",
+            events.iter().filter(|(s, _, _)| s == "vendor").collect::<Vec<_>>()
+        );
+    }
+
+    /// …and the same file must not linger as an untracked surprise in the
+    /// genome. Round-2 review, Finding 6.
+    #[test]
+    fn the_ceremonys_cargo_config_is_gitignored() {
+        let ignore = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join(".gitignore"),
+        )
+        .expect("the genome has a .gitignore");
+        assert!(
+            ignore.lines().any(|l| l.trim() == ".cargo/config.toml"),
+            "a dev ceremony writes .cargo/config.toml into the checkout — it must be ignored, not committed by accident"
+        );
+    }
+
     /// Both npm spawns in the ceremony — deps and the warm assets build —
     /// carry the pair, or the packaged self-rebuild dies at `npm ci`.
     #[cfg(unix)]
@@ -1749,7 +1843,7 @@ fi"#;
             std::thread::sleep(Duration::from_millis(20));
         }
         let pid = slot.pid().expect("npm ci registers its pid — otherwise CANCEL reaches nothing");
-        slot.kill();
+        slot.kill(st.token);
         let res = job.join().unwrap();
 
         assert!(start.elapsed() < Duration::from_secs(20), "the kill lands promptly");
@@ -1773,7 +1867,7 @@ fi"#;
     #[test]
     fn a_cancel_between_steps_stops_before_the_next_one() {
         let st = stage("", CARGO_BUILD_FAKE);
-        st.slot.kill(); // marks cancelled; no child is running
+        st.slot.kill(st.token); // marks cancelled; no child is running
         let (res, events) = st.run();
         match res {
             Err(LoomError::Parse(m)) => assert_eq!(m, CANCELLED),
