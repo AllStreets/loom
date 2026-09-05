@@ -253,6 +253,66 @@ broke that gate; every finding was reproduced by an executed test first.
 - The deck scratch that was compiled into the shipped binary — including a local
   settings file with personal URLs — is out of `public/`.
 
+### Round-3 review (2026-09-04/05) — the round that found the phase inert
+
+Three reviewers: the combined state machine, every Rust↔TS seam, and a clean
+clone. **The headline is that a packaged LOOM could not have rebuilt itself, and
+two rounds of slice reviews had not seen it** — because it is invisible in dev,
+which is where all the proving had been done.
+
+**Resolved**
+
+- **The weave was unreachable after the first one.** Rust and TypeScript
+  answered "is the genome ahead of the body?" with different pairs of shas: the
+  shell compared the ledger against `genomeSha`, the sha compiled into the
+  running binary — and threading deliberately sets those equal, so the answer
+  was always "nothing new to weave". Every route funnelled through that gate and
+  the core's correct rule sat behind it, unreachable. `kernel_identity` carries
+  `genomeHead` now, resolved the same way a weave resolves its target.
+- **The consent line named the running body**, not what would be woven. Same
+  root cause, same fix.
+- **`running_sha` asked the ledger which body was running.** The baked sha is
+  compiled into the executing binary and cannot be wrong about that; the ledger
+  is a claim about disk and may lag. `check_start`, `check_return`, `settle`, the
+  warden's fallback and `swap_plan` all take the running body as an argument now.
+- **Threading died in its longest step on a packaged app.** Round 1 gave npm a
+  PATH because it is a `#!/usr/bin/env node` shim; cargo needed the same for its
+  own reason — native build scripts resolve `cmake` by name, and a
+  Finder-launched app has almost nothing on PATH. Every cargo spawn now carries
+  the recorded toolchain directories and `CMAKE`.
+- **A live warden healed over a later body.** It never checked that the birth it
+  guarded was still the one in play; the backstop already had that check.
+- **`boot_ok_at` overwrote terminal sentinels**, so a late beacon from a failed
+  body erased the heal that had just happened.
+- **A failed heal reached the owner as silence** — Rust reported it and the
+  notice dropped it, because a rollback that failed carries no sha, which is
+  exactly what makes it the notice that matters.
+- **The loomhome ignore matched `*.json` at every depth**, silently dropping
+  every organ's manifest from the organ timeline on a fresh install.
+- **`unknown` was refused only after the build** — up to thirty minutes in.
+- **CI could not catch the class of bug that opened this review.** It now
+  typechecks and builds the packaged app, asserting the `.app` exists, is
+  executable, and carries the genome it must rebuild from.
+
+**Left standing, deliberately**
+
+- **The genome bundle is never re-staged.** The shipped `genome.bundle` keeps
+  the sha the app was built at, so if `loomhome/source` is ever removed, a
+  re-seed rewinds the genome past every self-edit while the body is generation N.
+  Narrow, and the seed follows the bundle's own sha by design — but it is a
+  writer and a reader that disagree after the first weave.
+- **Threading has no stop button and no progress surface of its own.**
+  `thread_cancel` is wired and tested with no production caller, and `loom-thread`
+  has one listener, inside the organ API. A ceremony that spends the owner's one
+  network trip runs for tens of minutes with no rail and no cancel. A chrome-owned
+  thread card mirroring the reweave card is the fix.
+- **A SIGKILLed warden still leaves its pid behind.** `release_pid` clears it on
+  every ordinary exit; only an outright kill defeats it, and the sha stamp is the
+  load-bearing half anyway.
+- **`Recovery.reason` crosses the boundary and dies at the last inch** — the
+  notice always says "and couldn't", so the distinction between a crash and a
+  body still running when the clock ran out never reaches the owner.
+
 ### Phase-23 backlog (beyond Rebirth)
 
 - **Toolchain distribution** — LOOM only adopts tools already on the machine; a missing rustup/node/cmake is reported with its install line and threading stops. Installing them from inside the app (pinned versions, offline archives) is its own phase.
