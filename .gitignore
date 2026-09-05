@@ -46,3 +46,11 @@ public/decks/
 # Rebirth (Phase 23): build.rs stages the TTS dylibs here from whichever
 # profile is building, so tauri.conf can name one stable path. Build output.
 src-tauri/libs/
+
+# Rebirth (Phase 23): a dev threading ceremony writes this into the owner's
+# own checkout. It points cargo at loomhome/vendor with `[net] offline = true`,
+# so EVERY later cargo command in this checkout — LOOM's and the owner's —
+# builds from the vendored crates and never reaches the network. It is
+# machine-local (it names an absolute loomhome path) and PROTECTED in the
+# genome; it is not the repository's to carry.
+.cargo/config.toml
