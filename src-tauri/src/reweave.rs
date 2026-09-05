@@ -545,10 +545,10 @@ fn job_steps(
         let e = LoomError::Unsupported(platform::UNSUPPORTED_SWAP.into());
         failed(format!("{} — the body is on the shelf", platform::UNSUPPORTED_SWAP), e)
     })?;
-    let ledger = generations::read(home);
     // `running()` — the sha baked into this executing binary — is who is being
-    // replaced. The ledger may lag it; the binary cannot be wrong about itself.
-    let plan = platform::swap_plan(&ledger, &layout, home, target, ctx.os, running())
+    // replaced. The ledger is not asked: it is a claim about what is on disk
+    // and may lag the body, while the binary cannot be wrong about itself.
+    let plan = platform::swap_plan(&layout, home, target, ctx.os, running())
         .map_err(|e| failed(format!("the swap could not be planned — {e}; {UNTOUCHED}"), e))?;
     for step in &plan {
         if let Ok(v) = serde_json::to_string(step) {

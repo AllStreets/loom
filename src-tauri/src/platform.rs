@@ -6,7 +6,7 @@
 //!
 //! Two halves, deliberately separated (spec §Reweave, stage "swap"):
 //!
-//! - `swap_plan` is PURE. Given the ledger, the app layout, the home, and the
+//! - `swap_plan` is PURE. Given the app layout, the home, the running body and the
 //!   sha to become, it returns the ordered list of `Step`s — or a typed
 //!   refusal (`Unsupported` off macOS or when a body cannot name the
 //!   generation it is, `Parse` when that generation is already running). The
@@ -71,9 +71,15 @@ use std::time::Duration;
 
 use crate::error::LoomError;
 use crate::exec;
-use crate::generations::{self, Ledger};
+use crate::generations;
 use crate::kernel::{self, Sentinel};
-use crate::loomhome::{self, Home};
+use crate::loomhome::Home;
+// The plan no longer reads the ledger or the baked sha — the caller passes the
+// running body in — so these are the tests' alone.
+#[cfg(test)]
+use crate::generations::Ledger;
+#[cfg(test)]
+use crate::loomhome;
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -146,7 +152,6 @@ pub const UNKNOWN_GENERATION: &str =
 
 /// Pure: the ordered steps that make `new_sha` the running body.
 pub fn swap_plan(
-    ledger: &Ledger,
     layout: &AppLayout,
     home: &Home,
     new_sha: &str,
@@ -439,7 +444,7 @@ mod tests {
         let home = Home::at(d.path().join("loom"));
         let lay = layout(d.path());
         let led = ledger(Some("aaa111"), None);
-        let plan = swap_plan(&led, &lay, &home, "bbb222", "macos", "aaa111").unwrap();
+        let plan = swap_plan(&lay, &home, "bbb222", "macos", "aaa111").unwrap();
         // The sentinel — which arms every healer — is written BEFORE the body
         // is replaced; the ledger — which claims which body is on disk — is
         // written AFTER it (round-2 review, Finding 1).
@@ -463,7 +468,7 @@ mod tests {
         // Generation 0 predates the ledger: no `current` on file, so the
         // running body is named by the sha baked into this binary.
         let g0 = loomhome::genome_sha().to_string();
-        let plan0 = swap_plan(&Ledger::default(), &lay, &home, "bbb222", "macos", &g0).unwrap();
+        let plan0 = swap_plan(&lay, &home, "bbb222", "macos", &g0).unwrap();
         let g0 = loomhome::genome_sha().to_string();
         assert_eq!(plan0[0], Step::EnsureCurrentKept { sha: g0.clone(), from: lay.exe_path.clone() });
         assert_eq!(plan0[1], Step::WriteSentinel { applied: "bbb222".into(), prev: g0.clone() });
@@ -481,7 +486,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = Home::at(d.path().join("loom"));
         let lay = layout(d.path());
-        let err = swap_plan(&ledger(Some("aaa111"), None), &lay, &home, "aaa111", "macos", "aaa111").unwrap_err();
+        let err = swap_plan(&lay, &home, "aaa111", "macos", "aaa111").unwrap_err();
         match err {
             LoomError::Parse(m) => assert_eq!(m, ALREADY_RUNNING),
             other => panic!("expected Parse, got {other:?}"),
@@ -489,7 +494,7 @@ mod tests {
         // Same rule for generation 0 — the baked sha is what is running.
         let g0 = loomhome::genome_sha();
         assert!(matches!(
-            swap_plan(&Ledger::default(), &lay, &home, g0, "macos", g0),
+            swap_plan(&lay, &home, g0, "macos", g0),
             Err(LoomError::Parse(_))
         ));
     }
@@ -507,17 +512,17 @@ mod tests {
         // Generation 0 outside a repo: no ledger, and the baked sha is
         // `unknown`, so the running body has no name to be shelved under.
         let unnamed = Ledger { current: Some(UNKNOWN_SHA.into()), ..Ledger::default() };
-        match swap_plan(&unnamed, &lay, &home, "bbb222", "macos", UNKNOWN_SHA) {
+        match swap_plan(&lay, &home, "bbb222", "macos", UNKNOWN_SHA) {
             Err(LoomError::Unsupported(m)) => assert_eq!(m, UNKNOWN_GENERATION),
             other => panic!("expected Unsupported, got {other:?}"),
         }
         // Neither may a body be woven INTO a generation with no name.
         assert!(matches!(
-            swap_plan(&ledger(Some("aaa111"), None), &lay, &home, UNKNOWN_SHA, "macos", "aaa111"),
+            swap_plan(&lay, &home, UNKNOWN_SHA, "macos", "aaa111"),
             Err(LoomError::Unsupported(_))
         ));
         // A named body is unaffected.
-        assert!(swap_plan(&ledger(Some("aaa111"), None), &lay, &home, "bbb222", "macos", "aaa111").is_ok());
+        assert!(swap_plan(&lay, &home, "bbb222", "macos", "aaa111").is_ok());
     }
 
     #[test]
@@ -526,7 +531,7 @@ mod tests {
         let home = Home::at(d.path().join("loom"));
         let lay = layout(d.path());
         for os in ["linux", "windows", ""] {
-            match swap_plan(&ledger(Some("aaa111"), None), &lay, &home, "bbb222", os, "aaa111") {
+            match swap_plan(&lay, &home, "bbb222", os, "aaa111") {
                 Err(LoomError::Unsupported(m)) => assert_eq!(m, UNSUPPORTED_SWAP, "os={os}"),
                 other => panic!("os={os}: expected Unsupported, got {other:?}"),
             }
@@ -585,7 +590,7 @@ mod tests {
     fn execute_replaces_exe_atomically() {
         let f = fake_app("aaa111", "bbb222");
         let led = generations::read(&f.home);
-        let plan = swap_plan(&led, &f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap();
+        let plan = swap_plan(&f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap();
         execute(&plan, &f.home, &f.tools()).unwrap();
 
         // The file changed, in place, and no `.weaving` staging file remains.
@@ -625,11 +630,11 @@ mod tests {
     fn execute_interrupted_after_each_step_leaves_a_way_home() {
         let steps = {
             let f = fake_app("aaa111", "bbb222");
-            swap_plan(&generations::read(&f.home), &f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap().len()
+            swap_plan(&f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap().len()
         };
         for k in 0..=steps {
             let f = fake_app("aaa111", "bbb222");
-            let plan = swap_plan(&generations::read(&f.home), &f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap();
+            let plan = swap_plan(&f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap();
             execute(&plan[..k], &f.home, &f.tools()).unwrap();
             let on_disk = if f.exe_content() == "old body" { "aaa111" } else { "bbb222" };
             if let Err(why) = survivable(&f.home, on_disk, "aaa111", "aaa111") {
@@ -646,7 +651,7 @@ mod tests {
         let f = fake_app("aaa111", "bbb222");
         std::fs::write(&f.codesign, "#!/bin/sh\necho 'refused' >&2\nexit 1\n").unwrap();
         std::fs::set_permissions(&f.codesign, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let plan = swap_plan(&generations::read(&f.home), &f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap();
+        let plan = swap_plan(&f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap();
         let err = execute(&plan, &f.home, &f.tools()).unwrap_err().to_string();
         assert!(err.contains("unsigned"), "the fact is the missing signature: {err}");
         assert!(
