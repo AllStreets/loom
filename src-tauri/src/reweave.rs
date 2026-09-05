@@ -310,21 +310,39 @@ fn restage_genome(
     let dir = app_path.join("Contents").join("Resources").join("genome");
     std::fs::create_dir_all(&dir)
         .map_err(|e| failed(e.to_string(), LoomError::Git(e.to_string())))?;
+    // Pack to a STAGING path and rename over the live bundle.
+    //
+    // `git bundle create` holds a `<path>.lock` while it writes, and this runs
+    // inside a stage the owner may cancel — which group-kills the job. Packing
+    // straight to `genome.bundle` therefore left `genome.bundle.lock` behind on
+    // a cancel, and every later weave's re-stage then failed with "another git
+    // process seems to be running" — swallowed into one log line, so the
+    // carried genome froze at the pre-cancel sha for good. Staging keeps the
+    // live bundle untouched and makes the leftovers ours to clear.
     let bundle = dir.join("genome.bundle");
-    let bundle_s = bundle.to_string_lossy().into_owned();
+    let staging = dir.join("genome.bundle.weaving");
+    for stale in [staging.clone(), dir.join("genome.bundle.weaving.lock")] {
+        let _ = std::fs::remove_file(stale);
+    }
+    let staging_s = staging.to_string_lossy().into_owned();
     let out = run(
         runner,
         p,
         "stage",
-        &[&git, "bundle", "create", &bundle_s, "--all"],
+        &[&git, "bundle", "create", &staging_s, "--all"],
         source,
         source,
         &[],
     )?;
     if out.code != 0 {
+        let _ = std::fs::remove_file(&staging);
         let e = LoomError::Git(format!("git bundle: {}", out.stderr));
         return Err(failed(format!("git bundle: {}", out.stderr), e));
     }
+    std::fs::rename(&staging, &bundle).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        failed(format!("the packed genome could not be put in place: {e}"), LoomError::Git(e.to_string()))
+    })?;
     // The manifest the seed reads to decide which sha to check out.
     let meta = serde_json::json!({ "sha": target, "createdAt": generations::now_rfc3339() });
     crate::threads::write_json_atomic(&dir.join("genome.json"), &meta)
@@ -1169,6 +1187,7 @@ mod tests {
         // the body is generation N.
         let carried = fx.lay.app_path.join("Contents/Resources/genome");
         assert!(carried.join("genome.bundle").is_file(), "the bundle is re-packed at stage");
+        assert!(!carried.join("genome.bundle.weaving").exists(), "the staging copy is renamed away");
         let meta: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(carried.join("genome.json")).unwrap()).unwrap();
         assert_eq!(meta["sha"], fx.head, "the carried manifest names the woven body");
@@ -1188,6 +1207,37 @@ mod tests {
         assert!(v.get("elapsedMs").is_some() && v.get("startedAt").is_some() && v.get("cancellable").is_some());
         assert!(v.get("target_sha").is_none(), "snake_case must not leak");
         assert_eq!(&persisted(&fx.home), last);
+    }
+
+    /// A cancelled weave must not freeze the carried genome for good.
+    ///
+    /// `git bundle create` holds a `<path>.lock` while it writes, and CANCEL
+    /// group-kills the job mid-stage. Packing straight to `genome.bundle` left
+    /// that lock behind, so every later re-stage failed with "another git
+    /// process seems to be running" — swallowed into one log line, leaving the
+    /// app carrying a genome frozen at the pre-cancel sha. Staging and renaming
+    /// makes the leftovers ours to clear.
+    #[test]
+    fn a_stale_lock_from_a_cancelled_weave_does_not_freeze_the_carried_genome() {
+        let fx = fixture();
+        let tools = fx.tools();
+        let ctx = fx.ctx(Mode::Dev, &tools);
+
+        let carried = fx.lay.app_path.join("Contents/Resources/genome");
+        std::fs::create_dir_all(&carried).unwrap();
+        std::fs::write(carried.join("genome.bundle.weaving.lock"), "stale").unwrap();
+        std::fs::write(carried.join("genome.bundle.weaving"), "half-packed").unwrap();
+
+        let mut seen = Vec::new();
+        run_job(&ctx, Kind::Weave, &mut ExecRunner, &mut fx.states(&mut seen)).unwrap();
+
+        assert!(carried.join("genome.bundle").is_file(), "the re-stage still ran");
+        assert!(!carried.join("genome.bundle.weaving").exists(), "the staging copy is gone");
+        assert!(!carried.join("genome.bundle.weaving.lock").exists(), "the stale lock is cleared");
+        // And it is a genome, not the half-packed bytes we planted.
+        let out = tempfile::tempdir().unwrap();
+        git(&["clone", "-q", carried.join("genome.bundle").to_str().unwrap(), "g"], out.path());
+        assert_eq!(git(&["rev-parse", "HEAD"], &out.path().join("g")), fx.head);
     }
 
     #[test]
