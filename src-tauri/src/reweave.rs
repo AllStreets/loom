@@ -547,20 +547,17 @@ fn job_steps(
                 return Err(exit_failed(runner, "assets", "the assets did not build", &out));
             }
 
-            // 2 · core — `--offline` is appended by `cargo_argv`, always.
-            // The same lesson as the assets stage, on the other half of the
-            // toolchain: an absolute cargo path is not enough either. cargo
-            // resolves rustc by name, and `whisper-rs-sys`'s build script asks
-            // the `cmake` crate for the literal "cmake", which it looks up on
-            // PATH. Same pair the ceremony's warm step carries, same helper.
+            // 2 · core — argv and env from `kernel::cargo_run`, the one place
+            // a cargo spawn is composed. `--offline` is always appended; the
+            // recorded toolchain's directories lead PATH, because an absolute
+            // cargo path is not enough: cargo resolves rustc by name, and
+            // `whisper-rs-sys`'s build script asks the `cmake` crate for the
+            // literal "cmake", which it looks up on PATH.
             p.stage("core", true);
-            let spawn = cargo_with_path(ctx.tools)?;
-            let argv = kernel::cargo_argv(Path::new(&spawn.cargo), &["build", "--release"]);
+            let spawn = cargo_run(ctx.tools, &home.target())?;
+            let argv = spawn.argv(&["build", "--release"]);
             let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
-            let target_dir = home.target().to_string_lossy().into_owned();
-            let mut envs: Vec<(&str, &str)> =
-                vec![("CARGO_TARGET_DIR", target_dir.as_str()), ("CARGO_NET_OFFLINE", "true")];
-            envs.extend(spawn.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+            let envs = spawn.envs();
             let core = source.join("src-tauri");
             let out = run(runner, p, "core", &argv, &core, source, &envs)?;
             if out.code != 0 {
@@ -679,11 +676,15 @@ fn npm_with_node(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<(String, Str
     threads::npm_with_node(tools).map_err(|e| failed(format!("{e}; {UNTOUCHED}"), e))
 }
 
-/// cargo's absolute path plus the env pairs that let it find its toolchain
-/// and cmake — `threads::cargo_with_path`, the ceremony's own helper, so the
-/// two surfaces can never drift apart.
-fn cargo_with_path(tools: &dyn Fn(&str) -> Option<PathBuf>) -> Result<threads::CargoSpawn, Failed> {
-    threads::cargo_with_path(tools).map_err(|e| failed(format!("{e}; {UNTOUCHED}"), e))
+/// The weave's cargo spawn — argv and env together, from `kernel::cargo_run`,
+/// the one helper that builds them. The weave always builds into loomhome's
+/// shared `target/`: that is where the ceremony warmed the dependencies, and
+/// where `stage` then goes looking for the body it shelves.
+fn cargo_run(
+    tools: &dyn Fn(&str) -> Option<PathBuf>,
+    target_dir: &Path,
+) -> Result<kernel::CargoRun, Failed> {
+    kernel::cargo_run(tools, Some(target_dir)).map_err(|e| failed(format!("{e}; {UNTOUCHED}"), e))
 }
 
 fn need_tool(tools: &dyn Fn(&str) -> Option<PathBuf>, name: &str) -> Result<String, Failed> {

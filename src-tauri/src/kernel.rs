@@ -1038,6 +1038,18 @@ pub fn kernel_validate(app: tauri::AppHandle, worktree_id: String) -> Result<Val
     })
 }
 
+/// The env every spawn of the recorded `node` carries: that node's own
+/// directory leading PATH, then everything this process already had —
+/// `threads::npm_path_env`, the same composer the ceremony's npm steps and
+/// the weave's assets stage use, so there is one answer to "where does node
+/// live" and not two. Empty only when the node path has no directory to name,
+/// which leaves the child with the environment it would have had anyway.
+fn node_env(node: &Path) -> Vec<(String, String)> {
+    crate::threads::npm_path_env(node)
+        .map(|p| vec![("PATH".to_string(), p)])
+        .unwrap_or_default()
+}
+
 /// The two TS validation argvs, composed from the recorded `node`, the
 /// worktree and the targeted test files: `(tsc, vitest)`. Both run a FILE
 /// under `<worktree>/node_modules` (the symlink to the source install) through
@@ -1095,11 +1107,20 @@ fn validate_ts(prop: &Proposal, home: Option<&Home>) -> Result<Option<ValidateOu
     targets.dedup();
 
     let (tsc_argv, vitest_argv) = ts_argv(&node, &prop.worktree, &targets);
+    // The recorded node's own directory leads the child's PATH. argv[0] is
+    // already absolute, so this is not what makes tsc run — it is what keeps
+    // anything tsc or vitest spawns BY NAME (a node the toolchain reaches
+    // for, a resolver's helper) from resolving against launchd's PATH, which
+    // a Dock-launched app inherits and which holds neither nvm nor homebrew.
+    // Same lesson as the cargo half, kept on this one before it is learned
+    // again the expensive way (round-4 review, Finding 1).
+    let node_env = node_env(&node);
+    let envs: Vec<(&str, &str)> = node_env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
     // tsc first, then targeted vitest. Fixed argv; cwd is the worktree, asserted
     // under itself. First failure returns stage+output.
     let argv: Vec<&str> = tsc_argv.iter().map(String::as_str).collect();
-    let tsc = run_checked(&argv, &prop.worktree, &prop.worktree, TSC_TIMEOUT)?;
+    let tsc = run_checked_env(&argv, &prop.worktree, &prop.worktree, TSC_TIMEOUT, &envs)?;
     if tsc.code != 0 {
         return Ok(Some(ValidateOut {
             ok: false,
@@ -1109,7 +1130,7 @@ fn validate_ts(prop: &Proposal, home: Option<&Home>) -> Result<Option<ValidateOu
     }
 
     let argv: Vec<&str> = vitest_argv.iter().map(String::as_str).collect();
-    let vitest = run_checked(&argv, &prop.worktree, &prop.worktree, VITEST_TIMEOUT)?;
+    let vitest = run_checked_env(&argv, &prop.worktree, &prop.worktree, VITEST_TIMEOUT, &envs)?;
     if vitest.code != 0 {
         return Ok(Some(ValidateOut {
             ok: false,
@@ -1122,31 +1143,91 @@ fn validate_ts(prop: &Proposal, home: Option<&Home>) -> Result<Option<ValidateOu
     Ok(None)
 }
 
-/// A cargo argv: `[cargo, <sub…>, "--offline"]`. `--offline` is ALWAYS
-/// appended — validation never touches the network (the crates were fetched
-/// at threading in packaged mode, by the dev build in dev). Pure.
-pub fn cargo_argv(cargo: &Path, sub: &[&str]) -> Vec<String> {
+/// A cargo argv: `[cargo, <sub…>, "--offline"]`. Pure, and private: the argv
+/// is only ever built through `CargoRun::argv`, which cannot be had without
+/// the env that goes with it.
+fn cargo_argv(cargo: &Path, sub: &[&str]) -> Vec<String> {
     let mut argv = vec![cargo.to_string_lossy().to_string()];
     argv.extend(sub.iter().map(|s| s.to_string()));
     argv.push("--offline".to_string());
     argv
 }
 
-/// The env pairs every cargo spawn gets, composed from constants and LOOM-
-/// owned paths only (never model output). Packaged: `CARGO_TARGET_DIR` is the
-/// shared loomhome `target/` warmed at threading — a core edit then validates
-/// in incremental time — plus `CARGO_NET_OFFLINE=true`. Dev: only the offline
-/// pin; the worktree keeps its own isolated target (unchanged behaviour).
-pub fn cargo_env(mode: Mode, home: &Home) -> Vec<(String, String)> {
-    let mut env = Vec::new();
-    if mode == Mode::Packaged {
-        env.push((
-            "CARGO_TARGET_DIR".to_string(),
-            home.target().to_string_lossy().to_string(),
-        ));
+/// A cargo spawn: the absolute cargo, and the env every cargo LOOM runs
+/// carries. Built by `cargo_run` and by nothing else — `argv` and `envs` come
+/// out together so no caller can take one half and compose the other itself.
+///
+/// **This is the only way to build a cargo argv+env in LOOM.** Three review
+/// rounds found the same bug in three different places — the ceremony's warm
+/// step, the weave's core stage, and validation — each time because a caller
+/// had assembled its own pair and left the toolchain off it. A new cargo
+/// spawn goes through here; anything else is the bug again.
+pub struct CargoRun {
+    cargo: PathBuf,
+    envs: Vec<(String, String)>,
+}
+
+impl CargoRun {
+    /// `[cargo, <sub…>, "--offline"]`. `--offline` is ALWAYS appended — no
+    /// cargo LOOM runs touches the network (the crates were fetched once, at
+    /// threading in packaged mode, by the dev build in dev).
+    pub fn argv(&self, sub: &[&str]) -> Vec<String> {
+        cargo_argv(&self.cargo, sub)
     }
-    env.push(("CARGO_NET_OFFLINE".to_string(), "true".to_string()));
-    env
+
+    /// The env pairs, borrowed for `exec::run_checked_env`.
+    pub fn envs(&self) -> Vec<(&str, &str)> {
+        self.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+    }
+}
+
+/// The tool table every cargo spawn resolves through: the paths threading
+/// recorded (`threads::tool_path`, which re-searches when a recorded tool has
+/// moved), except cargo itself, which keeps kernel's own hardened resolution
+/// — recorded first, then the fixed candidate dirs, then a PATH walk cached
+/// once, so a PATH hijacked mid-session cannot swap in a cargo that lies.
+pub fn home_tools(home: &Home) -> impl Fn(&str) -> Option<PathBuf> + '_ {
+    move |name: &str| match name {
+        "cargo" => cargo_path(Some(home)),
+        other => crate::threads::tool_path(home, other),
+    }
+}
+
+/// Compose a cargo spawn: the recorded toolchain's PATH and `CMAKE` (from
+/// `threads::cargo_with_path`, the one helper both the ceremony and the weave
+/// already spawn through), `CARGO_NET_OFFLINE=true`, and — when a target dir
+/// is given — `CARGO_TARGET_DIR`.
+///
+/// `target_dir` is passed rather than derived from the mode because the two
+/// callers differ honestly: validation shares loomhome's warm `target/` only
+/// in packaged mode (in dev the worktree keeps its own), while the weave
+/// always builds into loomhome's, because that is where it then goes looking
+/// for the body it shelves.
+///
+/// Everything here is LOOM's own — a constant, or the parent of a path the
+/// tool table found — so the pair keeps `exec`'s fixed-env contract: nothing
+/// is ever composed from model output.
+pub fn cargo_run(
+    tools: &dyn Fn(&str) -> Option<PathBuf>,
+    target_dir: Option<&Path>,
+) -> Result<CargoRun, LoomError> {
+    let spawn = crate::threads::cargo_with_path(tools)?;
+    let mut envs = spawn.envs;
+    if let Some(dir) = target_dir {
+        let dir = dir.to_str().ok_or_else(|| {
+            LoomError::Parse("the target directory is not valid UTF-8".into())
+        })?;
+        envs.push(("CARGO_TARGET_DIR".to_string(), dir.to_string()));
+    }
+    envs.push(("CARGO_NET_OFFLINE".to_string(), "true".to_string()));
+    Ok(CargoRun { cargo: PathBuf::from(spawn.cargo), envs })
+}
+
+/// The target dir validation's cargo builds into: loomhome's shared, warm
+/// `target/` in packaged mode — dependencies compiled once at threading, so a
+/// core edit validates in incremental time — and the worktree's own in dev.
+fn validate_target_dir(mode: Mode, home: &Home) -> Option<PathBuf> {
+    (mode == Mode::Packaged).then(|| home.target())
 }
 
 /// Run the Rust validation toolchain (`cargo check` then `cargo test`) in the
@@ -1157,17 +1238,16 @@ pub fn cargo_env(mode: Mode, home: &Home) -> Vec<(String, String)> {
 /// first failing stage, or `Err` for an infrastructure fault (cargo
 /// unresolvable, the worktree lacks src-tauri/, spawn failure, timeout).
 fn validate_rust(prop: &Proposal, mode: Mode, home: &Home) -> Result<Option<ValidateOut>, LoomError> {
-    // Resolve cargo's ABSOLUTE path (recorded thread, else once — mirror of the
-    // node hardening). If cargo can't be found we cannot prove the edit
-    // compiles → we must not pass.
-    let cargo = cargo_path(Some(home)).ok_or_else(|| {
-        LoomError::NotFound("cargo not found (threads.json or PATH) — cannot validate Rust".into())
-    })?;
-    if cargo.to_str().is_none() || home.target().to_str().is_none() {
-        return Err(LoomError::Parse("cargo or target path is not valid UTF-8".into()));
-    }
-    let env = cargo_env(mode, home);
-    let envs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    // The spawn — argv AND env — from the one helper that builds them.
+    // cargo's absolute path is resolved the hardened way (recorded thread,
+    // else once), and the recorded toolchain's directories lead the child's
+    // PATH: a Dock-launched app inherits launchd's, which holds neither
+    // rustup nor homebrew, and cargo cannot even run `rustc -vV` on it.
+    // If cargo can't be found we cannot prove the edit compiles → we fail
+    // honestly rather than pass (round-4 review, Finding 1).
+    let tools = home_tools(home);
+    let cargo = cargo_run(&tools, validate_target_dir(mode, home).as_deref())?;
+    let envs = cargo.envs();
 
     // cargo runs in the worktree's src-tauri/ (where Cargo.toml lives), asserted
     // under the worktree by run_checked's containment check.
@@ -1191,7 +1271,7 @@ fn validate_rust(prop: &Proposal, mode: Mode, home: &Home) -> Result<Option<Vali
     // validation (see docs/FOLLOWUPS.md "Validation threat model"); the safety
     // envelope here is compile-validation (cargo check + cargo test --no-run) +
     // human diff-review + the recovery boot, not test EXECUTION.
-    let check_argv = cargo_argv(&cargo, &["check"]);
+    let check_argv = cargo.argv(&["check"]);
     let argv: Vec<&str> = check_argv.iter().map(String::as_str).collect();
     let check = run_checked_env(&argv, &cargo_cwd, &prop.worktree, CARGO_CHECK_TIMEOUT, &envs)?;
     if check.code != 0 {
@@ -1202,7 +1282,7 @@ fn validate_rust(prop: &Proposal, mode: Mode, home: &Home) -> Result<Option<Vali
         }));
     }
 
-    let test_argv = cargo_argv(&cargo, &["test", "--no-run"]);
+    let test_argv = cargo.argv(&["test", "--no-run"]);
     let argv: Vec<&str> = test_argv.iter().map(String::as_str).collect();
     let test = run_checked_env(&argv, &cargo_cwd, &prop.worktree, CARGO_TEST_TIMEOUT, &envs)?;
     if test.code != 0 {
@@ -3224,39 +3304,126 @@ mod tests {
         for a in tsc.iter().chain(vitest.iter()) {
             assert!(!a.contains("npx"), "npx must never appear in validation argv: {a}");
         }
+        // And the spawn carries the recorded node's own directory at the head
+        // of PATH, so nothing tsc or vitest reaches for by name resolves
+        // against the PATH a Dock-launched app inherits.
+        let env = node_env(&node);
+        let path = &env.iter().find(|(k, _)| k == "PATH").expect("PATH is passed to node").1;
+        assert_eq!(
+            std::env::split_paths(path).next().unwrap(),
+            PathBuf::from("/opt/tools/bin"),
+            "the recorded node's directory leads PATH: {path}"
+        );
+    }
+
+    /// ROUND-4 review, Finding 1. Validation's cargo used to be spawned with
+    /// `CARGO_TARGET_DIR` and `CARGO_NET_OFFLINE` and nothing else, while
+    /// `exec::run_checked_env` never clears the environment — so a
+    /// Dock-launched app handed `cargo check` launchd's PATH, which holds
+    /// neither rustup nor homebrew, and cargo died with
+    /// `could not execute process 'rustc -vV': No such file or directory`.
+    /// Because that is a non-zero EXIT rather than a spawn error,
+    /// `validate_rust` reported it as the OWNER'S EDIT failing to compile:
+    /// the bounded repair loop then burned its rounds on an error no edit
+    /// can fix, and no core edit was ever approved or woven.
+    ///
+    /// Every cargo spawn is composed in one place now, and this is it.
+    #[test]
+    fn validation_cargo_spawn_leads_path_with_the_recorded_toolchain() {
+        use crate::loomhome::Home;
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        let bin = d.path().join("toolchain");
+        let brew = d.path().join("brew");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&brew).unwrap();
+        std::fs::create_dir_all(&home.root).unwrap();
+        // The table threading wrote — the only place a packaged LOOM learns
+        // where its toolchain lives.
+        let tools_json: Vec<serde_json::Value> = [("cargo", &bin), ("rustc", &bin), ("cmake", &brew)]
+            .iter()
+            .map(|(name, dir)| {
+                let p = dir.join(name);
+                std::fs::write(&p, "#!/bin/sh\n").unwrap();
+                serde_json::json!({
+                    "name": name, "path": p.to_string_lossy(), "version": "x",
+                    "requiredFor": "core", "install": "rustup",
+                })
+            })
+            .collect();
+        std::fs::write(
+            home.root.join("threads.json"),
+            serde_json::to_string(&serde_json::json!({
+                "threaded": true, "tools": tools_json,
+                "steps": {
+                    "seed": true, "deps": true, "vendor": true, "warm": true, "register": true,
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let tools = home_tools(&home);
+        let run = cargo_run(&tools, Some(&home.target())).unwrap();
+        assert_eq!(
+            run.argv(&["check"]),
+            vec![
+                bin.join("cargo").to_string_lossy().to_string(),
+                "check".to_string(),
+                "--offline".to_string(),
+            ]
+        );
+        let envs = run.envs();
+        let get = |k: &str| -> String {
+            envs.iter()
+                .find(|(n, _)| *n == k)
+                .unwrap_or_else(|| panic!("{k} is passed to cargo"))
+                .1
+                .to_string()
+        };
+        // The recorded toolchain LEADS PATH: cargo resolves rustc by name,
+        // and native build scripts resolve cmake by name.
+        let path = get("PATH");
+        let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        assert_eq!(entries[0], bin, "the recorded cargo's directory leads PATH: {path}");
+        assert!(entries.contains(&brew), "and cmake's is on it: {path}");
+        assert_eq!(get("CMAKE"), brew.join("cmake").to_string_lossy());
+        assert_eq!(get("CARGO_TARGET_DIR"), home.target().to_string_lossy());
+        assert_eq!(get("CARGO_NET_OFFLINE"), "true");
+
+        // Dev passes no target dir: the worktree keeps its own.
+        let dev = cargo_run(&tools, None).unwrap();
+        assert!(
+            dev.envs().iter().all(|(k, _)| *k != "CARGO_TARGET_DIR"),
+            "dev keeps the worktree's own target"
+        );
+        assert!(dev.envs().iter().any(|(k, _)| *k == "PATH"), "but never without its toolchain");
     }
 
     #[test]
     fn rust_validation_argv_has_offline_and_target_env() {
         use crate::loomhome::{Home, Mode};
-        let cargo = PathBuf::from("/opt/tools/bin/cargo");
+        let tools = |name: &str| {
+            (name == "cargo").then(|| PathBuf::from("/opt/tools/bin/cargo"))
+        };
+        let run = cargo_run(&tools, None).unwrap();
+        assert_eq!(run.argv(&["check"]), vec!["/opt/tools/bin/cargo", "check", "--offline"]);
         assert_eq!(
-            cargo_argv(&cargo, &["check"]),
-            vec!["/opt/tools/bin/cargo", "check", "--offline"]
-        );
-        assert_eq!(
-            cargo_argv(&cargo, &["test", "--no-run"]),
+            run.argv(&["test", "--no-run"]),
             vec!["/opt/tools/bin/cargo", "test", "--no-run", "--offline"]
         );
         let hd = tempfile::tempdir().unwrap();
         let home = Home::at(hd.path().to_path_buf());
-        let packaged = cargo_env(Mode::Packaged, &home);
-        assert_eq!(
-            packaged,
-            vec![
-                (
-                    "CARGO_TARGET_DIR".to_string(),
-                    home.target().to_string_lossy().to_string()
-                ),
-                ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
-            ]
-        );
-        let dev = cargo_env(Mode::Dev, &home);
-        assert_eq!(dev, vec![("CARGO_NET_OFFLINE".to_string(), "true".to_string())]);
-        assert!(
-            !dev.iter().any(|(k, _)| k == "CARGO_TARGET_DIR"),
-            "dev keeps the worktree's own target"
-        );
+        // Packaged validation shares loomhome's warm target; dev's worktree
+        // keeps its own.
+        assert_eq!(validate_target_dir(Mode::Packaged, &home), Some(home.target()));
+        assert_eq!(validate_target_dir(Mode::Dev, &home), None);
+        let packaged =
+            cargo_run(&tools, validate_target_dir(Mode::Packaged, &home).as_deref()).unwrap();
+        let envs = packaged.envs();
+        assert!(envs.contains(&("CARGO_TARGET_DIR", home.target().to_str().unwrap())));
+        assert!(envs.contains(&("CARGO_NET_OFFLINE", "true")));
+        assert!(run.envs().iter().all(|(k, _)| *k != "CARGO_TARGET_DIR"));
     }
 
     // ── SKIP-GUARDED real-cargo integration test (#[ignore]) ────────────────────
