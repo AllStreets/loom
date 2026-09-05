@@ -169,10 +169,12 @@ pub fn bundle_sha(bundle: &Path) -> Option<String> {
 }
 
 /// Threading step 1 (spec §Threading): clone the bundled genome into
-/// `source/` and check out the sha this binary was woven from, on a local
-/// `main` so later commits land somewhere named. A no-op if `source/.git`
-/// already exists — the ceremony is resumable, and the source is never
-/// re-cloned over an existing work tree.
+/// `source/` and check out the sha this binary was woven from, always on a
+/// named branch so later commits land somewhere a `--all` bundle carries —
+/// the bundle's own branch when that already names the body, else a
+/// `generation/<sha7>` of its own, leaving the bundle's branch on its tip.
+/// A no-op if `source/.git` already exists — the ceremony is resumable, and
+/// the source is never re-cloned over an existing work tree.
 ///
 /// Every spawn is a fixed argv through `exec::run_checked` with
 /// `allowed_root = home.root`; no shell, no network (the bundle is a file).
@@ -226,23 +228,61 @@ pub fn seed_source(home: &Home, bundle: &Path, sha: &str) -> Result<(), LoomErro
     } else {
         sha
     };
+    // Where the clone put `main`: the bundle's tip.
+    let tip = crate::exec::run_checked(
+        &[&git, "rev-parse", "HEAD"],
+        &source,
+        &home.root,
+        SEED_TIMEOUT,
+    )?;
+    if tip.code != 0 {
+        return Err(LoomError::Git(format!("seed: rev-parse HEAD failed: {}", tip.stderr)));
+    }
+    let tip = tip.stdout.trim().to_string();
+
+    // The work tree lands on `target` — but never by MOVING `main` onto it.
+    //
+    // Round-4 review, Finding 3. This used to detach at `target` and then run
+    // `checkout -B main`, which rewinds `main` whenever the bundle is AHEAD of
+    // the body — exactly the state re-staging creates when a swap fails or the
+    // warden heals back. The genome's real tip then survived only as
+    // `origin/main`: both weave gates read HEAD, found the running body, and
+    // said "nothing new to weave" about a self-edit the app was still
+    // carrying, while `git bundle create --all` would not have carried it
+    // forward either.
+    //
+    // So the body's commit gets a branch of its OWN — the same
+    // `generation/<sha7>` name `generations_return` uses when it makes the
+    // genome agree with an older body — and `main` is left where the bundle
+    // put it. A branch rather than a detached HEAD because a packaged apply
+    // COMMITS here, and a commit on a detached HEAD is on no ref: the next
+    // re-stage's `--all` would drop the very self-edit that had just been
+    // woven.
+    let branch = if target == tip {
+        // The bundle's tip IS the body: the clone already checked out its
+        // branch, and the only thing left to guarantee is that HEAD is on
+        // one. A bundle packed from a detached HEAD clones detached.
+        let named = crate::exec::run_checked(
+            &[&git, "symbolic-ref", "--quiet", "HEAD"],
+            &source,
+            &home.root,
+            SEED_TIMEOUT,
+        )?;
+        if named.code == 0 {
+            return Ok(());
+        }
+        "main".to_string()
+    } else {
+        format!("generation/{}", target.chars().take(7).collect::<String>())
+    };
     let out = crate::exec::run_checked(
-        &[&git, "checkout", "--quiet", "--detach", target],
+        &[&git, "checkout", "--quiet", "-B", &branch, target],
         &source,
         &home.root,
         SEED_TIMEOUT,
     )?;
     if out.code != 0 {
         return Err(LoomError::Git(format!("seed: checkout {target} failed: {}", out.stderr)));
-    }
-    let out = crate::exec::run_checked(
-        &[&git, "checkout", "--quiet", "-B", "main"],
-        &source,
-        &home.root,
-        SEED_TIMEOUT,
-    )?;
-    if out.code != 0 {
-        return Err(LoomError::Git(format!("seed: branch main failed: {}", out.stderr)));
     }
     Ok(())
 }
@@ -620,13 +660,71 @@ mod tests {
         seed_source(&home, &bundle, &first).unwrap();
         assert!(home.source().join(".git").exists());
         assert_eq!(git(&["rev-parse", "HEAD"], &home.source()), first);
-        assert_eq!(git(&["rev-parse", "--abbrev-ref", "HEAD"], &home.source()), "main");
         assert_eq!(std::fs::read_to_string(home.source().join("a.txt")).unwrap(), "one");
         assert_ne!(first, second);
+        // The work tree is on the body's commit and the bundle's own branch
+        // still carries its tip — it is never rewound onto an ancestor.
+        assert_eq!(
+            git(&["rev-parse", "--abbrev-ref", "HEAD"], &home.source()),
+            format!("generation/{}", &first[..7])
+        );
+        assert_eq!(git(&["rev-parse", "trunk"], &home.source()), second);
 
         // Idempotent: a second seed at a different sha is a no-op.
         seed_source(&home, &bundle, &second).unwrap();
         assert_eq!(git(&["rev-parse", "HEAD"], &home.source()), first);
+    }
+
+    /// ROUND-4 review, Finding 3. The seed prefers the body's own sha and
+    /// used to reach it with `checkout --detach <sha>` followed by
+    /// `checkout -B main` — which MOVES `main` onto that commit. When the
+    /// carried bundle is AHEAD of the running body — exactly the state
+    /// re-staging creates whenever a swap fails or the warden heals back —
+    /// that rewound the genome's only local branch onto an ancestor, and the
+    /// bundle's real tip survived on `refs/remotes/origin/main` alone. Both
+    /// gates then read HEAD, found the running body, and said "nothing new to
+    /// weave" about a self-edit the app was still carrying.
+    ///
+    /// The work tree lands on the body's sha WITHOUT rewinding: a branch of
+    /// its own at that commit, `main` left on the bundle's tip.
+    #[test]
+    fn a_bundle_ahead_of_the_body_keeps_its_tip() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&["init", "-q", "-b", "main"], &repo);
+        std::fs::write(repo.join("a.txt"), "body").unwrap();
+        git(&["add", "."], &repo);
+        git(&["commit", "-q", "-m", "the body's commit"], &repo);
+        let body = git(&["rev-parse", "HEAD"], &repo);
+        // The self-edit the owner applied after this body was built — woven
+        // into the genome, carried in the bundle, not yet a body.
+        std::fs::write(repo.join("a.txt"), "self-edit").unwrap();
+        git(&["commit", "-qam", "the self-edit"], &repo);
+        let edit = git(&["rev-parse", "HEAD"], &repo);
+        let bundle = d.path().join("genome.bundle");
+        git(&["bundle", "create", bundle.to_str().unwrap(), "--all"], &repo);
+
+        let home = Home::at(d.path().join("home"));
+        seed_source(&home, &bundle, &body).unwrap();
+        let src = home.source();
+
+        // The work tree names the body — the property the ledger needs.
+        assert_eq!(git(&["rev-parse", "HEAD"], &src), body);
+        // And the self-edit is still reachable from a LOCAL branch, so
+        // `git bundle create --all` carries it and the owner can find it.
+        assert_eq!(git(&["rev-parse", "main"], &src), edit, "main still holds the bundle's tip");
+        assert_eq!(
+            git(&["rev-list", "--count", &format!("{body}..main")], &src),
+            "1",
+            "main is ahead of the body, not rewound onto it"
+        );
+        // The work tree is on a NAMED branch, never a detached HEAD: a commit
+        // made here (an apply, in packaged mode) must land on a ref, or the
+        // next re-stage's `git bundle create --all` would not carry it.
+        let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &src);
+        assert_eq!(branch, format!("generation/{}", &body[..7]));
+        assert_ne!(branch, "HEAD", "a detached HEAD would drop the next self-edit");
     }
 
     #[test]
