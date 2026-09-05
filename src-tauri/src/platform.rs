@@ -443,7 +443,6 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = Home::at(d.path().join("loom"));
         let lay = layout(d.path());
-        let led = ledger(Some("aaa111"), None);
         let plan = swap_plan(&lay, &home, "bbb222", "macos", "aaa111").unwrap();
         // The sentinel — which arms every healer — is written BEFORE the body
         // is replaced; the ledger — which claims which body is on disk — is
@@ -511,7 +510,6 @@ mod tests {
         let lay = layout(d.path());
         // Generation 0 outside a repo: no ledger, and the baked sha is
         // `unknown`, so the running body has no name to be shelved under.
-        let unnamed = Ledger { current: Some(UNKNOWN_SHA.into()), ..Ledger::default() };
         match swap_plan(&lay, &home, "bbb222", "macos", UNKNOWN_SHA) {
             Err(LoomError::Unsupported(m)) => assert_eq!(m, UNKNOWN_GENERATION),
             other => panic!("expected Unsupported, got {other:?}"),
@@ -589,7 +587,6 @@ mod tests {
     #[test]
     fn execute_replaces_exe_atomically() {
         let f = fake_app("aaa111", "bbb222");
-        let led = generations::read(&f.home);
         let plan = swap_plan(&f.lay, &f.home, "bbb222", "macos", "aaa111").unwrap();
         execute(&plan, &f.home, &f.tools()).unwrap();
 
