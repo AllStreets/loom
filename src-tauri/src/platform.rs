@@ -215,9 +215,17 @@ fn io_err(what: &str, path: &Path, e: std::io::Error) -> LoomError {
 }
 
 /// `<to>.weaving` ← `from` (mode bits carried by `fs::copy`, then set
-/// explicitly so the body stays executable), then rename over `to`. A crash
-/// before the rename leaves `to` untouched. `pub(crate)` so the shelf
-/// (generations.rs) copies a body exactly the way the swap does.
+/// explicitly so the body stays executable), flushed to the platter, then
+/// renamed over `to`. A crash before the rename leaves `to` untouched.
+/// `pub(crate)` so the shelf (generations.rs) copies a body exactly the way
+/// the swap does.
+///
+/// The `sync_all` is not a nicety (round-2 review, Finding 6): the rename is
+/// atomic in the directory, but the bytes it names need not have reached the
+/// disk. Lose power in that gap and the file is the right SIZE — so
+/// `shelved_whole`'s length check passes it — while holding whatever the
+/// filesystem had not written yet. A body that passes the check and does not
+/// run is worse than one that is visibly cut short.
 pub(crate) fn copy_atomic(from: &Path, to: &Path) -> Result<(), LoomError> {
     if !from.is_file() {
         return Err(LoomError::NotFound(format!("executable: {}", from.display())));
@@ -228,9 +236,16 @@ pub(crate) fn copy_atomic(from: &Path, to: &Path) -> Result<(), LoomError> {
     let mut staged = to.as_os_str().to_owned();
     staged.push(".weaving");
     let staged = Path::new(&staged);
-    std::fs::copy(from, staged).map_err(|e| io_err("copy", staged, e))?;
-    let perms = std::fs::metadata(from).map_err(|e| io_err("stat", from, e))?.permissions();
-    std::fs::set_permissions(staged, perms).map_err(|e| io_err("chmod", staged, e))?;
+    let flushed = (|| -> std::io::Result<()> {
+        std::fs::copy(from, staged)?;
+        let perms = std::fs::metadata(from)?.permissions();
+        std::fs::set_permissions(staged, perms)?;
+        std::fs::OpenOptions::new().write(true).open(staged)?.sync_all()
+    })();
+    if let Err(e) = flushed {
+        let _ = std::fs::remove_file(staged);
+        return Err(io_err("stage", staged, e));
+    }
     std::fs::rename(staged, to).map_err(|e| {
         let _ = std::fs::remove_file(staged);
         io_err("rename", to, e)

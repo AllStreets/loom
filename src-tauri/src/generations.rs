@@ -16,8 +16,10 @@
 //! - `kept` is ordered oldest → newest. `record` appends.
 //! - `prune` is pure and NEVER removes `current` or `previous`, however old —
 //!   the live body and the one the warden would fall back to are not garbage.
-//! - The ledger is written atomically (tmp + rename), so a torn write leaves
-//!   the previous ledger intact; a torn or absent ledger reads as `Default`.
+//! - The ledger is written through `threads::write_json_atomic` — staged,
+//!   `sync_all`ed, renamed — the one helper every json LOOM's recovery leans
+//!   on, so a torn or half-flushed write leaves the previous ledger intact; a
+//!   torn or absent ledger reads as `Default`.
 //!
 //! This module never sets `current`/`previous` — the swap (platform.rs /
 //! reweave.rs) does. It only records bodies and trims the shelf.
@@ -89,28 +91,16 @@ pub fn read(home: &Home) -> Ledger {
         .unwrap_or_default()
 }
 
-/// Atomic write: `<ledger>.tmp` then rename.
+/// Atomic write: staged, flushed with `sync_all`, then renamed. One helper
+/// for every json LOOM's recovery depends on (round-2 review, Finding 6):
+/// this module used to carry a second, weaker copy that never reached the
+/// platter and left its staging file behind when the rename failed.
 pub fn write(home: &Home, ledger: &Ledger) -> Result<(), LoomError> {
-    write_json_atomic(&home.ledger_json(), ledger)
+    crate::threads::write_json_atomic(&home.ledger_json(), ledger)
 }
 
 fn io_err(what: &str, path: &Path, e: std::io::Error) -> LoomError {
     LoomError::Git(format!("{what} {}: {e}", path.display()))
-}
-
-/// Serialize to `<path>.tmp`, then rename over `<path>` — a reader sees the
-/// old file or the new one, never a torn one. (Task 4's `threads.rs` carries
-/// the same helper; the two will be deduped at merge.)
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), LoomError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| io_err("create", parent, e))?;
-    }
-    let raw = serde_json::to_string_pretty(value).map_err(|e| LoomError::Parse(e.to_string()))?;
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = Path::new(&tmp);
-    std::fs::write(tmp, raw).map_err(|e| io_err("write", tmp, e))?;
-    std::fs::rename(tmp, path).map_err(|e| io_err("rename", path, e))
 }
 
 // ── Prune ─────────────────────────────────────────────────────────────────────
@@ -203,7 +193,7 @@ pub fn record(home: &Home, sha: &str, exe_src: &Path, reason: &str) -> Result<Me
         size_bytes,
         reason: reason.to_string(),
     };
-    write_json_atomic(&home.generation_meta(sha), &meta)?;
+    crate::threads::write_json_atomic(&home.generation_meta(sha), &meta)?;
 
     let mut ledger = read(home);
     // Re-recording a sha moves it to the newest slot rather than duplicating it.
@@ -386,6 +376,24 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["loom".to_string(), "meta.json".to_string()], "no staging file remains");
+    }
+
+    /// Round-2 review, Finding 6. Two atomic-write helpers lived in the tree
+    /// and the ledger had the weaker one: it never `sync_all`ed the staging
+    /// file before the rename, and it left that file behind when the rename
+    /// failed. The ledger goes through the same helper the sentinel does.
+    #[test]
+    fn a_failed_ledger_write_leaves_nothing_behind() {
+        let (_d, h) = home();
+        // The rename cannot land: a directory stands where the ledger goes.
+        std::fs::create_dir_all(h.ledger_json()).unwrap();
+        assert!(write(&h, &Ledger::default()).is_err(), "the write cannot have succeeded");
+        let litter: Vec<String> = std::fs::read_dir(&h.root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(litter.is_empty(), "a failed write left {litter:?} beside the ledger");
     }
 
     #[test]
