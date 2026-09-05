@@ -272,28 +272,48 @@ pub const SHERPA_GONE: &str =
 pub const PAST_RETURN: &str = "past the point of return — the swap is under way";
 pub const NOTHING_TO_CANCEL: &str = "nothing to cancel — no weave is under way";
 
-/// The running body's sha: the ledger's `current`, or — generation 0, which
-/// predates the ledger — the sha baked into this binary.
-fn running_sha(current: Option<&str>) -> String {
-    current.map(str::to_string).unwrap_or_else(|| loomhome::genome_sha().to_string())
+/// Which body is running.
+///
+/// Round-3 review, Finding 3. This used to ask the LEDGER (`generations.json`
+/// `current`, falling back to the baked sha) — but the ledger is a claim about
+/// what is on DISK, and it is allowed to lag: `platform::swap_plan` writes it
+/// before the new body has ever booted, and the warden writes it back after a
+/// heal. `genome_sha()` needs no claim: it is compiled into the executing
+/// binary, so it IS this body, definitionally and always. When the two
+/// disagreed the ledger won, and `generations_return` answered "that
+/// generation is already running" about a body that was not running.
+///
+/// The ledger keeps the jobs it is right about: what is shelved, what should
+/// be current, what to come home to.
+fn running() -> &'static str {
+    loomhome::genome_sha()
 }
 
 /// `reweave_start`'s rules (spec §Reweave): threaded; the voice engine's
-/// build cache still on the machine; in packaged mode the genome's HEAD must
-/// differ from the running body unless `force`. Dev never swaps, so it always
-/// has something to prove.
+/// build cache still on the machine; this body able to name itself; and in
+/// packaged mode the genome's HEAD must differ from the running body unless
+/// `force`. Dev never swaps, so it always has something to prove.
+///
+/// `running` is the sha of the body executing this check — `running()` in the
+/// app, injected here so the rule is pure over it.
 ///
 /// `sherpa_gone` is the round-2 amendment (Finding 4). Threading recorded
 /// where the prebuilt archive landed precisely so a weave could refuse before
 /// spending thirty minutes discovering it; round 1 recorded it and gated on
 /// nothing. `force` does not lift it: force means "weave although nothing
 /// changed", never "weave although the build cannot finish".
+///
+/// The `unknown` rule is the round-3 amendment (Finding 4). `build.rs` bakes
+/// `unknown` into a body built outside a repo; `swap_plan` refuses to swap
+/// such a body — but that is stage 4, after `assets` and up to thirty minutes
+/// of `core`. The refusal belongs here, before anything is built. `force`
+/// does not lift it either: the swap cannot happen at any force.
 pub fn check_start(
     threaded: bool,
     sherpa_gone: bool,
     mode: Mode,
     head: &str,
-    current: Option<&str>,
+    running: &str,
     force: bool,
 ) -> Result<(), LoomError> {
     if !threaded {
@@ -302,23 +322,33 @@ pub fn check_start(
     if sherpa_gone {
         return Err(LoomError::NotFound(SHERPA_GONE.into()));
     }
-    if mode == Mode::Packaged && !force && head == running_sha(current) {
+    if mode == Mode::Packaged && running == platform::UNKNOWN_SHA {
+        return Err(LoomError::Unsupported(platform::UNKNOWN_GENERATION.into()));
+    }
+    if mode == Mode::Packaged && !force && head == running {
         return Err(LoomError::Parse(NOTHING_NEW.into()));
     }
     Ok(())
 }
 
 /// `generations_return`'s rules: the body must be on the shelf WHOLE (round-1
-/// review, Finding 8 — a body a crash cut short is not a body to return to)
-/// and must not be the one already running.
-pub fn check_return(exe_whole: bool, current: Option<&str>, sha: &str) -> Result<(), LoomError> {
+/// review, Finding 8 — a body a crash cut short is not a body to return to),
+/// this body must be able to name itself (the same `unknown` rule
+/// `check_start` carries — without it the genome is checked out at the target
+/// generation and only THEN does `swap_plan` refuse, leaving the genome moved
+/// and the body unchanged), and the target must not be the one already
+/// running — which is `running`, not the ledger's `current`.
+pub fn check_return(exe_whole: bool, running: &str, sha: &str) -> Result<(), LoomError> {
     if !exe_whole {
         return Err(LoomError::NotFound(format!(
             "generation {} isn't on the shelf whole — it was pruned, never woven, or cut short",
             short(sha)
         )));
     }
-    if sha == running_sha(current) {
+    if running == platform::UNKNOWN_SHA {
+        return Err(LoomError::Unsupported(platform::UNKNOWN_GENERATION.into()));
+    }
+    if sha == running {
         return Err(LoomError::Parse(platform::ALREADY_RUNNING.into()));
     }
     Ok(())
@@ -521,9 +551,11 @@ fn job_steps(
             e,
         )
     })?;
-    let prev = generations::read(home)
-        .previous
-        .unwrap_or_else(|| running_sha(ledger.current.as_deref()));
+    // The warden is the body that is running RIGHT NOW — the one already
+    // proven to boot. `swap_plan` shelved it under the ledger's `previous`, so
+    // that is the name to spawn; if the ledger cannot be read back, this body
+    // still knows its own sha.
+    let prev = generations::read(home).previous.unwrap_or_else(|| running().to_string());
 
     // 5 · relaunch — the previous generation guards the birth.
     p.stage("relaunch", false);
@@ -738,13 +770,12 @@ pub fn reweave_start(app: tauri::AppHandle, force: bool) -> Result<(), LoomError
     // Every early return from here drops the guard, so a refused precondition
     // can never leave the slot held.
     let head = kernel::head_sha(&source)?;
-    let current = generations::read(&home).current;
     check_start(
         loomhome::read_threaded(&home),
         threads::sherpa_missing(&home),
         mode,
         &head,
-        current.as_deref(),
+        running(),
         force,
     )?;
     spawn_job(app, home, mode, source, layout, Kind::Weave, guard);
@@ -773,11 +804,12 @@ pub fn reweave_cancel(app: tauri::AppHandle) -> Result<(), LoomError> {
 #[tauri::command]
 pub fn reweave_state(app: tauri::AppHandle) -> Result<ReweaveState, LoomError> {
     let home = Home::from_app(&app)?;
-    let running = generations::read(&home).current;
+    // "did the weave hold?" is a question about the body executing this call,
+    // and this body knows its own sha — the ledger only claims one.
     Ok(settle(
         read_state(&home, loomhome::mode()),
         ACTIVE.load(Ordering::SeqCst) != 0,
-        Some(&running_sha(running.as_deref())),
+        Some(running()),
     ))
 }
 
@@ -795,8 +827,7 @@ pub fn generations_return(app: tauri::AppHandle, sha: String) -> Result<(), Loom
             "that is not a generation — a generation is named by its sha".into(),
         ));
     }
-    let current = generations::read(&home).current;
-    check_return(generations::shelved_whole(&home, &sha), current.as_deref(), &sha)?;
+    check_return(generations::shelved_whole(&home, &sha), running(), &sha)?;
     let guard = crate::exec::SlotGuard::take(&JOB)
         .ok_or_else(|| LoomError::Parse(IN_FLIGHT.into()))?;
     spawn_job(app, home, mode, source, Some(layout), Kind::Return { sha }, guard);
@@ -1098,32 +1129,59 @@ mod tests {
 
     #[test]
     fn start_refuses_when_not_threaded() {
-        let err = check_start(false, false, Mode::Packaged, "aaa", Some("bbb"), false).unwrap_err();
+        let err = check_start(false, false, Mode::Packaged, "aaa", "bbb", false).unwrap_err();
         match err {
             LoomError::Parse(m) => assert!(m.contains("isn't threaded"), "msg was {m}"),
             other => panic!("expected Parse, got {other:?}"),
         }
         // force does not bypass threading; neither does dev mode.
-        assert!(check_start(false, false, Mode::Packaged, "aaa", Some("bbb"), true).is_err());
-        assert!(check_start(false, false, Mode::Dev, "aaa", None, true).is_err());
-        assert!(check_start(true, false, Mode::Packaged, "aaa", Some("bbb"), false).is_ok());
+        assert!(check_start(false, false, Mode::Packaged, "aaa", "bbb", true).is_err());
+        assert!(check_start(false, false, Mode::Dev, "aaa", "bbb", true).is_err());
+        assert!(check_start(true, false, Mode::Packaged, "aaa", "bbb", false).is_ok());
     }
 
+    /// Round-3 review, Finding 3. The rule is HEAD vs the body that is
+    /// RUNNING, and the running body is the baked sha — never the ledger's
+    /// `current`, which is a claim about disk and is allowed to lag.
     #[test]
-    fn start_refuses_when_head_equals_current_unless_force() {
-        let err = check_start(true, false, Mode::Packaged, "aaa", Some("aaa"), false).unwrap_err();
+    fn start_refuses_when_head_equals_the_running_body_unless_force() {
+        let err = check_start(true, false, Mode::Packaged, "aaa", "aaa", false).unwrap_err();
         match err {
             LoomError::Parse(m) => assert!(m.contains("nothing new to weave"), "msg was {m}"),
             other => panic!("expected Parse, got {other:?}"),
         }
-        assert!(check_start(true, false, Mode::Packaged, "aaa", Some("aaa"), true).is_ok(), "force weaves anyway");
-        assert!(check_start(true, false, Mode::Packaged, "bbb", Some("aaa"), false).is_ok());
-        // Generation 0 predates the ledger: the running body is the baked sha.
-        let g0 = crate::loomhome::genome_sha();
-        assert!(check_start(true, false, Mode::Packaged, g0, None, false).is_err());
-        assert!(check_start(true, false, Mode::Packaged, "bbb", None, false).is_ok());
-        // Dev never swaps, so the head/current rule does not apply.
-        assert!(check_start(true, false, Mode::Dev, "aaa", Some("aaa"), false).is_ok());
+        assert!(check_start(true, false, Mode::Packaged, "aaa", "aaa", true).is_ok(), "force weaves anyway");
+        assert!(check_start(true, false, Mode::Packaged, "bbb", "aaa", false).is_ok());
+        // Dev never swaps, so the head/running rule does not apply.
+        assert!(check_start(true, false, Mode::Dev, "aaa", "aaa", false).is_ok());
+    }
+
+    /// Round-3 review, Finding 3 (the app-level wiring). `running()` is the
+    /// baked sha, not a ledger read — nothing about a `generations.json` on
+    /// disk can change which body is executing.
+    #[test]
+    fn the_running_body_is_the_baked_sha() {
+        assert_eq!(running(), crate::loomhome::genome_sha());
+    }
+
+    /// Round-3 review, Finding 4. `swap_plan` refuses an `unknown` body — but
+    /// that is stage 4, after `assets` and up to thirty minutes of `core`.
+    /// The refusal belongs at the gate, before anything is built, and force
+    /// does not lift it: no amount of force makes a nameless body swappable.
+    #[test]
+    fn start_refuses_a_body_that_cannot_name_itself_before_it_builds() {
+        let err = check_start(true, false, Mode::Packaged, "aaa", platform::UNKNOWN_SHA, false)
+            .unwrap_err();
+        match err {
+            LoomError::Unsupported(m) => assert_eq!(m, platform::UNKNOWN_GENERATION),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+        assert!(
+            check_start(true, false, Mode::Packaged, "aaa", platform::UNKNOWN_SHA, true).is_err(),
+            "force cannot make a nameless body swappable"
+        );
+        // Dev never swaps, so a dev body built outside a repo may still build.
+        assert!(check_start(true, false, Mode::Dev, "aaa", platform::UNKNOWN_SHA, false).is_ok());
     }
 
     #[test]
@@ -1273,16 +1331,48 @@ mod tests {
 
     #[test]
     fn return_refuses_an_absent_or_running_generation() {
-        match check_return(false, Some("aaa"), "bbb").unwrap_err() {
+        match check_return(false, "aaa", "bbb").unwrap_err() {
             LoomError::NotFound(m) => assert!(m.contains("isn't on the shelf whole"), "msg was {m}"),
             other => panic!("expected NotFound, got {other:?}"),
         }
-        match check_return(true, Some("aaa"), "aaa").unwrap_err() {
+        match check_return(true, "aaa", "aaa").unwrap_err() {
             LoomError::Parse(m) => assert_eq!(m, crate::platform::ALREADY_RUNNING),
             other => panic!("expected Parse, got {other:?}"),
         }
-        assert!(check_return(true, Some("aaa"), "bbb").is_ok());
-        assert!(check_return(true, None, "bbb").is_ok());
+        assert!(check_return(true, "aaa", "bbb").is_ok());
+    }
+
+    /// Round-3 review, Finding 3. The ledger lags by design — `swap_plan`
+    /// writes `current` before the new body has ever booted. With the ledger
+    /// deciding, "that generation is already running" was said about the body
+    /// on the ledger's mind, not the body in memory: the owner was refused the
+    /// generation they actually wanted, and offered the one they were already
+    /// in. `running` is the executing binary, so both answers invert.
+    #[test]
+    fn a_lagging_ledger_does_not_decide_which_body_is_running() {
+        let running_body = "aaaaaaa";
+        let ledger_claims = "bbbbbbb";
+        // The body in memory is refused, whatever the ledger says.
+        match check_return(true, running_body, running_body).unwrap_err() {
+            LoomError::Parse(m) => assert_eq!(m, crate::platform::ALREADY_RUNNING),
+            other => panic!("expected Parse, got {other:?}"),
+        }
+        // And the body the ledger merely CLAIMS is current is a real way out.
+        assert!(
+            check_return(true, running_body, ledger_claims).is_ok(),
+            "a generation that is not executing is a generation you can return to"
+        );
+    }
+
+    /// Round-3 review, Finding 4. A return by a body that cannot name itself
+    /// would check the genome out at `generation/<sha7>` and only THEN meet
+    /// `swap_plan`'s refusal — genome moved, body unchanged. Refuse at the gate.
+    #[test]
+    fn return_refuses_a_body_that_cannot_name_itself() {
+        match check_return(true, platform::UNKNOWN_SHA, "bbbbbbb").unwrap_err() {
+            LoomError::Unsupported(m) => assert_eq!(m, platform::UNKNOWN_GENERATION),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1402,20 +1492,20 @@ mod tests {
     /// nothing offline can fetch the archive again.
     #[test]
     fn start_refuses_when_the_sherpa_cache_is_gone() {
-        let err = check_start(true, true, Mode::Packaged, "bbb", Some("aaa"), false).unwrap_err();
+        let err = check_start(true, true, Mode::Packaged, "bbb", "aaa", false).unwrap_err();
         match err {
             LoomError::NotFound(m) => assert_eq!(m, SHERPA_GONE),
             other => panic!("expected NotFound, got {other:?}"),
         }
         // Dev compiles the same core against the same cache: it refuses too.
-        assert!(check_start(true, true, Mode::Dev, "aaa", None, false).is_err());
+        assert!(check_start(true, true, Mode::Dev, "aaa", "bbb", false).is_err());
         // force means "weave although nothing changed", never "weave although
         // the build cannot succeed".
-        assert!(check_start(true, true, Mode::Packaged, "bbb", Some("aaa"), true).is_err());
+        assert!(check_start(true, true, Mode::Packaged, "bbb", "aaa", true).is_err());
         // A cache that is still there does not block anything.
-        assert!(check_start(true, false, Mode::Packaged, "bbb", Some("aaa"), false).is_ok());
+        assert!(check_start(true, false, Mode::Packaged, "bbb", "aaa", false).is_ok());
         // Unthreaded is still the first thing said.
-        match check_start(false, true, Mode::Packaged, "bbb", Some("aaa"), false).unwrap_err() {
+        match check_start(false, true, Mode::Packaged, "bbb", "aaa", false).unwrap_err() {
             LoomError::Parse(m) => assert_eq!(m, NOT_THREADED),
             other => panic!("expected Parse, got {other:?}"),
         }
