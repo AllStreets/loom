@@ -81,7 +81,10 @@ export function requestLine(
   const mode = identity?.mode ?? "dev";
   if (req.kind === "thread") return LINE_THREAD_CONSENT;
   if (req.kind === "return") return returnConsentLine(req.sha ?? "", mode, canSwap);
-  return reweaveConsentLine(identity?.genomeSha ?? "", mode, canSwap);
+  // The genome's HEAD is what a weave builds; `genomeSha` is the body already
+  // running (round-3 review, findings 1 and 2). A chrome that could not read
+  // identity names no sha at all.
+  return reweaveConsentLine(identity?.genomeHead ?? null, mode, canSwap);
 }
 
 /** `"notes asked"` — the owner always knows who is asking. */

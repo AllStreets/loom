@@ -176,12 +176,25 @@ export const kernelBootCheck = (sourceRepo?: string) =>
 /**
  * Who this binary is: `dev` (tauri dev owns the binary; source is the cwd) or
  * `packaged` (a built app; source is `loomhome/source`). `genomeSha` is the
- * sha the binary was woven from (`unknown` outside a repo); `generation` is
- * the ledger's current sha, null before the first reweave.
+ * sha the binary was woven from (`unknown` outside a repo); `genomeHead` is
+ * the genome's HEAD right now; `generation` is the ledger's current sha, null
+ * before the first reweave.
  */
 export type Identity = {
   mode: "dev" | "packaged";
   genomeSha: string;
+  /**
+   * The genome's HEAD — `git rev-parse HEAD` of the repo a weave would build
+   * from. `null` when there is no source yet, or git cannot answer.
+   *
+   * This, not `genomeSha`, is what "is there anything new to weave?" asks
+   * about. `genomeSha` is the sha the RUNNING BINARY was compiled from: it
+   * cannot move while the process lives, and threading (and every successful
+   * weave) makes `generation` equal to it — so a gate comparing those two was
+   * always answering "nothing new" after the first weave. A self-edit moves
+   * `genomeHead` and nothing else, which is exactly the question.
+   */
+  genomeHead: string | null;
   generation: string | null;
   threaded: boolean;
   loomhome: string;

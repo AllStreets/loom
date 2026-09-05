@@ -133,7 +133,8 @@ const SHA_B = "9b8c7d9b8c7d9b8c7d9b8c7d9b8c7d9b8c7d9b8c";
 function identity(over: Partial<Identity> = {}): Identity {
   return {
     mode: "packaged",
-    genomeSha: SHA_A,
+    genomeSha: SHA_B,
+    genomeHead: SHA_A,
     generation: SHA_B,
     threaded: true,
     loomhome: "/home/loom",
@@ -175,7 +176,7 @@ function rebirth(over: Partial<RebirthDeps> = {}): RebirthDeps {
   return {
     readiness: vi
       .fn()
-      .mockResolvedValue({ ok: true, generation: SHA_B, genomeSha: SHA_A, mode: "packaged", canSwap: true }),
+      .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
     threadStatus: vi.fn().mockResolvedValue(threadStatus()),
     threadLoom: vi.fn().mockResolvedValue(undefined),
     identity: vi.fn().mockResolvedValue(identity()),
@@ -213,9 +214,40 @@ describe("handle — reweave", () => {
     });
   });
 
+  /**
+   * Round-3 review, Finding 2. The line named `genomeSha` — the sha the
+   * RUNNING binary was compiled from — while `run_job` weaves
+   * `kernel::head_sha(&ctx.source)`. The owner agreed to one act and got
+   * another. The sha in the sentence is the sha in the weave, or the sentence
+   * is a lie.
+   */
+  it("names the genome's HEAD, never the body already running", async () => {
+    const rb = rebirth({
+      readiness: vi
+        .fn()
+        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn.kind === "consent" && turn.line).toContain("weave generation 3f2a1c");
+    expect(turn.kind === "consent" && turn.line).not.toContain("9b8c7d");
+  });
+
+  /** A head LOOM could not read is not named. It does not guess a sha. */
+  it("names no sha when the genome's head cannot be read", async () => {
+    const rb = rebirth({
+      readiness: vi
+        .fn()
+        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: null, mode: "packaged", canSwap: true }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn.kind === "consent" && turn.line).toBe(
+      "weave the genome's head — LOOM will close and return",
+    );
+  });
+
   it("dev → the consent line never promises a close and return that will not happen", async () => {
     const rb = rebirth({
-      readiness: vi.fn().mockResolvedValue({ ok: true, generation: null, genomeSha: SHA_A, mode: "dev" }),
+      readiness: vi.fn().mockResolvedValue({ ok: true, generation: null, genomeHead: SHA_A, mode: "dev" }),
     });
     const turn = await handle("rebuild yourself", [], makeDeps({ rebirth: rb }));
     expect(turn).toEqual({
@@ -229,7 +261,7 @@ describe("handle — reweave", () => {
     const rb = rebirth({
       readiness: vi
         .fn()
-        .mockResolvedValue({ ok: true, generation: SHA_B, genomeSha: SHA_A, mode: "packaged", canSwap: false }),
+        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: false }),
     });
     const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toBe(

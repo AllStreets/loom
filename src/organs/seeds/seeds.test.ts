@@ -264,8 +264,15 @@ const TOOL = (name: string, over: Partial<{ path: string | null; version: string
   ...over,
 });
 
+/**
+ * The steady state (round-3 review, Finding 1): the body's baked sha, the
+ * ledger's current, and the genome's HEAD all agree — threading makes them
+ * agree and every successful weave re-establishes it. Nothing to weave.
+ * Overriding `generation` alone still reads as "ahead" because HEAD stays at
+ * SHA_A; overriding `genomeHead` is how a self-edit is spelled.
+ */
 function threadedDev(over: Record<string, unknown> = {}) {
-  return { mode: "dev", genomeSha: SHA_A, generation: SHA_A, threaded: true, loomhome: "/home/loom", loomhomeBytes: 2_300_000_000, canSwap: false, ...over };
+  return { mode: "dev", genomeSha: SHA_A, genomeHead: SHA_A, generation: SHA_A, threaded: true, loomhome: "/home/loom", loomhomeBytes: 2_300_000_000, canSwap: false, ...over };
 }
 
 /** Packaged on macOS: the one body that actually closes and returns. */
@@ -422,6 +429,76 @@ describe("settings seed — LOOM page", () => {
     const { el } = await renderSettings(selfMock());
     expect(el.querySelector('[data-action="self-reweave"]')).toBeNull();
     expect(el.querySelector('[data-testid="loom-page"]')!.textContent).toContain("the body matches the genome");
+  });
+
+  /**
+   * Round-3 review, Finding 1, at the surface that hid the button.
+   *
+   * A packaged LOOM lives with `generation === genomeSha` forever — threading
+   * sets the ledger's current to the baked sha, and every weave re-establishes
+   * it. Settings compared exactly those two, so once the first weave landed
+   * the REWEAVE button never came back. What a self-edit moves is the genome's
+   * HEAD, and nothing else.
+   */
+  it("REWEAVE appears after a self-edit moves HEAD, though the ledger still matches the running body", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () =>
+          threadedDev({ mode: "packaged", genomeSha: SHA_A, generation: SHA_A, genomeHead: SHA_B }),
+      }),
+    );
+    expect(el.querySelector('[data-action="self-reweave"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="loom-page"]')!.textContent).not.toContain(
+      "the body matches the genome",
+    );
+  });
+
+  it("REWEAVE stays hidden when HEAD has not moved, though the baked sha differs", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () =>
+          threadedDev({ mode: "packaged", genomeSha: SHA_B, generation: SHA_A, genomeHead: SHA_A }),
+      }),
+    );
+    expect(el.querySelector('[data-action="self-reweave"]')).toBeNull();
+  });
+
+  it("the identity block names the body, the ledger and the genome's head apart", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () =>
+          threadedDev({ mode: "packaged", genomeSha: SHA_A, generation: SHA_A, genomeHead: SHA_B }),
+      }),
+    );
+    const id = el.querySelector('[data-testid="loom-identity"]')!;
+    expect(id.textContent).toContain("body");
+    expect(id.textContent).toContain("generation");
+    expect(id.textContent).toContain("genome head");
+    expect(id.textContent).toContain(SHA_B.slice(0, 7));
+  });
+
+  /**
+   * Round-3 review, Finding 4. Threading shelves generation 0 under the sha
+   * the binary baked — which is the literal string "unknown" for a body built
+   * outside the genome. `generations_return` refuses that name before it can
+   * become a path component, so the row can be listed but its RETURN can only
+   * ever fail.
+   */
+  it("a generation that is not named by a sha is listed without a RETURN", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () => threadedDev({ mode: "packaged", generation: SHA_A }),
+        generations: async () => [
+          { sha: SHA_A, wovenAt: new Date().toISOString(), sizeBytes: 42, reason: "reweave", commitSubject: "b", isCurrent: true, isPrevious: false },
+          { sha: "unknown", wovenAt: new Date().toISOString(), sizeBytes: 41, reason: "threading", commitSubject: "a", isCurrent: false, isPrevious: true },
+        ],
+      }),
+    );
+    await tick();
+    const row = el.querySelector('[data-testid="loom-generation-unknown"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.querySelector('[data-action^="self-return-"]')).toBeNull();
+    expect(row.textContent).toContain("no way back");
   });
 
   it("REWEAVE appears when threaded and the genome is ahead; pressing it ASKS, it does not weave", async () => {

@@ -36,10 +36,21 @@ import {
   shouldAutoReweave,
 } from "./reweave";
 
+/**
+ * The steady state a packaged LOOM actually lives in (round-3 review, Finding
+ * 1): the running body's baked sha and the ledger's `current` are EQUAL —
+ * threading's register step makes them so, and every successful weave
+ * re-establishes it. Only `genomeHead` moves when LOOM edits itself, so only
+ * `genomeHead` can answer "is there anything new to weave?".
+ */
+const BODY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const MOVED_HEAD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
 const identity = (over: Partial<Identity> = {}): Identity => ({
   mode: "packaged",
-  genomeSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  generation: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  genomeSha: BODY,
+  genomeHead: MOVED_HEAD,
+  generation: BODY,
   threaded: true,
   loomhome: "/home/loom",
   loomhomeBytes: 0,
@@ -78,10 +89,10 @@ describe("startReweave", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("refuses when head equals generation", async () => {
+  it("refuses when the genome's HEAD equals the running generation", async () => {
     const start = vi.fn();
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () => identity({ genomeSha: sha, generation: sha }));
+    const id = vi.fn(async () => identity({ genomeHead: sha, generation: sha }));
     const out = await startReweave({ start, identity: id });
     expect(out).toEqual({ ok: false, reason: REASON_NOTHING_NEW });
     expect(out.ok === false && out.reason).toBe(
@@ -98,6 +109,49 @@ describe("startReweave", () => {
     expect(start).toHaveBeenCalledWith(false);
   });
 
+  /**
+   * Round-3 review, Finding 1 — the phase's own liveness, in one test.
+   *
+   * After the first weave a packaged LOOM sits with `generation === genomeSha`
+   * forever: threading's register step sets `ledger.current = genome_sha()`,
+   * and every successful weave re-establishes it. The old gate compared those
+   * two, so it answered "nothing new to weave" to every surface — the
+   * companion, the diff card's REWEAVE, autoReweave, the organ ask — and LOOM
+   * could never weave a second time. A self-edit moves the genome's HEAD and
+   * nothing else, and that is the only thing this gate may look at.
+   */
+  it("offers a weave when a self-edit moved HEAD, though the body still matches its own baked sha", async () => {
+    const start = vi.fn(async () => undefined);
+    const id = vi.fn(async () =>
+      identity({ genomeSha: BODY, generation: BODY, genomeHead: MOVED_HEAD }),
+    );
+    const out = await startReweave({ start, identity: id });
+    expect(out).toEqual({ ok: true });
+    expect(start).toHaveBeenCalledWith(false);
+  });
+
+  /** And the other direction: a body whose BAKED sha differs from the ledger
+   *  (a lagging ledger, a returned generation) has still nothing to weave
+   *  while HEAD has not moved. The old gate offered a weave here. */
+  it("offers nothing when HEAD has not moved, though the baked sha differs", async () => {
+    const start = vi.fn();
+    const settled = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
+    const id = vi.fn(async () =>
+      identity({ genomeSha: MOVED_HEAD, generation: settled, genomeHead: settled }),
+    );
+    const out = await startReweave({ start, identity: id });
+    expect(out).toEqual({ ok: false, reason: REASON_NOTHING_NEW });
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  /** No source cloned yet, or git silent: the gate does not invent a refusal.
+   *  The core re-checks and refuses with its own sentence. */
+  it("lets an unreadable head through to the core", async () => {
+    const start = vi.fn(async () => undefined);
+    const id = vi.fn(async () => identity({ genomeHead: null, generation: BODY }));
+    expect(await startReweave({ start, identity: id })).toEqual({ ok: true });
+  });
+
   it("starts when no generation has been woven yet (generation null, threaded)", async () => {
     const start = vi.fn(async () => undefined);
     const id = vi.fn(async () => identity({ generation: null }));
@@ -108,7 +162,7 @@ describe("startReweave", () => {
   it("passes force through, even when head equals generation", async () => {
     const start = vi.fn(async () => undefined);
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () => identity({ genomeSha: sha, generation: sha }));
+    const id = vi.fn(async () => identity({ genomeHead: sha, generation: sha }));
     const out = await startReweave({ start, identity: id }, true);
     expect(out).toEqual({ ok: true });
     expect(start).toHaveBeenCalledWith(true);
@@ -157,16 +211,19 @@ describe("reweaveReadiness — the dry run the companion asks before consent", (
 
   it("head equals generation → nothing new", async () => {
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () => identity({ genomeSha: sha, generation: sha }));
+    const id = vi.fn(async () => identity({ genomeHead: sha, generation: sha }));
     expect(await reweaveReadiness({ identity: id })).toEqual({ ok: false, reason: REASON_NOTHING_NEW });
   });
 
-  it("head ahead → ok with generation, genomeSha and mode; nothing is started", async () => {
+  it("head ahead → ok with generation, genomeHead and mode; nothing is started", async () => {
     const id = vi.fn(async () => identity());
     expect(await reweaveReadiness({ identity: id })).toEqual({
       ok: true,
-      generation: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      genomeSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      generation: BODY,
+      // The verdict carries what will be WOVEN, so the consent line can name
+      // it. The running body's baked sha is not in here at all — naming it was
+      // round-3 Finding 2.
+      genomeHead: MOVED_HEAD,
       // the consent line needs both: in dev nothing is swapped, and off
       // macOS the swap is refused even when packaged
       mode: "packaged",
@@ -184,7 +241,7 @@ describe("reweaveReadiness — the dry run the companion asks before consent", (
 
   it("force skips the nothing-new check", async () => {
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () => identity({ genomeSha: sha, generation: sha }));
+    const id = vi.fn(async () => identity({ genomeHead: sha, generation: sha }));
     expect((await reweaveReadiness({ identity: id }, true)).ok).toBe(true);
   });
 

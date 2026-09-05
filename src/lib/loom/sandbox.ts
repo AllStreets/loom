@@ -68,7 +68,9 @@ const freshLoom = () => {
   selfApi.identity = async function() {
     // canSwap is part of Identity in the shell, so it is part of it here: an
     // organ's tests read a boolean, not undefined. A dev body never swaps.
-    return { mode: "dev", genomeSha: SELF_SHA, generation: SELF_SHA, threaded: true, loomhome: "/sandbox/loom", loomhomeBytes: 0, canSwap: false };
+    // genomeHead is the genome's HEAD; here it matches the body, which is
+    // what "nothing new to weave" below reports.
+    return { mode: "dev", genomeSha: SELF_SHA, genomeHead: SELF_SHA, generation: SELF_SHA, threaded: true, loomhome: "/sandbox/loom", loomhomeBytes: 0, canSwap: false };
   };
   selfApi.threads = async function() {
     return {

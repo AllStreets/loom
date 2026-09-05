@@ -94,13 +94,23 @@ export const missingToolLine = (tool: string, install: string) =>
  *   - dev — `tauri dev` owns the binary, so the body stays (Settings' sentence);
  *   - packaged elsewhere — `platform.rs` has no swap yet: the build and the
  *     ledger still work, the body does not change.
+ *
+ * The sha named is the genome's HEAD — what the core will actually weave
+ * (`run_job` takes `kernel::head_sha(&ctx.source)` as its target). Round-3
+ * review, Finding 2: this named `genomeSha`, the sha the running binary was
+ * compiled from, so the one state where the old gate let a weave through said
+ * "weave generation <the body you are already in>" while the core wove
+ * something else — a sentence naming a third thing from the act.
+ *
+ * A `null` head (no source cloned, or git silent) is not named at all: LOOM
+ * does not put a sha in the owner's sentence that it could not read.
  */
 export const reweaveConsentLine = (
-  genomeSha: string,
+  genomeHead: string | null,
   mode: Identity["mode"],
   canSwap: boolean,
 ) => {
-  const head = `weave generation ${short(genomeSha)}`;
+  const head = genomeHead ? `weave generation ${short(genomeHead)}` : "weave the genome's head";
   if (mode === "dev") return `${head} — in dev the body stays; restart tauri dev to become it`;
   if (!canSwap) {
     return `${head} — the swap is macOS-only in this generation; the build and the ledger still work, the body stays`;
@@ -143,7 +153,7 @@ export async function handle(
       return {
         kind: "consent",
         consent: "reweave_consent",
-        line: reweaveConsentLine(ready.genomeSha, ready.mode, ready.canSwap),
+        line: reweaveConsentLine(ready.genomeHead, ready.mode, ready.canSwap),
       };
     }
 

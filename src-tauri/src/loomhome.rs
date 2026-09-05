@@ -236,6 +236,18 @@ pub fn seed_source(home: &Home, bundle: &Path, sha: &str) -> Result<(), LoomErro
 pub struct Identity {
     pub mode: Mode,
     pub genome_sha: String,
+    /// The genome's HEAD — `git rev-parse HEAD` of the repo a weave would
+    /// build from (dev: the cwd; packaged: `loomhome/source`). `None` when
+    /// there is no source yet, or git cannot answer.
+    ///
+    /// Round-3 review, Finding 1. Every surface that asked "is there anything
+    /// new to weave?" compared `generation` with `genome_sha` — the sha the
+    /// RUNNING BINARY was compiled from. Threading's register step sets
+    /// `ledger.current = genome_sha()`, and every successful weave
+    /// re-establishes it, so in the steady state those two are ALWAYS equal
+    /// and the answer was always "nothing new". A self-edit moves this field
+    /// and neither of the others, which is exactly the question being asked.
+    pub genome_head: Option<String>,
     /// The ledger's `current` sha, if a ledger exists. `None` before the first
     /// reweave (and in dev, where no generation is ever woven).
     pub generation: Option<String>,
@@ -317,10 +329,21 @@ fn read_value(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&raw).ok()
 }
 
+/// `git rev-parse HEAD` of the repo a weave would build from — resolved
+/// exactly the way `reweave::ctx_for` resolves it, so the sha Settings and the
+/// consent line NAME is the sha a weave would actually target. Any failure
+/// (no source cloned yet, no git, a torn work tree) is `None`, never an error:
+/// identity must always answer.
+pub fn genome_head(home: &Home) -> Option<String> {
+    let root = crate::kernel::resolve_source_repo_at(mode(), None, Some(home)).ok()?;
+    crate::kernel::head_sha(&root).ok()
+}
+
 pub fn identity(home: &Home) -> Identity {
     Identity {
         mode: mode(),
         genome_sha: genome_sha().to_string(),
+        genome_head: genome_head(home),
         generation: read_generation(home),
         threaded: read_threaded(home),
         loomhome: home.root.to_string_lossy().into_owned(),
@@ -377,11 +400,56 @@ mod tests {
         assert!(h.source().join(".cargo").starts_with(&root));
     }
 
+    /// Round-3 review, Finding 1. `genome_head` must MOVE when the genome's
+    /// HEAD moves — that is the whole point of the field. `genome_sha` (the
+    /// running binary's own sha) cannot move at all while the process lives,
+    /// which is why gating on it made every weave after the first unreachable.
+    #[test]
+    fn genome_head_follows_the_genome_and_is_none_without_one() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().to_path_buf());
+        // No `source/` cloned yet: there is no head to name.
+        assert!(
+            crate::kernel::resolve_source_repo_at(Mode::Packaged, None, Some(&home)).is_err(),
+            "a loomhome with no source has no repo to resolve"
+        );
+
+        // A real repo with two commits: HEAD names the second, and the sha the
+        // binary was baked from is untouched by either.
+        let repo = d.path().join("genome");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "loom")
+                .env("GIT_AUTHOR_EMAIL", "loom@example.com")
+                .env("GIT_COMMITTER_NAME", "loom")
+                .env("GIT_COMMITTER_EMAIL", "loom@example.com")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "one"]);
+        let first = crate::kernel::head_sha(&repo).unwrap();
+        std::fs::write(repo.join("a.txt"), "two").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "two"]);
+        let second = crate::kernel::head_sha(&repo).unwrap();
+
+        assert_ne!(first, second, "a self-edit moves HEAD");
+        assert_ne!(second, genome_sha(), "and moves it away from the baked sha");
+    }
+
     #[test]
     fn identity_serializes_camel_case() {
         let id = Identity {
             mode: Mode::Packaged,
             genome_sha: "deadbeef".into(),
+            genome_head: Some("3f2a1c9".into()),
             generation: Some("deadbeef".into()),
             threaded: true,
             loomhome: "/tmp/loom".into(),
@@ -398,10 +466,17 @@ mod tests {
         assert_eq!(v["threaded"], true);
         assert_eq!(v["loomhome"], "/tmp/loom");
         assert!(v.get("genome_sha").is_none(), "snake_case must not leak");
+        // The genome's HEAD travels beside the running body's sha and is NOT
+        // the same field — the whole of round-3 Finding 1 is that the two are
+        // different questions.
+        assert_eq!(v["genomeHead"], "3f2a1c9");
+        assert!(v.get("genome_head").is_none(), "snake_case must not leak");
         assert_eq!(serde_json::to_value(Mode::Dev).unwrap(), "dev");
         // None serializes as null, not absent — the TS type is `string | null`.
-        let none = Identity { generation: None, ..id };
-        assert!(serde_json::to_value(&none).unwrap()["generation"].is_null());
+        let none = Identity { generation: None, genome_head: None, ..id };
+        let nv = serde_json::to_value(&none).unwrap();
+        assert!(nv["generation"].is_null());
+        assert!(nv["genomeHead"].is_null(), "no source yet reads as null, not absent");
     }
 
     #[test]

@@ -40,9 +40,13 @@ Object.defineProperty(window, "matchMedia", {
 const SHA = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
 const PREV = "9b8c7d9b8c7d9b8c7d9b8c7d9b8c7d9b8c7d9b8c";
 
+/** A steady-state packaged body: what is running (`genomeSha`) is what the
+ *  ledger says is current, and the genome's HEAD is where a self-edit moved
+ *  it. The card names HEAD — round-3 review, findings 1 and 2. */
 const PACKAGED = async () => ({
   mode: "packaged" as const,
-  genomeSha: SHA,
+  genomeSha: PREV,
+  genomeHead: SHA,
   generation: PREV,
   threaded: true,
   loomhome: "/l",
@@ -159,7 +163,7 @@ describe("BodyRequest — nothing happens until the owner says yes", () => {
 });
 
 describe("BodyRequest — the line is chrome's, not the organ's", () => {
-  it("names the genome sha chrome read, whatever the organ sent", async () => {
+  it("names the genome HEAD chrome read, whatever the organ sent", async () => {
     await mount();
     ask("reweave", "notes");
     await act(async () => {});
@@ -282,6 +286,36 @@ describe("BodyRequest — the card and the act read the same claimed record", ()
 });
 
 /**
+ * Round-3 review, Finding 2. The card promised to "weave generation <the body
+ * you are already in>" — it read `genomeSha`, the sha the running binary was
+ * compiled from, while the core weaves the genome's HEAD. A consent card that
+ * names a third thing from the act is not consent.
+ */
+describe("BodyRequest — the sentence names what will be woven", () => {
+  it("names the genome's HEAD, never the running body's own sha", async () => {
+    const identity = async () => ({ ...(await PACKAGED()), genomeSha: PREV, genomeHead: SHA });
+    render(<BodyRequest identity={identity} acts={acts()} />);
+    await act(async () => {});
+    ask("reweave", "notes");
+    await act(async () => {});
+    const card = screen.getByTestId("consent-reweave_consent");
+    expect(card).toHaveTextContent("weave generation 3f2a1c");
+    expect(card).not.toHaveTextContent("9b8c7d");
+  });
+
+  it("names no sha at all when chrome could not read one", async () => {
+    const identity = async () => ({ ...(await PACKAGED()), genomeHead: null });
+    render(<BodyRequest identity={identity} acts={acts()} />);
+    await act(async () => {});
+    ask("reweave", "notes");
+    await act(async () => {});
+    const card = screen.getByTestId("consent-reweave_consent");
+    expect(card).toHaveTextContent("weave the genome's head");
+    expect(card.textContent ?? "").not.toMatch(/[0-9a-f]{7}/);
+  });
+});
+
+/**
  * Round-2 finding 2: identity was read once at mount, so after a packaged
  * self-edit moved the genome head — the sequence this phase exists for — the
  * card still named the OLD sha, and `canSwap` was stale with it.
@@ -292,7 +326,7 @@ describe("BodyRequest — the body is read when the request is claimed", () => {
     let n = 0;
     const identity = async () => ({
       ...(await PACKAGED()),
-      genomeSha: heads[Math.min(n++, heads.length - 1)],
+      genomeHead: heads[Math.min(n++, heads.length - 1)],
     });
     render(<BodyRequest identity={identity} acts={acts()} />);
     await act(async () => {});

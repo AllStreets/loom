@@ -114,7 +114,9 @@ export type Readiness =
   | {
       ok: true;
       generation: string | null;
-      genomeSha: string;
+      /** What a weave would BUILD: the genome's HEAD. The consent line names
+       *  this — never `genomeSha`, which is the body already running. */
+      genomeHead: string | null;
       mode: "dev" | "packaged";
       /** Whether this body can actually be swapped — read from the core, which
        *  knows. The consent line must not promise a close-and-return that the
@@ -131,9 +133,18 @@ export type Readiness =
  *
  * Preconditions read from `kernel_identity`:
  *   - not threaded → REASON_UNTHREADED
- *   - the running generation already IS the genome head (and not `force`)
+ *   - the running generation already IS the genome's HEAD (and not `force`)
  *     → REASON_NOTHING_NEW. A null generation (no body woven yet, or dev mode)
- *     always has something to weave.
+ *     always has something to weave, and so does a genome whose head cannot be
+ *     read — the core re-checks, and refuses with its own sentence.
+ *
+ * Round-3 review, Finding 1: this compared `generation` with `genomeSha` — the
+ * sha the RUNNING BINARY was compiled from. Threading's register step sets
+ * `ledger.current = genome_sha()`, and every successful weave re-establishes
+ * it, so in the steady state those two are ALWAYS equal: after the first
+ * weave, LOOM could never weave again. A self-edit moves `loomhome/source`
+ * HEAD and neither of the others. The gate reads HEAD now, as the core's own
+ * `check_start` always did.
  */
 export async function reweaveReadiness(
   deps: ReadinessDeps = { identity: kernelIdentity },
@@ -142,7 +153,7 @@ export async function reweaveReadiness(
   try {
     const id = await deps.identity();
     if (!id.threaded) return { ok: false, reason: REASON_UNTHREADED };
-    if (!force && id.generation !== null && id.generation === id.genomeSha) {
+    if (!force && id.genomeHead !== null && id.genomeHead === id.generation) {
       return { ok: false, reason: REASON_NOTHING_NEW };
     }
     // `mode` travels with the verdict so the consent line can say what will
@@ -150,7 +161,7 @@ export async function reweaveReadiness(
     return {
       ok: true,
       generation: id.generation,
-      genomeSha: id.genomeSha,
+      genomeHead: id.genomeHead,
       mode: id.mode,
       canSwap: id.canSwap,
     };

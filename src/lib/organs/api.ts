@@ -52,7 +52,7 @@ export type LoomSettingsApi = {
  * docblock in `bodyGate.ts` for the whole statement.
  */
 export type LoomSelfApi = {
-  /** `{ mode, genomeSha, generation, threaded, loomhome, loomhomeBytes }`. */
+  /** `{ mode, genomeSha, genomeHead, generation, threaded, loomhome, loomhomeBytes }`. */
   identity(): Promise<Identity>;
   /** The tool table, what is missing, what drifted. */
   threads(): Promise<ThreadStatus>;

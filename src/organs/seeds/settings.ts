@@ -163,6 +163,11 @@ const ORGAN_JS = `export default {
     loomPage.appendChild(ui.heading("LOOM", "the body, the genome, and the tools that weave them."));
 
     function sha7(s) { return s ? String(s).slice(0, 7) : "none"; }
+    // The same rule the core keeps (reweave.rs is_sha): 7-40 lowercase hex.
+    // A body built outside the genome bakes "unknown", threading shelves it
+    // under that name, and generations_return can never accept it — so the
+    // row is listed (it is on the shelf) and its RETURN is not offered.
+    function isSha(s) { return typeof s === "string" && /^[0-9a-f]{7,40}$/.test(s); }
     function gbOf(bytes) { return (Number(bytes || 0) / 1e9).toFixed(1); }
     function relTime(iso) {
       var then = Date.parse(iso);
@@ -436,7 +441,16 @@ const ORGAN_JS = `export default {
           desc.textContent = "woven " + relTime(g.wovenAt) + " · " + (g.reason || "reweave") + " · " + (g.commitSubject || "unknown");
           line.appendChild(desc);
           row.appendChild(line);
-          if (!g.isCurrent) {
+          // A row whose name is not a sha ("unknown", shelved by threading
+          // for a body built outside the genome) is a dead end: the core
+          // refuses it before it can become a path component. Listing it is
+          // honest; offering a button that can only ever fail is not.
+          if (!g.isCurrent && !isSha(g.sha)) {
+            var dead = quiet("no way back — this body was built outside the genome, so it has no name to return to.");
+            dead.dataset.testid = "loom-return-nameless-" + short;
+            dead.style.marginTop = "4px";
+            row.appendChild(dead);
+          } else if (!g.isCurrent) {
             var ret = ui.button("RETURN", { variant: "ghost", action: "self-return-" + short });
             ret.style.padding = "4px 10px";
             ret.style.fontSize = "12px";
@@ -531,13 +545,25 @@ const ORGAN_JS = `export default {
       clear(identityBlock);
       identityBlock.appendChild(ui.keyval([
         ["mode", id.mode],
+        // Three different facts that the round-3 review found conflated:
+        // the binary executing (baked at compile time), what the ledger says
+        // is current, and where the genome's HEAD is right now. Only the last
+        // one moves when LOOM edits itself.
+        ["body", sha7(id.genomeSha)],
         ["generation", sha7(id.generation)],
-        ["genome", sha7(id.genomeSha)],
+        ["genome head", sha7(id.genomeHead)],
         ["threaded", id.threaded ? "yes" : "no"],
       ]));
       // The actions exist only when they mean something: no REWEAVE button to
       // press when there is nothing to weave, no THREAD button once threaded.
-      var ahead = id.threaded && id.generation !== id.genomeSha;
+      //
+      // Round-3 review, Finding 1: this compared generation with
+      // genomeSha — the sha the RUNNING BINARY was compiled from. Threading
+      // sets ledger.current = genome_sha() and every weave re-establishes
+      // it, so the two are always equal in the steady state and the button
+      // was hidden forever after the first weave. It is the genome's HEAD
+      // that moves, and the same comparison reweaveReadiness makes.
+      var ahead = id.threaded && (id.genomeHead === null || id.genomeHead !== id.generation);
       if (ahead && !reweaveBtn.parentNode) reweaveWrap.insertBefore(reweaveBtn, reweaveNote);
       if (!ahead && reweaveBtn.parentNode) reweaveWrap.removeChild(reweaveBtn);
       reweaveBtn.style.display = "";
