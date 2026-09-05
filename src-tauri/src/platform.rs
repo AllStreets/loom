@@ -8,9 +8,10 @@
 //!
 //! - `swap_plan` is PURE. Given the ledger, the app layout, the home, and the
 //!   sha to become, it returns the ordered list of `Step`s — or a typed
-//!   refusal (`Unsupported` off macOS, `Parse` when that generation is already
-//!   running). The plan is enumerable, serializable, and unit-tested without
-//!   touching a disk.
+//!   refusal (`Unsupported` off macOS or when a body cannot name the
+//!   generation it is, `Parse` when that generation is already running). The
+//!   plan is enumerable, serializable, and unit-tested without touching a
+//!   disk.
 //! - `execute` walks a plan against the real filesystem. It is also what the
 //!   warden (warden.rs) reuses to heal — the same executor, a shorter plan
 //!   ending in `WriteSentinelHealed`.
@@ -138,6 +139,10 @@ pub enum Step {
 pub const UNSUPPORTED_SWAP: &str =
     "the swap is macOS-only in this generation — the build and the ledger still work";
 pub const ALREADY_RUNNING: &str = "that generation is already running";
+/// What `build.rs` bakes into a binary built outside a repo.
+pub const UNKNOWN_SHA: &str = "unknown";
+pub const UNKNOWN_GENERATION: &str =
+    "this body cannot say which generation it is — it was built outside the genome, so there is no name to shelve it under and no way back to it; rebuild LOOM from a clone of the genome first";
 
 /// Pure: the ordered steps that make `new_sha` the running body.
 pub fn swap_plan(
@@ -156,6 +161,15 @@ pub fn swap_plan(
         .current
         .clone()
         .unwrap_or_else(|| loomhome::genome_sha().to_string());
+    // `build.rs` bakes `unknown` for a build made outside a repo, and
+    // `unknown` is not a sha: `generations_return` refuses it, so a body
+    // shelved under that name could never be come home to (round-2 review,
+    // Finding 7). Refuse the whole swap here, before anything is copied,
+    // rather than destroy the running body for a way back that cannot be
+    // spelled.
+    if current == UNKNOWN_SHA || new_sha == UNKNOWN_SHA {
+        return Err(LoomError::Unsupported(UNKNOWN_GENERATION.into()));
+    }
     if new_sha == current {
         return Err(LoomError::Parse(ALREADY_RUNNING.into()));
     }
@@ -472,6 +486,33 @@ mod tests {
             swap_plan(&Ledger::default(), &lay, &home, g0, "macos"),
             Err(LoomError::Parse(_))
         ));
+    }
+
+    /// Round-2 review, Finding 7. `build.rs` bakes `unknown` for a build made
+    /// outside a repo. `unknown` is not a sha, so `generations_return` refuses
+    /// it (`is_sha`) and the body shelved under that name can never be come
+    /// home to. The swap refuses at the plan, before anything is copied,
+    /// rather than shelving a body under a name the road home cannot spell.
+    #[test]
+    fn plan_refuses_a_body_that_cannot_name_itself() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        let lay = layout(d.path());
+        // Generation 0 outside a repo: no ledger, and the baked sha is
+        // `unknown`, so the running body has no name to be shelved under.
+        let mut unnamed = Ledger::default();
+        unnamed.current = Some(UNKNOWN_SHA.into());
+        match swap_plan(&unnamed, &lay, &home, "bbb222", "macos") {
+            Err(LoomError::Unsupported(m)) => assert_eq!(m, UNKNOWN_GENERATION),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+        // Neither may a body be woven INTO a generation with no name.
+        assert!(matches!(
+            swap_plan(&ledger(Some("aaa111"), None), &lay, &home, UNKNOWN_SHA, "macos"),
+            Err(LoomError::Unsupported(_))
+        ));
+        // A named body is unaffected.
+        assert!(swap_plan(&ledger(Some("aaa111"), None), &lay, &home, "bbb222", "macos").is_ok());
     }
 
     #[test]
