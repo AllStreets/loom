@@ -3441,14 +3441,19 @@ mod tests {
     #[test]
     #[ignore = "invokes real cargo/rustc — slow; run manually with --ignored"]
     fn real_cargo_catches_type_errors() {
-        let cargo = match cargo_path(None) {
-            Some(c) => c,
-            None => {
+        // Composed the way `validate_rust` composes it — argv AND env from
+        // `cargo_run` — so this proves the real spawn, not a hand-built one.
+        let tools = |name: &str| crate::threads::locate_now(name).or_else(|| which(name));
+        let spawn = match cargo_run(&tools, None) {
+            Ok(s) => s,
+            Err(_) => {
                 eprintln!("SKIP real_cargo_catches_type_errors: cargo not on PATH");
                 return;
             }
         };
-        let cargo = cargo.to_str().unwrap();
+        let check_argv = spawn.argv(&["check"]);
+        let argv: Vec<&str> = check_argv.iter().map(String::as_str).collect();
+        let envs = spawn.envs();
 
         // Build a minimal standalone crate laid out like the worktree the
         // validator sees: an allowed_root with a `src-tauri/` holding Cargo.toml
@@ -3465,11 +3470,12 @@ mod tests {
         .unwrap();
 
         let run_check = |wt_root: &Path| -> Result<ExecOut, LoomError> {
-            run_checked(
-                &[cargo, "check"],
+            run_checked_env(
+                &argv,
                 &wt_root.join("src-tauri"),
                 wt_root,
                 CARGO_CHECK_TIMEOUT,
+                &envs,
             )
         };
 
