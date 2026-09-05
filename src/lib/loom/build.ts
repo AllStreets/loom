@@ -2,13 +2,13 @@ import { organSystemPrompt, ctxFor } from "./prompts";
 import { extractCode } from "./edits";
 import { manifestGuard, renderProbe } from "./validate";
 import type { gate } from "./validate";
-import type { organWrite, Msg, OrganFile, ChatOpts, Brain } from "../core";
+import type { organWrite, Msg, OrganFile, ChatOpts } from "../core";
 import { isBusy as _isBusy, withFlight } from "./flight";
 import { runGateWithRepair } from "./gateRepair";
 import { recordExperience, retrieveExemplars, retrieveLessons } from "./experience";
 
 export type BuildEvent = { ts: number; phase: string; detail: string; role?: "builder" | "companion" | "rewriter" };
-export type BuildResult = { ok: boolean; organId?: string; sha?: string; error?: string; stage?: string; log: BuildEvent[]; brain?: Brain };
+export type BuildResult = { ok: boolean; organId?: string; sha?: string; error?: string; stage?: string; log: BuildEvent[] };
 export type BuildDeps = {
   chat: (role: string, messages: Msg[], opts?: ChatOpts) => Promise<string>;
   write: typeof organWrite;
@@ -18,9 +18,6 @@ export type BuildDeps = {
   /** Optional human review gate: called with the validated files BEFORE anything
    *  is written. Resolve true to apply, false to discard (nothing is written). */
   review?: (files: OrganFile[]) => Promise<boolean>;
-  /** Optional: returns the brain used by the most recent builder call.
-   *  When provided, build.ts records brain in experience and emits a log line. */
-  getBrain?: () => Brain;
   /** Set when this build originated from an unprompted LOOM proposal (Phase 20).
    *  Threaded onto the experience BuildRecord as proposalSource: "initiative". */
   proposalSource?: "initiative";
@@ -77,7 +74,6 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
           ts: Date.now(), kind: "build", request, organId: "", ok: false,
           stage: "manifest", repairRounds: 1,
           errors: [manifestResult.error],
-          brain: deps.getBrain?.() ?? "local",
         });
         return { ok: false, error: manifestResult.error, log };
       }
@@ -130,7 +126,6 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
           ts: Date.now(), kind: "build", request, organId, ok: false,
           stage: "render", repairRounds: 1,
           errors: [probeResult.error ?? "render probe failed"],
-          brain: deps.getBrain?.() ?? "local",
         });
         return { ok: false, error: probeResult.error ?? "render probe failed", stage: "render", log };
       }
@@ -199,7 +194,6 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
         stage: gateResult.stage, repairRounds: gateResult.repairRounds,
         manifest: finalManifestCode, code: codeContent, tests: testsContent,
         errors: [gateResult.errors],
-        brain: deps.getBrain?.() ?? "local",
       });
       return { ok: false, error: gateResult.errors, stage: gateResult.stage, log };
     }
@@ -227,19 +221,14 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     const sha = await deps.write(organId, reviewFiles, commitMsg);
     emit("write", "committed " + sha);
 
-    // Record success experience with brain
-    const brain: Brain = deps.getBrain?.() ?? "local";
-    const brainLabel = brain === "cloud" ? "claude-opus-4-8" : "local fleet";
-    emit("brain", `built by ${brainLabel}`);
     recordExperience({
       ts: Date.now(), kind: "build", request, organId, ok: true,
       repairRounds,
       manifest: finalManifestCode, code, tests,
-      brain,
       ...(deps.proposalSource ? { proposalSource: deps.proposalSource } : {}),
     });
 
-    return { ok: true, organId, sha, log, brain };
+    return { ok: true, organId, sha, log };
 
     } catch (err) {
       emit("error", String(err));

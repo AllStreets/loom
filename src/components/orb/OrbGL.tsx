@@ -74,13 +74,12 @@ function OrbMesh({ mood, reducedMotion }: Omit<OrbGLProps, "size">) {
 export function OrbGL({ mood, reducedMotion, size = 180, transparent = false }: OrbGLProps) {
   const moodColor = MOOD_TARGETS[mood].color;
   if (transparent) {
-    // DECK MODE — true alpha, no post-processing, no blend needed.
-    // The band's mix-blend-mode over a deck iframe forces a cross-document
-    // backdrop readback on EVERY orb frame, which flickers the whole iframe
-    // (banner/earth/moon). With the EffectComposer dropped, the GL context can
-    // be genuinely transparent: no black clear to screen out, so no blend, so
-    // no readback. The shader's own fresnel/rim glow carries the look; the
-    // radial mask keeps edges soft.
+    // TRANSPARENT MODE — true alpha, no post-processing, no blend needed.
+    // For hosts that cannot carry the band's screen blend (any surface where a
+    // backdrop readback per frame would flicker). With the EffectComposer
+    // dropped, the GL context can be genuinely transparent: no black clear to
+    // screen out, so no blend, so no readback. The shader's own fresnel/rim
+    // glow carries the look; the radial mask keeps edges soft.
     return (
       <div style={{ width: size * 2.4, height: size * 2.4, flexShrink: 0 }}>
         <Canvas
@@ -90,7 +89,7 @@ export function OrbGL({ mood, reducedMotion, size = 180, transparent = false }: 
             background: "transparent",
             maskImage: "radial-gradient(circle closest-side, rgba(0,0,0,1) 55%, rgba(0,0,0,0) 96%)",
             WebkitMaskImage: "radial-gradient(circle closest-side, rgba(0,0,0,1) 55%, rgba(0,0,0,0) 96%)",
-            // Without bloom the shader core washes out over bright deck content.
+            // Without bloom the shader core washes out over bright content.
             // drop-shadow composites FORWARD (no backdrop readback) so it cannot
             // reintroduce the blend flicker; mood-colored halo keeps the presence.
             filter: "drop-shadow(0 0 26px " + moodColor + "aa) drop-shadow(0 0 64px " + moodColor + "55)",
@@ -112,8 +111,8 @@ export function OrbGL({ mood, reducedMotion, size = 180, transparent = false }: 
           deeper blend from the page backdrop), so black contributes no light; (3) a
           radial mask fades the bloom veil out before the canvas edge. All three are
           load-bearing: without the mask the veil edge shows; without the band blend a
-          dark halo rings the orb. Over DECKS this blend is the flicker source — decks
-          use the transparent mode above instead. */}
+          dark halo rings the orb. Where the blend cannot be carried, the transparent
+          mode above is the alternative. */}
       <Canvas
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: false }}

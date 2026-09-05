@@ -13,6 +13,11 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
+    /* The BUILD config sees no ambient @types. `@types/node` exists for the
+       tests (tsconfig.check.json opts into it); product code that reaches for
+       `process` or `node:fs` must still fail here, because none of it exists
+       inside the webview. Library types still arrive through imports. */
+    "types": [],
 
     /* Linting */
     "strict": true,

@@ -24,8 +24,6 @@ function makeInputs(overrides: Partial<WeaveInputs> = {}): WeaveInputs {
     organs: [],
     deletedOrganIds: [],
     experiences: [],
-    learnedTop: [],
-    decksUsed: [],
     now: NOW,
     ...overrides,
   };
@@ -147,13 +145,6 @@ describe("weaveModel — weft (organs, scars, decks, builds)", () => {
     expect(scar.knots).toEqual([]);
   });
 
-  it("decks used weave threads with deck labels", () => {
-    const model = weaveModel(makeInputs({ decksUsed: ["globe"] }));
-    const deck = model.weft.find((t) => t.kind === "deck")!;
-    expect(deck.label).toBe("deck · globe");
-    expect(deck.action).toBeNull();
-  });
-
   it("a clean build pass weaves a smooth thread — no knots", () => {
     const model = weaveModel(
       makeInputs({
@@ -214,7 +205,6 @@ describe("weaveModel — weft (organs, scars, decks, builds)", () => {
       makeInputs({
         organs: [{ id: "a" }, { id: "b" }, { id: "c" }],
         deletedOrganIds: ["d"],
-        decksUsed: ["globe", "terminal"],
         experiences: [{ ts: NOW, organId: "a", ok: true, repairRounds: 1 }],
       })
     );
@@ -224,32 +214,6 @@ describe("weaveModel — weft (organs, scars, decks, builds)", () => {
       expect(y).toBeLessThan(1);
     }
     expect(new Set(ys).size).toBe(ys.length);
-  });
-});
-
-describe("weaveModel — learned tint", () => {
-  it("intensity is 0 everywhere when nothing has been learned", () => {
-    const model = weaveModel(makeInputs({ organs: [{ id: "a" }, { id: "b" }] }));
-    for (const t of model.weft) expect(t.intensity).toBe(0);
-  });
-
-  it("learned weights tint weft intensity into [0,1]", () => {
-    const model = weaveModel(
-      makeInputs({
-        organs: [{ id: "a" }, { id: "b" }, { id: "c" }],
-        learnedTop: [
-          { key: "finance", weight: 0.4 },
-          { key: "quakes", weight: -0.2 },
-        ],
-      })
-    );
-    let anyPositive = false;
-    for (const t of model.weft) {
-      expect(t.intensity).toBeGreaterThanOrEqual(0);
-      expect(t.intensity).toBeLessThanOrEqual(1);
-      if (t.intensity > 0) anyPositive = true;
-    }
-    expect(anyPositive).toBe(true);
   });
 });
 
@@ -263,7 +227,6 @@ describe("weaveModel — perf cap and determinism", () => {
         })),
         organs: Array.from({ length: 50 }, (_, i) => ({ id: `organ-${i}` })),
         deletedOrganIds: Array.from({ length: 30 }, (_, i) => `dead-${i}`),
-        decksUsed: ["globe", "terminal", "ember"],
         experiences: Array.from({ length: 200 }, (_, i) => ({
           ts: NOW - i * DAY,
           organId: `organ-${i % 50}`,
@@ -315,13 +278,116 @@ describe("weaveModel — perf cap and determinism", () => {
       commits: [{ sha: "abc1234def", message: "a commit" }],
       organs: [{ id: "water-tracker" }],
       deletedOrganIds: ["old"],
-      decksUsed: ["globe"],
       experiences: [{ ts: NOW - 2 * DAY, organId: "water-tracker", ok: true, repairRounds: 1 }],
-      learnedTop: [{ key: "finance", weight: 0.3 }],
     });
     const a = weaveModel(inputs);
     const b = weaveModel(makeInputs({ ...inputs }));
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+describe("weaveModel — generations (each woven body a knot in the cloth)", () => {
+  const commits = [
+    { sha: "a0cee82ffffffff", message: "newest" },
+    { sha: "b1def93eeeeeeee", message: "middle" },
+    { sha: "c2efa04ddddddd0", message: "oldest" },
+  ];
+
+  it("a generation weft lands at its commit's index — the knot sits on that warp", () => {
+    const model = weaveModel(
+      makeInputs({
+        commits,
+        generations: [{ sha: "b1def93eeeeeeee", wovenAt: NOW - DAY, isCurrent: true }],
+      })
+    );
+    const gen = model.weft.find((t) => t.kind === "generation")!;
+    expect(gen).toBeDefined();
+    expect(gen.knot).toBe(true);
+    expect(gen.knots).toHaveLength(1);
+    const warpIndex = model.warp.findIndex((w) => w.id === "warp-b1def93eeeeeeee");
+    expect(warpIndex).toBe(1);
+    expect(gen.knots[0]).toBe(model.warp[warpIndex].x);
+    expect(gen.action).toEqual({ kind: "commit", sha: "b1def93eeeeeeee" });
+    expect(gen.label).toBe("generation · b1def93 · woven 1 day ago · current");
+  });
+
+  it("a generation with an unknown sha is still placed — by wovenAt order", () => {
+    const model = weaveModel(
+      makeInputs({
+        commits,
+        generations: [
+          { sha: "0000000unknown1", wovenAt: NOW - 3 * DAY, isCurrent: false },
+          { sha: "0000000unknown2", wovenAt: NOW - DAY, isCurrent: true },
+        ],
+      })
+    );
+    const gens = model.weft.filter((t) => t.kind === "generation");
+    expect(gens).toHaveLength(2);
+    for (const g of gens) {
+      expect(g.knots).toHaveLength(1);
+      expect(g.knots[0]).toBeGreaterThan(0);
+      expect(g.knots[0]).toBeLessThan(1);
+      expect(g.action).toBeNull();
+    }
+    const older = gens.find((g) => g.id.includes("unknown1"))!;
+    const newer = gens.find((g) => g.id.includes("unknown2"))!;
+    // weaving advances rightward — the newer body sits further right
+    expect(newer.knots[0]).toBeGreaterThan(older.knots[0]);
+  });
+
+  it("only the current generation is luminous", () => {
+    const model = weaveModel(
+      makeInputs({
+        commits,
+        generations: [
+          { sha: "a0cee82ffffffff", wovenAt: NOW, isCurrent: true },
+          { sha: "c2efa04ddddddd0", wovenAt: NOW - 5 * DAY, isCurrent: false },
+        ],
+      })
+    );
+    const gens = model.weft.filter((t) => t.kind === "generation");
+    expect(gens.filter((g) => g.luminous)).toHaveLength(1);
+    const current = gens.find((g) => g.luminous)!;
+    expect(current.id).toBe("generation-a0cee82ffffffff");
+    expect(current.colorToken).toBe("--accent");
+    const previous = gens.find((g) => !g.luminous)!;
+    expect(previous.colorToken).toBe("--t3");
+    expect(previous.label).toBe("generation · c2efa04 · woven 5 days ago");
+  });
+
+  it("existing callers compile and weave unchanged without generations", () => {
+    const model = weaveModel(makeInputs({ commits, organs: [{ id: "a" }] }));
+    expect(model.weft.filter((t) => t.kind === "generation")).toHaveLength(0);
+    expect(model.weft.every((t) => !t.knot && !t.luminous)).toBe(true);
+  });
+
+  it("WEFT_CAP still holds with generations added", () => {
+    const model = weaveModel(
+      makeInputs({
+        commits: Array.from({ length: 30 }, (_, i) => ({ sha: `sha${i}`, message: `m${i}` })),
+        organs: Array.from({ length: 20 }, (_, i) => ({ id: `organ-${i}` })),
+        deletedOrganIds: Array.from({ length: 5 }, (_, i) => `dead-${i}`),
+        generations: Array.from({ length: 10 }, (_, i) => ({
+          sha: `sha${i}`,
+          wovenAt: NOW - i * DAY,
+          isCurrent: i === 0,
+        })),
+        experiences: Array.from({ length: 50 }, (_, i) => ({
+          ts: NOW - i * DAY,
+          organId: `organ-${i % 20}`,
+          ok: true,
+          repairRounds: 0,
+        })),
+      })
+    );
+    expect(model.weft.length).toBe(WEFT_CAP);
+    expect(model.warp.length + model.weft.length).toBeLessThanOrEqual(WARP_CAP + WEFT_CAP);
+    // slot priority: organs, then generations (a body of LOOM is more of the
+    // life than a scar or one build pass), then scars; builds take what is left
+    expect(model.weft.filter((t) => t.kind === "organ")).toHaveLength(20);
+    expect(model.weft.filter((t) => t.kind === "generation")).toHaveLength(10);
+    expect(model.weft.filter((t) => t.kind === "scar")).toHaveLength(5);
+    expect(model.weft.filter((t) => t.kind === "build")).toHaveLength(5);
   });
 });
 

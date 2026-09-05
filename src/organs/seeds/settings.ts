@@ -7,6 +7,7 @@ const MANIFEST = JSON.stringify({
   description: "Voice, appearance, and building preferences.",
   version: 1,
   permissions: ["settings"],
+  powers: ["self"],
 });
 
 const ORGAN_JS = `export default {
@@ -33,6 +34,7 @@ const ORGAN_JS = `export default {
     sidebar.style.borderRight = "1px solid rgba(255,255,255,.08)";
 
     var NAV_ITEMS = [
+      { label: "LOOM", page: "loom", action: "page-loom" },
       { label: "Voice", page: "voice", action: "page-voice" },
       { label: "Models", page: "models", action: "page-models" },
       { label: "Appearance", page: "appearance", action: "page-appearance" },
@@ -149,6 +151,499 @@ const ORGAN_JS = `export default {
     content.style.padding = "12px 16px";
 
     var pages = {};
+
+    // ========================================================================
+    // PAGE: LOOM — the body, the genome, the tools (Rebirth)
+    // ========================================================================
+    var self = loom.self;
+    var loomPage = document.createElement("div");
+    loomPage.dataset.testid = "loom-page";
+    pages["loom"] = loomPage;
+
+    loomPage.appendChild(ui.heading("LOOM", "the body, the genome, and the tools that weave them."));
+
+    function sha7(s) { return s ? String(s).slice(0, 7) : "none"; }
+    // The same rule the core keeps (reweave.rs is_sha): 7-40 lowercase hex.
+    // A body built outside the genome bakes "unknown", threading shelves it
+    // under that name, and generations_return can never accept it — so the
+    // row is listed (it is on the shelf) and its RETURN is not offered.
+    function isSha(s) { return typeof s === "string" && /^[0-9a-f]{7,40}$/.test(s); }
+    function gbOf(bytes) { return (Number(bytes || 0) / 1e9).toFixed(1); }
+    function relTime(iso) {
+      var then = Date.parse(iso);
+      if (isNaN(then)) return "at an unknown time";
+      var ms = Date.now() - then;
+      if (ms < 60000) return "just now";
+      if (ms < 3600000) return Math.floor(ms / 60000) + "m ago";
+      if (ms < 86400000) return Math.floor(ms / 3600000) + "h ago";
+      return Math.floor(ms / 86400000) + "d ago";
+    }
+    function monoLabel(text, color) {
+      var s = document.createElement("span");
+      s.style.fontFamily = "monospace";
+      s.style.fontSize = "11px";
+      s.style.letterSpacing = ".08em";
+      s.style.textTransform = "uppercase";
+      s.style.color = color || ui.tokens.t3;
+      s.textContent = text;
+      return s;
+    }
+    function quiet(text, color) {
+      var d = document.createElement("div");
+      d.style.fontSize = "12px";
+      d.style.lineHeight = "1.5";
+      d.style.color = color || ui.tokens.t3;
+      d.textContent = text;
+      return d;
+    }
+    function selfReason(err) {
+      var m = String(err && err.message || err);
+      if (m.indexOf('permission "self"') !== -1 || !self) return "the self power isn't granted — approve it in the organ's POWERS row";
+      if (m.indexOf("desktop shell") !== -1) return "this surface needs the desktop shell";
+      return m.replace(/^(http|timeout|parse|git|not found|unsupported): */i, "");
+    }
+    // The owner pressing NOT NOW is an answer, not a fault: it is said in the
+    // quiet token, never in warn (round-2 review).
+    var DECLINE_LINE = "you said not now — the body stays as it is";
+    function selfColor(err) {
+      return String(err && err.message || err) === DECLINE_LINE ? ui.tokens.t2 : ui.tokens.warn;
+    }
+    // What this body can actually do, read from the core — the same fact the
+    // consent cards read. Null until the first identity comes back.
+    var bodyId = null;
+    function canSwapNow() { return !!(bodyId && bodyId.mode === "packaged" && bodyId.canSwap); }
+    function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+    // -- identity -----------------------------------------------------------------
+    var identityBlock = document.createElement("div");
+    identityBlock.dataset.testid = "loom-identity";
+    identityBlock.style.marginTop = "10px";
+    identityBlock.style.marginBottom = "12px";
+    identityBlock.appendChild(quiet("reading the body."));
+    loomPage.appendChild(identityBlock);
+
+    // -- reweave (shown when threaded and the genome is ahead of the body) --------
+    // Settings ASKS; the shell consent card is where the owner agrees. This
+    // organ used to carry a confirm strip of its own, which — now that every
+    // path to the body ends at that one card — would have asked the same
+    // question twice in the same words. One question, one place.
+    var reweaveWrap = document.createElement("div");
+    reweaveWrap.style.marginBottom = "18px";
+    var reweaveBtn = ui.button("REWEAVE", { variant: "primary", action: "self-reweave" });
+    var reweaveNote = quiet("");
+    reweaveNote.dataset.testid = "loom-reweave-note";
+    reweaveNote.style.marginTop = "6px";
+    reweaveWrap.appendChild(reweaveNote);
+    loomPage.appendChild(reweaveWrap);
+
+    reweaveBtn.addEventListener("click", function() {
+      reweaveBtn.disabled = true;
+      reweaveNote.textContent = "";
+      Promise.resolve().then(function() { return self.reweave(); }).then(function(result) {
+        reweaveBtn.disabled = false;
+        if (result && result.ok) {
+          reweaveNote.style.color = ui.tokens.t2;
+          reweaveNote.textContent = "the weave has started — the reweave card carries the rail.";
+        } else {
+          reweaveNote.style.color = ui.tokens.warn;
+          reweaveNote.textContent = (result && result.reason) || "the weave could not start — try again from Settings";
+        }
+      }).catch(function(err) {
+        reweaveBtn.disabled = false;
+        reweaveNote.style.color = selfColor(err);
+        reweaveNote.textContent = selfReason(err);
+      });
+    });
+
+    // -- threads: the tool table + THREAD THE LOOM --------------------------------
+    loomPage.appendChild(ui.section("Threads"));
+
+    var toolsWrap = document.createElement("div");
+    toolsWrap.dataset.testid = "loom-tools";
+    toolsWrap.style.marginBottom = "12px";
+    toolsWrap.appendChild(quiet("looking for the tools."));
+    loomPage.appendChild(toolsWrap);
+
+    var threadWrap = document.createElement("div");
+    threadWrap.style.display = "none";
+    threadWrap.style.marginBottom = "18px";
+    var threadBtn = ui.button("THREAD THE LOOM", { variant: "primary", action: "self-thread" });
+    var threadNet = quiet("threading needs the network once — after that LOOM weaves offline.");
+    threadNet.style.marginTop = "6px";
+    var threadLog = document.createElement("div");
+    threadLog.dataset.testid = "loom-thread-log";
+    threadLog.style.display = "none";
+    threadLog.style.marginTop = "10px";
+    threadLog.style.padding = "8px 10px";
+    threadLog.style.borderRadius = "8px";
+    threadLog.style.border = "1px solid rgba(255,255,255,.08)";
+    threadLog.style.fontFamily = "monospace";
+    threadLog.style.fontSize = "11px";
+    threadLog.style.lineHeight = "1.6";
+    threadLog.style.maxHeight = "180px";
+    threadLog.style.overflowY = "auto";
+    threadWrap.appendChild(threadNet);
+    threadWrap.appendChild(threadLog);
+    loomPage.appendChild(threadWrap);
+
+    function logLine(text, color) {
+      threadLog.style.display = "block";
+      var line = document.createElement("div");
+      line.style.color = color || ui.tokens.t2;
+      line.textContent = text;
+      threadLog.appendChild(line);
+      threadLog.scrollTop = threadLog.scrollHeight;
+    }
+    function onThreadEvent(e) {
+      var step = String(e && e.step || "").toUpperCase();
+      var detail = String(e && e.detail || "");
+      var color = e && e.step === "failed" ? ui.tokens.warn : e && e.step === "done" ? ui.tokens.go : ui.tokens.t2;
+      logLine(step + " · " + detail, color);
+      var tail = (e && e.tail) || [];
+      for (var i = 0; i < tail.length; i++) logLine("  " + tail[i], ui.tokens.t3);
+    }
+
+    threadBtn.addEventListener("click", function() {
+      threadBtn.disabled = true;
+      clear(threadLog);
+      Promise.resolve().then(function() { return self.thread(onThreadEvent); }).then(function() {
+        threadBtn.disabled = false;
+        refreshLoomPage();
+      }).catch(function(err) {
+        threadBtn.disabled = false;
+        logLine(selfReason(err), selfColor(err));
+      });
+    });
+
+    function renderTools(status) {
+      clear(toolsWrap);
+      var tools = (status && status.tools) || [];
+      var drifted = (status && status.drifted) || [];
+      var grid = document.createElement("div");
+      grid.style.display = "grid";
+      grid.style.marginTop = "8px";
+      grid.style.gridTemplateColumns = "88px minmax(90px, 1fr) minmax(0, 2fr)";
+      grid.style.columnGap = "12px";
+      grid.style.rowGap = "5px";
+      grid.style.alignItems = "baseline";
+      grid.appendChild(monoLabel("tool"));
+      grid.appendChild(monoLabel("version"));
+      grid.appendChild(monoLabel("path"));
+      for (var i = 0; i < tools.length; i++) {
+        var t = tools[i];
+        var present = !!t.path;
+        var row = document.createElement("div");
+        row.style.display = "contents";
+        row.dataset.testid = "loom-tool-" + t.name;
+        var nameEl = document.createElement("span");
+        nameEl.style.fontFamily = "monospace";
+        nameEl.style.fontSize = "12.5px";
+        nameEl.style.color = present ? ui.tokens.t1 : ui.tokens.warn;
+        nameEl.textContent = t.name;
+        var verEl = document.createElement("span");
+        verEl.style.fontSize = "12.5px";
+        verEl.style.color = present ? ui.tokens.t2 : ui.tokens.warn;
+        verEl.textContent = present ? (t.version || "present") : "missing";
+        // A recorded tool that moved or changed version is reported, not
+        // refused: a weave runs against the one found now. Say so plainly.
+        if (present && drifted.indexOf(t.name) !== -1) verEl.textContent += " · changed since threading — a weave uses this one, not the recorded one";
+        var pathEl = document.createElement("span");
+        pathEl.style.fontSize = "12px";
+        pathEl.style.fontFamily = "monospace";
+        pathEl.style.wordBreak = "break-all";
+        if (present) {
+          pathEl.style.color = ui.tokens.t3;
+          pathEl.textContent = t.path;
+        } else {
+          pathEl.dataset.testid = "loom-tool-install";
+          pathEl.style.color = ui.tokens.warn;
+          pathEl.textContent = t.install || "install it, then thread again";
+        }
+        row.appendChild(nameEl);
+        row.appendChild(verEl);
+        row.appendChild(pathEl);
+        grid.appendChild(row);
+      }
+      // Not every drift names a tool. "sherpa cache" is the voice engine's
+      // prebuilt archive: it came down over HTTP at threading and cannot come
+      // down again offline, so its absence stops a weave before it starts.
+      // Matched against tool names only, the row never rendered at all.
+      for (var d = 0; d < drifted.length; d++) {
+        (function(name) {
+          for (var k = 0; k < tools.length; k++) if (tools[k].name === name) return;
+          var row = document.createElement("div");
+          row.style.display = "contents";
+          row.dataset.testid = "loom-drift-" + name.replace(/\s+/g, "-");
+          var nameEl = document.createElement("span");
+          nameEl.style.fontFamily = "monospace";
+          nameEl.style.fontSize = "12.5px";
+          nameEl.style.color = ui.tokens.warn;
+          nameEl.textContent = name;
+          var verEl = document.createElement("span");
+          verEl.style.fontSize = "12.5px";
+          verEl.style.color = ui.tokens.warn;
+          verEl.textContent = "gone since threading";
+          var whereEl = document.createElement("span");
+          whereEl.style.fontSize = "12px";
+          whereEl.style.color = ui.tokens.warn;
+          whereEl.style.wordBreak = "break-all";
+          whereEl.textContent = "no weave can fetch it offline — thread the loom again while the network is there";
+          row.appendChild(nameEl);
+          row.appendChild(verEl);
+          row.appendChild(whereEl);
+          grid.appendChild(row);
+        })(String(drifted[d]));
+      }
+      toolsWrap.appendChild(grid);
+      if (tools.length === 0) toolsWrap.appendChild(quiet("no tools reported yet."));
+    }
+
+    // -- generations --------------------------------------------------------------
+    loomPage.appendChild(ui.section("Generations"));
+    var gensWrap = document.createElement("div");
+    gensWrap.dataset.testid = "loom-generations";
+    gensWrap.style.marginTop = "4px";
+    gensWrap.style.marginBottom = "18px";
+    gensWrap.appendChild(quiet("reading the shelf."));
+    loomPage.appendChild(gensWrap);
+
+    function renderGenerations(list) {
+      bodyGens = list;
+      paintReweaveNote();
+      clear(gensWrap);
+      if (!list || list.length === 0) {
+        gensWrap.appendChild(quiet("no generations yet — the first reweave weaves one."));
+        return;
+      }
+      for (var i = 0; i < list.length; i++) {
+        (function(g) {
+          var short = sha7(g.sha);
+          var row = document.createElement("div");
+          row.dataset.testid = "loom-generation-" + short;
+          row.style.padding = "7px 0";
+          row.style.borderBottom = "1px solid rgba(255,255,255,.06)";
+          var line = document.createElement("div");
+          line.style.display = "flex";
+          line.style.alignItems = "center";
+          line.style.gap = "10px";
+          line.style.flexWrap = "wrap";
+          var shaEl = document.createElement("span");
+          shaEl.style.fontFamily = "monospace";
+          shaEl.style.fontSize = "12.5px";
+          shaEl.style.color = g.isCurrent ? ui.tokens.accent : ui.tokens.t1;
+          shaEl.textContent = short;
+          line.appendChild(shaEl);
+          if (g.isCurrent) line.appendChild(ui.badge("CURRENT", "accent"));
+          // Round-4 review, Finding 3: the warden's heal writes
+          // { current: prev, previous: <the failed sha> }, so after a heal the
+          // ledger's PREVIOUS is the body that would not boot. It keeps its
+          // row and its RETURN — a named, deliberate choice is still the
+          // owner's — but it is not badged as the way home.
+          else if (g.isPrevious && !g.failedToBoot) line.appendChild(ui.badge("PREVIOUS", "go"));
+          if (g.failedToBoot) line.appendChild(ui.badge("DIDN'T BOOT", "warn"));
+          var desc = document.createElement("span");
+          desc.style.fontSize = "12px";
+          desc.style.color = ui.tokens.t2;
+          desc.style.flex = "1";
+          desc.style.minWidth = "0";
+          desc.textContent = "woven " + relTime(g.wovenAt) + " · " + (g.reason || "reweave") + " · " + (g.commitSubject || "unknown");
+          line.appendChild(desc);
+          row.appendChild(line);
+          // A row whose name is not a sha ("unknown", shelved by threading
+          // for a body built outside the genome) is a dead end: the core
+          // refuses it before it can become a path component. Listing it is
+          // honest; offering a button that can only ever fail is not.
+          if (!g.isCurrent && !isSha(g.sha)) {
+            var dead = quiet("no way back — this body was built outside the genome, so it has no name to return to.");
+            dead.dataset.testid = "loom-return-nameless-" + short;
+            dead.style.marginTop = "4px";
+            row.appendChild(dead);
+          } else if (!g.isCurrent) {
+            var ret = ui.button("RETURN", { variant: "ghost", action: "self-return-" + short });
+            ret.style.padding = "4px 10px";
+            ret.style.fontSize = "12px";
+            line.appendChild(ret);
+            var note = quiet("");
+            note.dataset.testid = "loom-return-note-" + short;
+            note.style.marginTop = "4px";
+            row.appendChild(note);
+            // RETURN asks; the shell consent card carries the sentence and
+            // the answer. One question, one place.
+            ret.addEventListener("click", function() {
+              ret.disabled = true;
+              note.textContent = "";
+              Promise.resolve().then(function() { return self.returnTo(g.sha); }).then(function() {
+                ret.disabled = false;
+                note.style.color = ui.tokens.t2;
+                // Only a body that can swap gets a rail to watch; everywhere
+                // else the card just said the body stays, and so does this.
+                note.textContent = canSwapNow()
+                  ? "returning to " + short + " — the reweave card carries the rail."
+                  : "returned to " + short + " — the genome moved; the body stays.";
+              }).catch(function(err) {
+                ret.disabled = false;
+                note.style.color = selfColor(err);
+                note.textContent = selfReason(err);
+              });
+            });
+          }
+          gensWrap.appendChild(row);
+        })(list[i]);
+      }
+    }
+
+    // -- reweave preference + storage ---------------------------------------------
+    loomPage.appendChild(ui.section("Reweave"));
+
+    var AUTO_KEY = "kernel.autoReweave";
+    function readAuto() {
+      try {
+        var v = settings.get(AUTO_KEY);
+        return v === "on" || v === "true" || v === "1";
+      } catch (e) {
+        return false;
+      }
+    }
+    var autoNote = quiet("");
+    autoNote.dataset.testid = "loom-autoreweave-note";
+    autoNote.style.marginTop = "6px";
+    // The preference is the body's, not a plain setting: kernel.autoReweave
+    // arms a weave with no card, so it is written through the self power (the
+    // grant whose card says this organ may ask about LOOM's body).
+    function writeAuto(on) {
+      autoNote.textContent = "";
+      Promise.resolve().then(function() {
+        if (!self) throw new Error('permission "self" not granted');
+        return self.setAutoReweave(on);
+      }).catch(function(err) {
+        autoNote.style.color = selfColor(err);
+        autoNote.textContent = "the preference could not be kept — " + selfReason(err);
+      });
+    }
+    // The same three truths the consent lines tell, read from the core rather
+    // than promised blind: a dev body does not swap, and off macOS neither does
+    // a packaged one (round-2 review).
+    var AUTO_HEAD = "reweave automatically after an approved core edit";
+    function autoLabel() {
+      if (!bodyId) return AUTO_HEAD;
+      if (bodyId.mode === "dev") return AUTO_HEAD + " — in dev the body stays; restart tauri dev to become it";
+      if (!bodyId.canSwap) return AUTO_HEAD + " — the swap is macOS-only in this generation; the build and the ledger still work, the body stays";
+      return AUTO_HEAD + " — LOOM will close and return each time";
+    }
+    var autoToggle = ui.toggle(autoLabel(), readAuto(), writeAuto);
+    autoToggle.dataset.action = "self-autoreweave";
+    autoToggle.style.marginTop = "8px";
+    var autoLabelEl = autoToggle.querySelector("span");
+    function refreshAutoLabel() {
+      if (autoLabelEl) autoLabelEl.textContent = autoLabel();
+    }
+    loomPage.appendChild(autoToggle);
+    loomPage.appendChild(autoNote);
+
+    var storageLine = quiet("measuring loomhome.");
+    storageLine.dataset.testid = "loom-storage";
+    storageLine.style.marginTop = "12px";
+    loomPage.appendChild(storageLine);
+
+    // -- fill ---------------------------------------------------------------------
+    // The shelf, kept so the reweave note can say whether the head about to be
+    // woven is one that already failed to be born (round-4 review, Finding 4).
+    var bodyGens = null;
+
+    function isAhead(id) {
+      return id.threaded && (id.genomeHead === null || id.genomeHead !== id.genomeSha);
+    }
+
+    /** Has the sha a weave would build already been woven and refused to boot? */
+    function headFailed() {
+      if (!bodyId || !bodyId.genomeHead || !bodyGens) return false;
+      for (var i = 0; i < bodyGens.length; i++) {
+        if (bodyGens[i].sha === bodyId.genomeHead && bodyGens[i].failedToBoot) return true;
+      }
+      return false;
+    }
+
+    // Both reads paint this line — identity says whether there is a weave, the
+    // shelf says whether that weave has failed before — and either may land
+    // first.
+    function paintReweaveNote() {
+      if (!bodyId) return;
+      reweaveNote.style.color = ui.tokens.t3;
+      if (isAhead(bodyId)) {
+        reweaveNote.textContent = headFailed()
+          ? "this weave didn't boot last time — the body came home from it."
+          : "";
+        return;
+      }
+      reweaveNote.textContent = bodyId.threaded
+        ? "the body matches the genome — nothing new to weave."
+        : "thread the loom before the first weave.";
+    }
+
+    function renderIdentity(id) {
+      // Everything that describes what a body change will DO reads this.
+      bodyId = id;
+      refreshAutoLabel();
+      clear(identityBlock);
+      identityBlock.appendChild(ui.keyval([
+        ["mode", id.mode],
+        // Three different facts that the round-3 review found conflated:
+        // the binary executing (baked at compile time), what the ledger says
+        // is current, and where the genome's HEAD is right now. Only the last
+        // one moves when LOOM edits itself.
+        ["body", sha7(id.genomeSha)],
+        ["generation", sha7(id.generation)],
+        ["genome head", sha7(id.genomeHead)],
+        ["threaded", id.threaded ? "yes" : "no"],
+      ]));
+      // The actions exist only when they mean something: no REWEAVE button to
+      // press when there is nothing to weave, no THREAD button once threaded.
+      //
+      // Round-3 review, Finding 1: this compared generation with
+      // genomeSha — the sha the RUNNING BINARY was compiled from. Threading
+      // sets ledger.current = genome_sha() and every weave re-establishes
+      // it, so the two are always equal in the steady state and the button
+      // was hidden forever after the first weave. It is the genome's HEAD
+      // that moves, and the same comparison reweaveReadiness makes.
+      //
+      // Round-4 review, Finding 1: and what HEAD is compared AGAINST is the
+      // running body's baked sha, not the ledger's claim about disk. The swap
+      // writes the ledger before the new body has booted, so a swap that died
+      // at its last step left the ledger naming a body that is not running —
+      // and this hid REWEAVE while the core would have allowed the weave.
+      var ahead = isAhead(id);
+      if (ahead && !reweaveBtn.parentNode) reweaveWrap.insertBefore(reweaveBtn, reweaveNote);
+      if (!ahead && reweaveBtn.parentNode) reweaveWrap.removeChild(reweaveBtn);
+      reweaveBtn.style.display = "";
+      reweaveBtn.disabled = false;
+      paintReweaveNote();
+      if (!id.threaded && !threadBtn.parentNode) threadWrap.insertBefore(threadBtn, threadNet);
+      if (id.threaded && threadBtn.parentNode) threadWrap.removeChild(threadBtn);
+      threadWrap.style.display = id.threaded ? "none" : "block";
+      storageLine.textContent = "loomhome uses " + gbOf(id.loomhomeBytes) + " GB (vendor + warm build)";
+    }
+
+    function refreshLoomPage() {
+      if (!self) {
+        clear(identityBlock);
+        identityBlock.appendChild(quiet(selfReason(null), ui.tokens.warn));
+        return;
+      }
+      Promise.resolve().then(function() { return self.identity(); }).then(function(id) {
+        renderIdentity(id);
+      }).catch(function(err) {
+        clear(identityBlock);
+        identityBlock.appendChild(quiet(selfReason(err), ui.tokens.warn));
+      });
+      Promise.resolve().then(function() { return self.threads(); }).then(renderTools).catch(function(err) {
+        clear(toolsWrap);
+        toolsWrap.appendChild(quiet(selfReason(err), ui.tokens.warn));
+      });
+      Promise.resolve().then(function() { return self.generations(); }).then(renderGenerations).catch(function(err) {
+        clear(gensWrap);
+        gensWrap.appendChild(quiet(selfReason(err), ui.tokens.warn));
+      });
+    }
 
     // ========================================================================
     // PAGE: Voice
@@ -332,152 +827,6 @@ const ORGAN_JS = `export default {
     modelsNote.style.marginTop = "4px";
     modelsNote.textContent = "Absent models fall back automatically to the next available option.";
     modelsPage.appendChild(modelsNote);
-
-    // ---- Cloud builder section ------------------------------------------------
-    modelsPage.appendChild(ui.section("Cloud builder"));
-
-    var cloudNote = document.createElement("div");
-    cloudNote.style.fontSize = "12px";
-    cloudNote.style.color = ui.tokens.t3;
-    cloudNote.style.marginBottom = "8px";
-    cloudNote.textContent = "By default all builds run on your local fleet. Enable to use claude-opus-4-8 for builder calls with automatic local fallback.";
-    modelsPage.appendChild(cloudNote);
-
-    // Enable/disable toggle
-    var cloudEnableRow = document.createElement("div");
-    cloudEnableRow.style.display = "flex";
-    cloudEnableRow.style.gap = "6px";
-    cloudEnableRow.style.marginBottom = "10px";
-
-    var cloudOffBtn = document.createElement("button");
-    cloudOffBtn.className = "lui-btn";
-    cloudOffBtn.style.borderRadius = "8px";
-    cloudOffBtn.style.padding = "7px 14px";
-    cloudOffBtn.style.fontWeight = "600";
-    cloudOffBtn.style.fontSize = "14px";
-    cloudOffBtn.style.cursor = "pointer";
-    cloudOffBtn.style.fontFamily = "inherit";
-    cloudOffBtn.style.transition = "filter .15s, background .15s, border-color .15s";
-    cloudOffBtn.dataset.action = "cloud-builder-off";
-    cloudOffBtn.textContent = "Local only";
-
-    var cloudOnBtn = document.createElement("button");
-    cloudOnBtn.className = "lui-btn";
-    cloudOnBtn.style.borderRadius = "8px";
-    cloudOnBtn.style.padding = "7px 14px";
-    cloudOnBtn.style.fontWeight = "600";
-    cloudOnBtn.style.fontSize = "14px";
-    cloudOnBtn.style.cursor = "pointer";
-    cloudOnBtn.style.fontFamily = "inherit";
-    cloudOnBtn.style.transition = "filter .15s, background .15s, border-color .15s";
-    cloudOnBtn.dataset.action = "cloud-builder-on";
-    cloudOnBtn.textContent = "Claude (cloud)";
-
-    function refreshCloudToggle(current) {
-      var isOn = current === "anthropic";
-      cloudOffBtn.style.background = !isOn ? ui.tokens.accent : "transparent";
-      cloudOffBtn.style.color = !isOn ? "#04222b" : ui.tokens.t1;
-      cloudOffBtn.style.border = !isOn ? "none" : "1px solid rgba(255,255,255,.18)";
-      cloudOnBtn.style.background = isOn ? ui.tokens.accent : "transparent";
-      cloudOnBtn.style.color = isOn ? "#04222b" : ui.tokens.t1;
-      cloudOnBtn.style.border = isOn ? "none" : "1px solid rgba(255,255,255,.18)";
-    }
-
-    cloudOffBtn.addEventListener("click", function() {
-      settings.set("model.cloudBuilder", "off");
-      refreshCloudToggle("off");
-    });
-    cloudOnBtn.addEventListener("click", function() {
-      settings.set("model.cloudBuilder", "anthropic");
-      refreshCloudToggle("anthropic");
-    });
-
-    cloudEnableRow.appendChild(cloudOffBtn);
-    cloudEnableRow.appendChild(cloudOnBtn);
-    modelsPage.appendChild(cloudEnableRow);
-
-    // API key input (password type -- write-only)
-    var keyLabel = document.createElement("div");
-    keyLabel.style.fontSize = "12.5px";
-    keyLabel.style.color = ui.tokens.t3;
-    keyLabel.style.marginBottom = "4px";
-    keyLabel.textContent = "Anthropic API key";
-    modelsPage.appendChild(keyLabel);
-
-    var keyStatusSpan = document.createElement("span");
-    keyStatusSpan.style.fontSize = "12px";
-    keyStatusSpan.style.color = ui.tokens.t3;
-    keyStatusSpan.style.marginLeft = "8px";
-
-    var keyInp = document.createElement("input");
-    keyInp.type = "password";
-    keyInp.placeholder = "sk-ant-...";
-    keyInp.autocomplete = "off";
-    keyInp.dataset.action = "cloud-key-input";
-    keyInp.style.background = "rgba(255,255,255,.05)";
-    keyInp.style.border = "1px solid rgba(255,255,255,.12)";
-    keyInp.style.borderRadius = "6px";
-    keyInp.style.color = ui.tokens.t1;
-    keyInp.style.fontFamily = "inherit";
-    keyInp.style.fontSize = "13px";
-    keyInp.style.padding = "6px 10px";
-    keyInp.style.width = "100%";
-    keyInp.style.boxSizing = "border-box";
-
-    modelsPage.appendChild(keyInp);
-
-    var keySaveBtn = ui.button("Save key", { variant: "primary", action: "cloud-key-save" });
-    var keyClearBtn = ui.button("Clear", { variant: "ghost", action: "cloud-key-clear" });
-    var keyBtnRow = ui.row(keySaveBtn, keyClearBtn, keyStatusSpan);
-    keyBtnRow.style.marginTop = "6px";
-    modelsPage.appendChild(keyBtnRow);
-
-    function refreshKeyStatus() {
-      settings.cloudKeyPresent().then(function(present) {
-        if (present) {
-          keyStatusSpan.textContent = "key saved";
-          keyStatusSpan.style.color = ui.tokens.go || "#22c55e";
-          keyInp.placeholder = "sk-ant-... (key saved -- enter new to replace)";
-        } else {
-          keyStatusSpan.textContent = "";
-          keyInp.placeholder = "sk-ant-...";
-        }
-      }).catch(function() {
-        keyStatusSpan.textContent = "";
-      });
-    }
-
-    keySaveBtn.addEventListener("click", function() {
-      var k = keyInp.value.trim();
-      if (!k) return;
-      keySaveBtn.disabled = true;
-      keySaveBtn.textContent = "Saving...";
-      settings.cloudKeySet(k).then(function() {
-        keyInp.value = "";
-        keySaveBtn.textContent = "Save key";
-        keySaveBtn.disabled = false;
-        refreshKeyStatus();
-      }).catch(function(err) {
-        keySaveBtn.textContent = "Save key";
-        keySaveBtn.disabled = false;
-        keyStatusSpan.textContent = String(err);
-        keyStatusSpan.style.color = ui.tokens.danger;
-      });
-    });
-
-    keyClearBtn.addEventListener("click", function() {
-      keyClearBtn.disabled = true;
-      settings.cloudKeyClear().then(function() {
-        keyClearBtn.disabled = false;
-        keyInp.value = "";
-        refreshKeyStatus();
-      }).catch(function() {
-        keyClearBtn.disabled = false;
-      });
-    });
-
-    refreshCloudToggle(settings.get("model.cloudBuilder") || "off");
-    refreshKeyStatus();
 
     var modelRoleCards = {};
 
@@ -678,62 +1027,6 @@ const ORGAN_JS = `export default {
     }
     appearancePage.appendChild(tapRow);
 
-    // Globe interaction section
-    appearancePage.appendChild(ui.section("Globe interaction"));
-
-    var interactNote = document.createElement("div");
-    interactNote.style.fontSize = "12px";
-    interactNote.style.color = ui.tokens.t3;
-    interactNote.style.marginBottom = "8px";
-    interactNote.textContent = "Allow pointer events on the globe deck (click and pan AUSPEX directly).";
-    appearancePage.appendChild(interactNote);
-
-    var interactOptions = [
-      { label: "On", value: "on", action: "interact-on" },
-      { label: "Off", value: "off", action: "interact-off" },
-    ];
-    var interactBtns = [];
-    var interactRow = document.createElement("div");
-    interactRow.style.display = "flex";
-    interactRow.style.gap = "6px";
-
-    function refreshInteractBtns(current) {
-      for (var i = 0; i < interactBtns.length; i++) {
-        var b = interactBtns[i];
-        var isActive = b._value === current;
-        b.style.background = isActive ? ui.tokens.accent : "transparent";
-        b.style.color = isActive ? "#04222b" : ui.tokens.t1;
-        b.style.border = isActive ? "none" : "1px solid rgba(255,255,255,.18)";
-        b.style.fontWeight = isActive ? "700" : "600";
-      }
-    }
-
-    for (var ii = 0; ii < interactOptions.length; ii++) {
-      (function(opt) {
-        var btn = document.createElement("button");
-        btn.className = "lui-btn";
-        btn.style.borderRadius = "8px";
-        btn.style.padding = "7px 14px";
-        btn.style.fontWeight = "600";
-        btn.style.fontSize = "14px";
-        btn.style.cursor = "pointer";
-        btn.style.fontFamily = "inherit";
-        btn.style.transition = "filter .15s, background .15s, border-color .15s";
-        btn.style.background = "transparent";
-        btn.style.border = "1px solid rgba(255,255,255,.18)";
-        btn.style.color = ui.tokens.t1;
-        btn.dataset.action = opt.action;
-        btn._value = opt.value;
-        btn.textContent = opt.label;
-        btn.addEventListener("click", function() {
-          settings.set("cockpit.interact", opt.value);
-          refreshInteractBtns(opt.value);
-        });
-        interactBtns.push(btn);
-        interactRow.appendChild(btn);
-      })(interactOptions[ii]);
-    }
-    appearancePage.appendChild(interactRow);
 
     // Initiative section
     appearancePage.appendChild(ui.section("Initiative"));
@@ -954,11 +1247,11 @@ const ORGAN_JS = `export default {
     refreshSpeakBtns(settings.get("voice.speakReplies") || "whenSpoken");
     refreshOrbBtns(settings.get("orb.tier") || "auto");
     refreshTapBtns(settings.get("cockpit.tapestry") || "on");
-    refreshInteractBtns(settings.get("cockpit.interact") || "on");
     refreshInitBtns(settings.get("cockpit.initiative") || "on");
     refreshReviewBtns(settings.get("loom.reviewBeforeSave") || "0");
     refreshStatus();
-    showPage("voice");
+    refreshLoomPage();
+    showPage("loom");
   }
 };`;
 
@@ -1067,61 +1360,6 @@ const TEST_JS = `export const tests = [
     },
   },
   {
-    name: "cloud-builder-on sets model.cloudBuilder to anthropic",
-    fn: async function({ el, loom, assert }) {
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var modelsNav = el.querySelector('[data-action="page-models"]');
-      assert(modelsNav !== null, "page-models nav button exists");
-      modelsNav.click();
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var onBtn = el.querySelector('[data-action="cloud-builder-on"]');
-      assert(onBtn !== null, "cloud-builder-on button exists");
-      onBtn.click();
-      assert(loom.settings.get("model.cloudBuilder") === "anthropic", "cloud-builder-on sets model.cloudBuilder to anthropic");
-    },
-  },
-  {
-    name: "cloud-builder-off sets model.cloudBuilder to off",
-    fn: async function({ el, loom, assert }) {
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var modelsNav = el.querySelector('[data-action="page-models"]');
-      assert(modelsNav !== null, "page-models nav button exists");
-      modelsNav.click();
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var offBtn = el.querySelector('[data-action="cloud-builder-off"]');
-      assert(offBtn !== null, "cloud-builder-off button exists");
-      offBtn.click();
-      assert(loom.settings.get("model.cloudBuilder") === "off", "cloud-builder-off sets model.cloudBuilder to off");
-    },
-  },
-  {
-    name: "cloud key save calls cloudKeySet and clears input",
-    fn: async function({ el, loom, assert }) {
-      var cloudKeySetCalls = [];
-      var origCloudKeySet = loom.settings.cloudKeySet;
-      loom.settings.cloudKeySet = function(k) {
-        cloudKeySetCalls.push(k);
-        return Promise.resolve();
-      };
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var modelsNav = el.querySelector('[data-action="page-models"]');
-      assert(modelsNav !== null, "page-models nav button exists");
-      modelsNav.click();
-      await new Promise(function(r) { setTimeout(r, 50); });
-      var keyInp = el.querySelector('[data-action="cloud-key-input"]');
-      assert(keyInp !== null, "cloud-key-input exists");
-      keyInp.value = "sk-ant-test123";
-      var saveBtn = el.querySelector('[data-action="cloud-key-save"]');
-      assert(saveBtn !== null, "cloud-key-save button exists");
-      saveBtn.click();
-      await new Promise(function(r) { setTimeout(r, 60); });
-      assert(cloudKeySetCalls.length === 1, "cloudKeySet called once (got: " + cloudKeySetCalls.length + ")");
-      assert(cloudKeySetCalls[0] === "sk-ant-test123", "cloudKeySet called with the key");
-      assert(keyInp.value === "", "input cleared after save");
-      loom.settings.cloudKeySet = origCloudKeySet;
-    },
-  },
-  {
     name: "page-system nav exists",
     fn: async function({ el, loom, assert }) {
       await new Promise(function(r) { setTimeout(r, 50); });
@@ -1182,6 +1420,55 @@ const TEST_JS = `export const tests = [
       assert(onBtn !== null, "initiative-on button exists");
       onBtn.click();
       assert(loom.settings.get("cockpit.initiative") === "on", "initiative-on sets cockpit.initiative to on");
+    },
+  },
+  {
+    name: "LOOM page is first in the nav and shows the threaded dev identity",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var navBtns = el.querySelectorAll('[data-action^="page-"]');
+      assert(navBtns[0].getAttribute("data-action") === "page-loom", "LOOM is the first nav item");
+      var page = el.querySelector('[data-testid="loom-page"]');
+      assert(page !== null && page.style.display !== "none", "LOOM page is shown at open");
+      var id = el.querySelector('[data-testid="loom-identity"]');
+      assert(id.textContent.indexOf("dev") !== -1, "identity names the mode");
+      assert(id.textContent.indexOf("a1b2c3d") !== -1, "identity shows the genome sha7");
+    },
+  },
+  {
+    name: "no THREAD or REWEAVE action when the body matches the genome",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      assert(el.querySelector('[data-action="self-thread"]') === null, "no THREAD action when threaded");
+      var rw = el.querySelector('[data-action="self-reweave"]');
+      assert(rw === null || rw.style.display === "none", "no REWEAVE when nothing new");
+      var tools = el.querySelector('[data-testid="loom-tools"]');
+      assert(tools.textContent.indexOf("/usr/bin/git") !== -1, "tool table lists git's path");
+      assert(el.querySelector('[data-testid="loom-tool-install"]') === null, "no install line when every tool is present");
+      assert(el.querySelector('[data-testid="loom-generations"]').textContent.indexOf("no generations yet") !== -1, "empty shelf says so");
+    },
+  },
+  {
+    name: "autoReweave toggle arms the body through the self power",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var toggle = el.querySelector('[data-action="self-autoreweave"]');
+      assert(toggle !== null, "autoReweave toggle exists");
+      assert(toggle.textContent.indexOf("in dev the body stays") !== -1, "the label tells this body's truth");
+      toggle.click();
+      await new Promise(function(r) { setTimeout(r, 10); });
+      assert(loom.settings.get("kernel.autoReweave") === "on", "toggle on arms it");
+      toggle.click();
+      await new Promise(function(r) { setTimeout(r, 10); });
+      assert(loom.settings.get("kernel.autoReweave") === "off", "toggle off disarms it");
+    },
+  },
+  {
+    name: "storage line is honest about loomhome",
+    fn: async function({ el, loom, assert }) {
+      await new Promise(function(r) { setTimeout(r, 50); });
+      var line = el.querySelector('[data-testid="loom-storage"]');
+      assert(line.textContent === "loomhome uses 0.0 GB (vendor + warm build)", "storage line (got: " + line.textContent + ")");
     },
   },
   {

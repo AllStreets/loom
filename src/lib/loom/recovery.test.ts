@@ -15,7 +15,7 @@ afterEach(() => vi.clearAllMocks());
 
 describe("runBootCheck", () => {
   it("returns the sha and dispatches the recovery event when a rollback happened", async () => {
-    const check = vi.fn(async () => ({ rolledBackTo: "deadbeef12345" }));
+    const check = vi.fn(async () => ({ rolledBackTo: "deadbeef12345", rollbackFailed: false }));
     const events: string[] = [];
     const listener = (e: Event) =>
       events.push((e as CustomEvent<{ sha: string }>).detail.sha);
@@ -29,7 +29,7 @@ describe("runBootCheck", () => {
   });
 
   it("returns null and dispatches nothing when nothing rolled back", async () => {
-    const check = vi.fn(async () => ({ rolledBackTo: null }));
+    const check = vi.fn(async () => ({ rolledBackTo: null, rollbackFailed: false }));
     const listener = vi.fn();
     window.addEventListener(RECOVERY_EVENT, listener);
 
@@ -45,6 +45,43 @@ describe("runBootCheck", () => {
       throw new Error("this surface needs the desktop shell");
     });
     await expect(runBootCheck(check)).resolves.toBeNull();
+  });
+});
+
+describe("runBootCheck — a healed generation (Rebirth)", () => {
+  it("dispatches the generation detail when the check result carries healedGeneration", async () => {
+    const check = vi.fn(async () => ({
+      rolledBackTo: null,
+      rollbackFailed: false,
+      healedGeneration: { failedSha: "3f2a1c9deadbeef", prevSha: "8b91e0abcdef", reason: "crashed" },
+    }));
+    const details: unknown[] = [];
+    const listener = (e: Event) => details.push((e as CustomEvent).detail);
+    window.addEventListener(RECOVERY_EVENT, listener);
+
+    const sha = await runBootCheck(check);
+
+    expect(sha).toBe("8b91e0abcdef");
+    expect(details).toEqual([
+      {
+        sha: "8b91e0abcdef",
+        generation: { failedSha: "3f2a1c9deadbeef", prevSha: "8b91e0abcdef", reason: "crashed" },
+      },
+    ]);
+    window.removeEventListener(RECOVERY_EVENT, listener);
+  });
+
+  it("a null healedGeneration is the plain path", async () => {
+    const check = vi.fn(async () => ({
+      rolledBackTo: null,
+      rollbackFailed: false,
+      healedGeneration: null,
+    }));
+    const listener = vi.fn();
+    window.addEventListener(RECOVERY_EVENT, listener);
+    await expect(runBootCheck(check)).resolves.toBeNull();
+    expect(listener).not.toHaveBeenCalled();
+    window.removeEventListener(RECOVERY_EVENT, listener);
   });
 });
 

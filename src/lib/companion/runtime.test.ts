@@ -1,6 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
-import { handle, type CompanionDeps } from "./runtime";
-import type { ScoredEvent } from "../watch/types";
+import {
+  handle,
+  LINE_THREAD_CONSENT,
+  LINE_THREADING,
+  LINE_NO_PREVIOUS,
+  reweaveConsentLine,
+  type CompanionDeps,
+  type RebirthDeps,
+} from "./runtime";
+import type { Identity, ThreadStatus, Generation } from "../core";
+import { files as settingsFiles } from "../../organs/seeds/settings";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -11,75 +20,13 @@ function makeDeps(overrides: Partial<CompanionDeps> = {}): CompanionDeps {
     edit: vi.fn().mockResolvedValue({ ok: true, organId: "test", sha: "abc", log: [] }),
     organIds: vi.fn().mockResolvedValue([]),
     askModel: vi.fn().mockResolvedValue('{"intent":"converse","organId":null}'),
-    currentDeck: () => "void",
     ...overrides,
   };
 }
 
-// ── deck_command fast path ────────────────────────────────────────────────────
-
-describe("handle — deck_command routes without model call", () => {
-  it("'show the globe' returns deck_command turn kind, no chat/askModel call", async () => {
-    const deps = makeDeps();
-    const turn = await handle("show the globe", [], deps);
-    expect(turn.kind).toBe("deck_command");
-    expect(deps.chat).not.toHaveBeenCalled();
-    expect(deps.askModel).not.toHaveBeenCalled();
-  });
-
-  it("deck_command turn carries deckCommandResult with deckSwitch:globe", async () => {
-    const deps = makeDeps();
-    const turn = await handle("show the globe", [], deps);
-    if (turn.kind !== "deck_command") throw new Error("Expected deck_command");
-    expect(turn.deckCommandResult.deckSwitch).toBe("globe");
-    expect(turn.deckCommandResult.bridgeCmds).toHaveLength(0);
-  });
-
-  it("'show military news' returns deck_command with set_cat military, no model call", async () => {
-    const deps = makeDeps({ currentDeck: () => "globe" });
-    const turn = await handle("show military news", [], deps);
-    expect(turn.kind).toBe("deck_command");
-    expect(deps.askModel).not.toHaveBeenCalled();
-    if (turn.kind !== "deck_command") throw new Error("Expected deck_command");
-    expect(turn.deckCommandResult.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "military" });
-    expect(turn.deckCommandResult.deckSwitch).toBeUndefined();
-    expect(turn.confirmation).toMatch(/military/i);
-  });
-
-  it("'show vessels' from void → deckSwitch:globe FIRST then toggle_overlay vessels", async () => {
-    const deps = makeDeps({ currentDeck: () => "void" });
-    const turn = await handle("show vessels", [], deps);
-    if (turn.kind !== "deck_command") throw new Error("Expected deck_command");
-    expect(turn.deckCommandResult.deckSwitch).toBe("globe");
-    expect(turn.deckCommandResult.bridgeCmds[0]).toEqual({ type: "toggle_overlay", overlay: "vessels" });
-  });
-
-  it("'reset the view' → deck_command with reset_view, confirmation 'View reset.'", async () => {
-    const deps = makeDeps({ currentDeck: () => "globe" });
-    const turn = await handle("reset the view", [], deps);
-    if (turn.kind !== "deck_command") throw new Error("Expected deck_command");
-    expect(turn.deckCommandResult.bridgeCmds[0]).toEqual({ type: "reset_view" });
-    expect(turn.confirmation).toMatch(/view reset/i);
-  });
-
-  it("'stop spinning' → deck_command with set_spin false", async () => {
-    const deps = makeDeps({ currentDeck: () => "globe" });
-    const turn = await handle("stop spinning", [], deps);
-    if (turn.kind !== "deck_command") throw new Error("Expected deck_command");
-    expect(turn.deckCommandResult.bridgeCmds[0]).toEqual({ type: "set_spin", on: false });
-  });
-
-  it("'hide the globe' → deck_command with deckSwitch:void", async () => {
-    const deps = makeDeps({ currentDeck: () => "globe" });
-    const turn = await handle("hide the globe", [], deps);
-    if (turn.kind !== "deck_command") throw new Error("Expected deck_command");
-    expect(turn.deckCommandResult.deckSwitch).toBe("void");
-  });
-});
-
 // ── Existing intents still route correctly ────────────────────────────────────
 
-describe("handle — non-deck intents unaffected", () => {
+describe("handle — core intents route", () => {
   it("'hello' still routes to converse (reply kind)", async () => {
     const deps = makeDeps({ chat: vi.fn().mockResolvedValue("Hello from LOOM") });
     const turn = await handle("hello", [], deps);
@@ -99,127 +46,20 @@ describe("handle — non-deck intents unaffected", () => {
   });
 });
 
-// ── briefing fast path ────────────────────────────────────────────────────────
+// ── Retired Cockpit turns (Rebirth) ──────────────────────────────────────────
 
-describe("handle — briefing routes without model call", () => {
-  it("'brief me' with salient items returns briefing turn kind, no model call", async () => {
-    const deps = makeDeps({
-      getSalient: (k: number) => ([
-        { id: "e1", title: "Major quake in Japan", source: "USGS", category: "quake", publishedAt: new Date().toISOString(), score: 0.9, reasons: ["M7.2 near Tokyo"] },
-        { id: "e2", title: "Oil reaches $100", source: "Reuters", category: "markets", publishedAt: new Date().toISOString(), score: 0.8, reasons: [] },
-      ] as ScoredEvent[]).slice(0, k),
-    });
+describe("handle — retired deck and briefing phrases go to the companion", () => {
+  it("'show the globe' becomes a plain companion reply", async () => {
+    const deps = makeDeps({ chat: vi.fn().mockResolvedValue("There is no globe here.") });
+    const turn = await handle("show the globe", [], deps);
+    expect(turn.kind).toBe("reply");
+    expect(deps.chat).toHaveBeenCalled();
+  });
+
+  it("'brief me' becomes a plain companion reply", async () => {
+    const deps = makeDeps();
     const turn = await handle("brief me", [], deps);
-    expect(turn.kind).toBe("briefing");
-    expect(deps.chat).not.toHaveBeenCalled();
-    expect(deps.askModel).not.toHaveBeenCalled();
-  });
-
-  it("briefing text includes title and first reason", async () => {
-    const deps = makeDeps({
-      getSalient: (_k: number) => [
-        { id: "e1", title: "Quake in Japan", source: "USGS", category: "quake", publishedAt: new Date().toISOString(), score: 0.9, reasons: ["M7.2 near Tokyo"] },
-      ] as ScoredEvent[],
-    });
-    const turn = await handle("brief me", [], deps);
-    if (turn.kind !== "briefing") throw new Error("Expected briefing");
-    expect(turn.text).toContain("Quake in Japan");
-    expect(turn.text).toContain("M7.2 near Tokyo");
-    expect(turn.text).toMatch(/^Top of the watch:/);
-  });
-
-  it("briefing with item with no reasons omits dash-reason", async () => {
-    const deps = makeDeps({
-      getSalient: (_k: number) => [
-        { id: "e1", title: "Oil reaches $100", source: "Reuters", category: "markets", publishedAt: new Date().toISOString(), score: 0.8, reasons: [] },
-      ] as ScoredEvent[],
-    });
-    const turn = await handle("brief me", [], deps);
-    if (turn.kind !== "briefing") throw new Error("Expected briefing");
-    expect(turn.text).toContain("Oil reaches $100");
-    expect(turn.text).not.toContain(" — ");
-  });
-
-  it("empty watch returns quiet message", async () => {
-    const deps = makeDeps({ getSalient: () => [] });
-    const turn = await handle("brief me", [], deps);
-    if (turn.kind !== "briefing") throw new Error("Expected briefing");
-    expect(turn.text).toBe("The watch is quiet. Nothing crosses your thresholds.");
-  });
-
-  it("briefing without getSalient dep returns quiet message", async () => {
-    const deps = makeDeps(); // no getSalient
-    const turn = await handle("brief me", [], deps);
-    if (turn.kind !== "briefing") throw new Error("Expected briefing");
-    expect(turn.text).toBe("The watch is quiet. Nothing crosses your thresholds.");
-  });
-});
-
-// ── briefing fly_to ───────────────────────────────────────────────────────────
-
-describe("handle — briefing fly_to steering", () => {
-  const tokyoEvent: ScoredEvent = {
-    id: "e-tokyo",
-    title: "Earthquake near Tokyo",
-    source: "USGS",
-    category: "seismic",
-    publishedAt: new Date().toISOString(),
-    score: 0.95,
-    reasons: ["M6.8"],
-    lat: 35.68,
-    lng: 139.69,
-  };
-
-  it("fires fly_to when globe active and top item has coords", async () => {
-    const mockSendDeckCommands = vi.fn();
-    const deps = makeDeps({
-      currentDeck: () => "globe",
-      getSalient: (_k: number) => [tokyoEvent],
-      sendDeckCommands: mockSendDeckCommands,
-    });
-    await handle("brief me", [], deps);
-    expect(mockSendDeckCommands).toHaveBeenCalledWith([
-      { type: "fly_to", lat: 35.68, lng: 139.69 },
-    ]);
-  });
-
-  it("skips fly_to when globe NOT active", async () => {
-    const mockSendDeckCommands = vi.fn();
-    const deps = makeDeps({
-      currentDeck: () => "void",
-      getSalient: (_k: number) => [tokyoEvent],
-      sendDeckCommands: mockSendDeckCommands,
-    });
-    await handle("brief me", [], deps);
-    expect(mockSendDeckCommands).not.toHaveBeenCalled();
-  });
-
-  it("skips fly_to when no item has coords", async () => {
-    const mockSendDeckCommands = vi.fn();
-    const deps = makeDeps({
-      currentDeck: () => "globe",
-      getSalient: (_k: number) => [
-        { id: "e1", title: "Market news", source: "Reuters", category: "finance", publishedAt: new Date().toISOString(), score: 0.8, reasons: [] },
-      ],
-      sendDeckCommands: mockSendDeckCommands,
-    });
-    await handle("brief me", [], deps);
-    expect(mockSendDeckCommands).not.toHaveBeenCalled();
-  });
-
-  it("uses first located item coords even if not the highest scored", async () => {
-    const mockSendDeckCommands = vi.fn();
-    const noCoords: ScoredEvent = { id: "e-nc", title: "No coords", source: "Reuters", category: "finance", publishedAt: new Date().toISOString(), score: 1.0, reasons: [] };
-    const withCoords: ScoredEvent = { ...tokyoEvent, id: "e-c", score: 0.7 };
-    const deps = makeDeps({
-      currentDeck: () => "globe",
-      getSalient: (_k: number) => [noCoords, withCoords],
-      sendDeckCommands: mockSendDeckCommands,
-    });
-    await handle("brief me", [], deps);
-    expect(mockSendDeckCommands).toHaveBeenCalledWith([
-      { type: "fly_to", lat: 35.68, lng: 139.69 },
-    ]);
+    expect(turn.kind).toBe("reply");
   });
 });
 
@@ -238,11 +78,12 @@ describe("handle — help routes without model call", () => {
     const deps = makeDeps();
     const turn = await handle("help", [], deps);
     if (turn.kind !== "help") throw new Error("Expected help");
-    expect(turn.text.toLowerCase()).toContain("decks");
-    expect(turn.text.toLowerCase()).toContain("watch");
+    expect(turn.text.toLowerCase()).toContain("build");
     expect(turn.text.toLowerCase()).toContain("system");
-    expect(turn.text).toContain('"show the globe"');
-    expect(turn.text).toContain('"brief me"');
+    expect(turn.text).toContain('"build me a …"');
+    expect(turn.text).toContain('"what can you do"');
+    expect(turn.text.toLowerCase()).not.toContain("decks");
+    expect(turn.text).not.toContain('"brief me"');
   });
 
   it("help includes organ examples when organs exist", async () => {
@@ -282,5 +123,360 @@ describe("handle — self_edit routes without model call, without build/edit", (
     const turn = await handle("edit your orb moods", [], deps);
     expect(turn.kind).toBe("self_edit");
     expect(deps.edit).not.toHaveBeenCalled();
+  });
+});
+
+// ── rebirth handlers (Phase 23) — rules, no model call ───────────────────────
+
+const SHA_A = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
+const SHA_B = "9b8c7d9b8c7d9b8c7d9b8c7d9b8c7d9b8c7d9b8c";
+
+function identity(over: Partial<Identity> = {}): Identity {
+  return {
+    mode: "packaged",
+    genomeSha: SHA_B,
+    genomeHead: SHA_A,
+    generation: SHA_B,
+    threaded: true,
+    loomhome: "/home/loom",
+    loomhomeBytes: 0,
+    canSwap: true,
+    ...over,
+  };
+}
+
+function threadStatus(over: Partial<ThreadStatus> = {}): ThreadStatus {
+  return {
+    threaded: true,
+    tools: [
+      { name: "cargo", path: "/usr/bin/cargo", version: "1.80", requiredFor: "core", install: "rustup" },
+      { name: "cmake", path: null, version: null, requiredFor: "native deps (whisper.cpp)", install: "brew install cmake" },
+    ],
+    missing: [],
+    drifted: [],
+    steps: { seed: true, deps: true, vendor: true, warm: true, register: true },
+    needsNetwork: false,
+    ...over,
+  };
+}
+
+function generation(over: Partial<Generation> = {}): Generation {
+  return {
+    sha: SHA_A,
+    wovenAt: "2026-09-02T00:00:00Z",
+    sizeBytes: 1,
+    reason: "reweave",
+    commitSubject: "x",
+    isCurrent: true,
+    isPrevious: false,
+    failedToBoot: false,
+    failedReason: null,
+    ...over,
+  };
+}
+
+function rebirth(over: Partial<RebirthDeps> = {}): RebirthDeps {
+  return {
+    readiness: vi
+      .fn()
+      .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
+    threadStatus: vi.fn().mockResolvedValue(threadStatus()),
+    threadLoom: vi.fn().mockResolvedValue(undefined),
+    identity: vi.fn().mockResolvedValue(identity()),
+    generations: vi
+      .fn()
+      .mockResolvedValue([generation(), generation({ sha: SHA_B, isCurrent: false, isPrevious: true })]),
+    ...over,
+  };
+}
+
+describe("reweaveConsentLine — the weave that did not hold", () => {
+  /**
+   * Round-4 review, Finding 4. After a heal the genome's HEAD is still the sha
+   * that failed while the body is the previous one, so both gates go on
+   * offering "weave generation X" for the generation LOOM just came home from,
+   * saying nothing about it. Refusing outright would be wrong — the failure
+   * can be environmental, and `force` is not a road the companion offers — so
+   * the sentence carries the fact and the owner decides.
+   */
+  it("names the failure in the sentence, and still offers the weave", () => {
+    expect(reweaveConsentLine(SHA_A, "packaged", true, true)).toBe(
+      "weave generation 3f2a1c again — it didn't boot last time — LOOM will close and return",
+    );
+    expect(reweaveConsentLine(SHA_A, "dev", false, true)).toBe(
+      "weave generation 3f2a1c again — it didn't boot last time — in dev the body stays; restart tauri dev to become it",
+    );
+    // A weave that has never failed says nothing about failure.
+    expect(reweaveConsentLine(SHA_A, "packaged", true, false)).toBe(
+      "weave generation 3f2a1c — LOOM will close and return",
+    );
+  });
+});
+
+describe("handle — reweave", () => {
+  it("passes the failed-before verdict into the consent line", async () => {
+    const rb = rebirth({
+      readiness: vi.fn().mockResolvedValue({
+        ok: true,
+        body: SHA_B,
+        genomeHead: SHA_A,
+        mode: "packaged",
+        canSwap: true,
+        failedBefore: true,
+      }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "reweave_consent",
+      line: "weave generation 3f2a1c again — it didn't boot last time — LOOM will close and return",
+    });
+  });
+
+  it("nothing new → speaks the nothing-new line, never a model call, never starts", async () => {
+    const rb = rebirth({
+      readiness: vi
+        .fn()
+        .mockResolvedValue({ ok: false, reason: "nothing new to weave — the body already matches the genome" }),
+    });
+    const deps = makeDeps({ rebirth: rb });
+    const turn = await handle("reweave yourself", [], deps);
+    expect(turn).toEqual({
+      kind: "reply",
+      text: "nothing new to weave — the body already matches the genome",
+    });
+    expect(deps.chat).not.toHaveBeenCalled();
+    expect(deps.askModel).not.toHaveBeenCalled();
+  });
+
+  it("packaged → consent turn: LOOM will close and return", async () => {
+    const deps = makeDeps({ rebirth: rebirth() });
+    const turn = await handle("become the new version", [], deps);
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "reweave_consent",
+      line: "weave generation 3f2a1c — LOOM will close and return",
+    });
+  });
+
+  /**
+   * Round-3 review, Finding 2. The line named `genomeSha` — the sha the
+   * RUNNING binary was compiled from — while `run_job` weaves
+   * `kernel::head_sha(&ctx.source)`. The owner agreed to one act and got
+   * another. The sha in the sentence is the sha in the weave, or the sentence
+   * is a lie.
+   */
+  it("names the genome's HEAD, never the body already running", async () => {
+    const rb = rebirth({
+      readiness: vi
+        .fn()
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn.kind === "consent" && turn.line).toContain("weave generation 3f2a1c");
+    expect(turn.kind === "consent" && turn.line).not.toContain("9b8c7d");
+  });
+
+  /** A head LOOM could not read is not named. It does not guess a sha. */
+  it("names no sha when the genome's head cannot be read", async () => {
+    const rb = rebirth({
+      readiness: vi
+        .fn()
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: null, mode: "packaged", canSwap: true }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn.kind === "consent" && turn.line).toBe(
+      "weave the genome's head — LOOM will close and return",
+    );
+  });
+
+  it("dev → the consent line never promises a close and return that will not happen", async () => {
+    const rb = rebirth({
+      readiness: vi.fn().mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "dev" }),
+    });
+    const turn = await handle("rebuild yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "reweave_consent",
+      line: "weave generation 3f2a1c — in dev the body stays; restart tauri dev to become it",
+    });
+  });
+
+  it("packaged off macOS → the consent line says the swap is not implemented here", async () => {
+    const rb = rebirth({
+      readiness: vi
+        .fn()
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: false }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn.kind === "consent" && turn.line).toBe(
+      "weave generation 3f2a1c — the swap is macOS-only in this generation; the build and the ledger still work, the body stays",
+    );
+  });
+
+  it("never claims a commit count nobody can produce", async () => {
+    // `commitsAhead` was hardwired to null: the count could never be spoken, so
+    // the parameter was a promise the code could not keep. Until a genome_ahead
+    // command exists, the line simply does not mention commits.
+    const deps = makeDeps({ rebirth: rebirth() });
+    const turn = await handle("weave the new generation", [], deps);
+    expect(turn.kind === "consent" && turn.line).not.toMatch(/commit/);
+    expect(reweaveConsentLine).toHaveLength(3);
+  });
+
+  it("unthreaded → the settings line, no consent", async () => {
+    const rb = rebirth({
+      readiness: vi.fn().mockResolvedValue({ ok: false, reason: "the loom isn't threaded — open Settings" }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "the loom isn't threaded — open Settings" });
+  });
+});
+
+describe("handle — thread", () => {
+  it("a missing tool → the missing-tools line with the first missing tool's install line, no threadLoom", async () => {
+    const rb = rebirth({
+      threadStatus: vi
+        .fn()
+        .mockResolvedValue(threadStatus({ threaded: false, missing: ["cmake"], needsNetwork: true })),
+    });
+    const turn = await handle("thread the loom", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "reply",
+      text: "the loom can't be threaded yet — cmake is missing: brew install cmake",
+    });
+    expect(rb.threadLoom).not.toHaveBeenCalled();
+  });
+
+  it("nothing missing → a consent turn carrying the network line, and NOTHING reaches the network", async () => {
+    // The one step in an offline-and-yours computer that touches the network
+    // was the one with no card. It asks first now.
+    const rb = rebirth({
+      threadStatus: vi.fn().mockResolvedValue(threadStatus({ threaded: false, needsNetwork: true })),
+    });
+    const turn = await handle("thread the loom", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "thread_consent",
+      line: "threading needs the network once — after that LOOM weaves offline",
+    });
+    expect(rb.threadLoom).not.toHaveBeenCalled();
+  });
+
+  it("the consent line is the one Settings already shows — one wording, no drift", () => {
+    const organJs = settingsFiles.find((f) => f.name === "organ.js")!.content;
+    expect(organJs).toContain(LINE_THREAD_CONSENT);
+  });
+
+  it("the line spoken after the owner agrees is the one the Companion restates", () => {
+    // Companion.rebirth.test.tsx mocks this module and restates the constant;
+    // this pins it so the two cannot drift apart unnoticed.
+    expect(LINE_THREADING).toBe("threading the loom — this needs the network once");
+  });
+});
+
+describe("handle — identity", () => {
+  it("speaks generation · mode · threaded", async () => {
+    const turn = await handle("which generation is this", [], makeDeps({ rebirth: rebirth() }));
+    expect(turn).toEqual({ kind: "reply", text: "generation 9b8c7d · packaged · threaded" });
+  });
+
+  /**
+   * Round-4 review, Finding 2. "which generation is this" was answered from
+   * `generation` — the LEDGER's claim about which body is on disk, which is
+   * allowed to lag the body and, after a half-finished swap, names the body
+   * that is NOT running. The binary's baked sha is the one value that cannot
+   * be wrong about which body is executing, so that is the one that answers.
+   */
+  it("names the body that is running, not the ledger's claim", async () => {
+    const rb = rebirth({
+      // The half-finished swap: the ledger already moved to the new sha, the
+      // old body is still the one asking and answering.
+      identity: vi.fn().mockResolvedValue(identity({ genomeSha: SHA_A, generation: SHA_B })),
+    });
+    const turn = await handle("which generation is this", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "generation 3f2a1c · packaged · threaded" });
+  });
+
+  /** And a torn or absent ledger cannot make a real woven body say it is not
+   *  one: `generation: null` is the ledger's silence, not the body's. */
+  it("a silent ledger does not unweave a body that knows its own sha", async () => {
+    const rb = rebirth({
+      identity: vi.fn().mockResolvedValue(identity({ mode: "dev", generation: null, threaded: false })),
+    });
+    const turn = await handle("what generation are you?", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "generation 9b8c7d · dev · not threaded" });
+  });
+
+  /** The one body that genuinely cannot name itself: built outside the
+   *  genome, so `build.rs` baked the literal "unknown". */
+  it("a body built outside the genome says it is unnamed", async () => {
+    const rb = rebirth({
+      identity: vi.fn().mockResolvedValue(identity({ genomeSha: "unknown", generation: SHA_B })),
+    });
+    const turn = await handle("which generation is this", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "generation unnamed · packaged · threaded" });
+  });
+});
+
+describe("handle — generation_return", () => {
+  /**
+   * Round-4 review, Finding 3. The warden's heal writes `{ current: prev,
+   * previous: <the failed sha> }`, so the row flagged PREVIOUS after a heal is
+   * the body that just refused to boot. Taking it meant closing LOOM, swapping
+   * in the body that failed, and trusting the warden to bring it home again.
+   */
+  it("after a heal, the way home is not the body that just failed", async () => {
+    const FAILED = "ccc333ccc333ccc333ccc333ccc333ccc333ccc3";
+    const rb = rebirth({
+      generations: vi.fn().mockResolvedValue([
+        generation({ sha: FAILED, isCurrent: false, isPrevious: true, failedToBoot: true, failedReason: "crashed" }),
+        generation({ sha: SHA_A, isCurrent: true }),
+        generation({ sha: SHA_B, isCurrent: false }),
+      ]),
+    });
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "generation_return_consent",
+      sha: SHA_B,
+      line: "return to generation 9b8c7d — LOOM will close and return",
+    });
+  });
+
+  it("a shelf whose only other body failed to boot has no way home", async () => {
+    const FAILED = "ccc333ccc333ccc333ccc333ccc333ccc333ccc3";
+    const rb = rebirth({
+      generations: vi.fn().mockResolvedValue([
+        generation({ sha: FAILED, isCurrent: false, isPrevious: true, failedToBoot: true }),
+        generation({ sha: SHA_A, isCurrent: true }),
+      ]),
+    });
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: LINE_NO_PREVIOUS });
+  });
+
+  it("a previous generation → consent turn carrying its sha", async () => {
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rebirth() }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "generation_return_consent",
+      sha: SHA_B,
+      line: "return to generation 9b8c7d — LOOM will close and return",
+    });
+  });
+
+  it("dev → the return consent says what dev actually does, not close-and-return", async () => {
+    const rb = rebirth({ identity: vi.fn().mockResolvedValue(identity({ mode: "dev" })) });
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rb }));
+    expect(turn.kind === "consent" && turn.line).toBe(
+      "return to generation 9b8c7d — in dev the body stays; the genome moves to generation/9b8c7d9",
+    );
+  });
+
+  it("no previous generation → says so", async () => {
+    const rb = rebirth({ generations: vi.fn().mockResolvedValue([generation()]) });
+    const turn = await handle("go back a generation", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "there is no previous generation to return to" });
   });
 });

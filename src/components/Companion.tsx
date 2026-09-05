@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelDiscard, type OrganFile, type Msg, type ChatOpts, type Brain } from "../lib/core";
+import { fleetChat, builderChat, organWrite, organRead, organList, ttsSpeak, ShellUnavailableError, kernelEditable, kernelRead, kernelPropose, kernelValidate, kernelDiscard, kernelIdentity, threadLoom, type OrganFile, type Msg, type ChatOpts } from "../lib/core";
+import { startReweave } from "../lib/loom/reweave";
+import { returnToGeneration } from "../lib/loom/generations";
 import { draftKernelEdit, resolveSelfEditTarget, type KernelBuildEvent } from "../lib/loom/kernelBuild";
 import type { KernelReviewProposal } from "./chrome/KernelDiff";
+import ConsentPanel, { type ConsentKind } from "./chrome/ConsentCard";
 import { gate } from "../lib/loom/validate";
 import { buildOrgan, type BuildEvent } from "../lib/loom/build";
 import { editOrgan } from "../lib/companion/editOrgan";
-import { handle, type CompanionTurn } from "../lib/companion/runtime";
+import { handle, LINE_THREADING, type CompanionTurn } from "../lib/companion/runtime";
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
 import { getSetting, setSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
-import { sendDeckCommands } from "./decks/GlobeDeck";
-import { getSalient } from "../lib/watch/runtime";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,7 +39,6 @@ type SuccessCard = {
   organId: string;
   sha: string;
   id: string;
-  brain?: Brain;
 };
 
 type FailureCard = {
@@ -60,13 +60,30 @@ type SelfEditBlockedCard = {
   id: string;
 };
 
+/**
+ * A consent card (Phase 23 — Rebirth): the body changes only after the owner
+ * presses the affirmative. `settled` remembers the choice so the actions
+ * vanish; the invariant that nothing starts twice is held by a ref (see
+ * `settledConsents`), because two clicks inside one batched React tick both
+ * read the same stale `settled: null`.
+ */
+type ConsentCard = {
+  kind: "consent";
+  consent: ConsentKind;
+  sha?: string;
+  line: string;
+  settled: null | "confirmed" | "declined";
+  id: string;
+};
+
 type ConvoItem =
   | MsgBubble
   | EventLogCard
   | SuccessCard
   | FailureCard
   | ReviewCard
-  | SelfEditBlockedCard;
+  | SelfEditBlockedCard
+  | ConsentCard;
 
 // ---------------------------------------------------------------------------
 // Shared style tokens (mirror LoomConsole visual language)
@@ -359,11 +376,6 @@ function SuccessCardView({
             Approve it below to run it.
           </div>
         )}
-        {item.brain && (
-          <div style={{ fontSize: 11, color: "var(--t3)", marginTop: 4 }}>
-            built by {item.brain === "cloud" ? "claude-opus-4-8" : "local fleet"}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -574,6 +586,31 @@ function SelfEditBlockedView() {
   );
 }
 
+/**
+ * The conversation's wrapper around the shared consent card — the same card
+ * chrome renders when an ORGAN asks (see chrome/BodyRequest.tsx), so there is
+ * one surface for "may I change the body" no matter who asked.
+ */
+function ConsentCardView({
+  item,
+  onChoose,
+}: {
+  item: ConsentCard;
+  onChoose: (id: string, confirmed: boolean) => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
+      <CyanDot />
+      <ConsentPanel
+        consent={item.consent}
+        line={item.line}
+        settled={item.settled}
+        onChoose={(confirmed) => onChoose(item.id, confirmed)}
+      />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Error mapping — raw exceptions never reach the UI
 // ---------------------------------------------------------------------------
@@ -641,6 +678,11 @@ export default function Companion() {
 
   // Each active review card gets a resolve fn keyed by its card id
   const reviewResolvers = useRef<Map<string, (approved: boolean) => void>>(new Map());
+
+  // Consent card ids whose answer has already been taken. A ref, not state:
+  // the "nothing starts twice" guard has to be true synchronously, and two
+  // clicks in one batched tick would both read the same stale `settled: null`.
+  const settledConsents = useRef<Set<string>>(new Set());
 
   // Ref for the active event-log card id (so we can append to it)
   const activeLogId = useRef<string | null>(null);
@@ -838,14 +880,9 @@ export default function Companion() {
       appendEvent(e);
     }
 
-    // Track the brain used by the most recent builder call (for success card).
-    // Use a ref object so TS never narrows the union to a single literal.
-    const lastBrainRef: { v: Brain } = { v: "local" };
-
     // Wrap chat so:
-    // - "builder" role → builderChat (cloud-override seam); companion/rewriter stay local.
+    // - "builder" role → builderChat (the single builder seam; local fleet).
     // - "companion" role → lights the companion HUD member.
-    // - Cloud errors fall back to local fleet (brain stays "local").
     const chatWithActivity = async (role: string, messages: Msg[], opts?: ChatOpts) => {
       if (role === "companion") {
         dispatchFleetActivity("companion", "converse");
@@ -856,13 +893,7 @@ export default function Companion() {
         }
       }
       if (role === "builder") {
-        const result = await builderChat(messages, opts);
-        lastBrainRef.v = result.brain;
-        // Emit fallback event when cloud was requested but local was used
-        if (getSetting("model.cloudBuilder") === "anthropic" && result.brain === "local") {
-          appendEventWithMood({ ts: Date.now(), phase: "cloud", detail: "cloud unavailable — built locally" });
-        }
-        return result.text;
+        return builderChat(messages, opts);
       }
       return fleetChat(role, messages, opts);
     };
@@ -875,7 +906,6 @@ export default function Companion() {
           write: organWrite,
           gate,
           onEvent: appendEventWithMood,
-          getBrain: () => lastBrainRef.v,
           ...(fromInitiative ? { proposalSource: "initiative" as const } : {}),
           ...(reviewOn ? { review: requestReview } : {}),
         }),
@@ -886,7 +916,6 @@ export default function Companion() {
           write: organWrite,
           gate,
           onEvent: appendEventWithMood,
-          getBrain: () => lastBrainRef.v,
           ...(reviewOn ? { review: requestReview } : {}),
         }),
       organIds: async () => {
@@ -915,11 +944,6 @@ export default function Companion() {
           dispatchFleetActivity(null);
         }
       },
-      // Provide current deck state to the runtime so deck_command rules can
-      // auto-switch from void → globe when needed.
-      currentDeck: () => getSetting("cockpit.deck") as "void" | "globe" | "terminal",
-      getSalient: (k: number) => getSalient(k),
-      sendDeckCommands: (cmds: import("../lib/decks/commands").BridgeCmd[]) => sendDeckCommands(cmds),
     };
 
     let turn: CompanionTurn;
@@ -975,19 +999,16 @@ export default function Companion() {
     } else if (turn.kind === "build") {
       const result = turn.result;
       if (result.ok && result.organId && result.sha) {
-        const brainUsed: Brain = lastBrainRef.v;
-        const brainLabel = brainUsed === "cloud" ? "claude-opus-4-8" : "local fleet";
         appendItem({
           kind: "success",
           turnKind: "build",
           organId: result.organId,
           sha: result.sha,
-          brain: brainUsed,
           id: nextId(),
         });
         window.dispatchEvent(new CustomEvent("organs-changed"));
         const repairRounds = result.log.filter((e) => e.phase === "repair").length;
-        const historyMsg = `Built ${result.organId}: organ ready. Passed in ${repairRounds} repair round(s). built by ${brainLabel}`;
+        const historyMsg = `Built ${result.organId}: organ ready. Passed in ${repairRounds} repair round(s).`;
         history.current.push({ role: "assistant", content: historyMsg });
         const oneliner = `${result.organId} is ready — approve it below.`;
         appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
@@ -1005,19 +1026,16 @@ export default function Companion() {
     } else if (turn.kind === "edit") {
       const result = turn.result;
       if (result.ok && result.organId && result.sha) {
-        const brainUsed: Brain = lastBrainRef.v;
-        const brainLabel = brainUsed === "cloud" ? "claude-opus-4-8" : "local fleet";
         appendItem({
           kind: "success",
           turnKind: "edit",
           organId: result.organId,
           sha: result.sha,
-          brain: brainUsed,
           id: nextId(),
         });
         window.dispatchEvent(new CustomEvent("organs-changed"));
         const requestSummary = text.slice(0, 80);
-        const historyMsg = `Edited ${result.organId}: ${requestSummary}. built by ${brainLabel}`;
+        const historyMsg = `Edited ${result.organId}: ${requestSummary}.`;
         history.current.push({ role: "assistant", content: historyMsg });
         const oneliner = `${result.organId} updated.`;
         appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
@@ -1036,45 +1054,28 @@ export default function Companion() {
       );
       const oneliner = `Opening ${turn.organId} below.`;
       appendItem({ kind: "bubble", role: "assistant", text: oneliner, id: nextId() });
-    } else if (turn.kind === "deck_command") {
-      const { deckCommandResult, confirmation } = turn;
-
-      // 1. Orb mood pulse: building → idle (fast visual beat for instant commands)
-      dispatchMood("building");
-
-      // 2. Deck switch first (spec requirement 4: auto-switch fires before bridge cmd)
-      if (deckCommandResult.deckSwitch) {
-        // Shell's loom-deck listener is the single persistence owner for cockpit.deck
-        window.dispatchEvent(
-          new CustomEvent("loom-deck", {
-            detail: { deck: deckCommandResult.deckSwitch },
-          })
-        );
-      }
-
-      // 3. Bridge commands forwarded to GlobeDeck via mount-safe queue.
-      // sendDeckCommands dispatches immediately when GlobeDeck is mounted;
-      // otherwise enqueues for drain on mount+iframe-load (C1 fix).
-      if (deckCommandResult.bridgeCmds.length > 0) {
-        sendDeckCommands(deckCommandResult.bridgeCmds);
-      }
-
-      // 4. Push confirmation to history and show in companion
-      appendItem({ kind: "bubble", role: "assistant", text: confirmation, id: nextId() });
-      history.current.push({ role: "assistant", content: confirmation });
-
-      // 5. Orb settle to idle
-      dispatchMood("idle");
-    } else if (turn.kind === "briefing" || turn.kind === "help") {
+    } else if (turn.kind === "help") {
       const replyText = turn.text;
       appendItem({ kind: "bubble", role: "assistant", text: replyText, id: nextId() });
       history.current.push({ role: "assistant", content: replyText });
+    } else if (turn.kind === "consent") {
+      // The body asks before it changes. The card carries the actions; the
+      // line is what the owner reads and hears.
+      appendItem({
+        kind: "consent",
+        consent: turn.consent,
+        sha: turn.consent === "generation_return_consent" ? turn.sha : undefined,
+        line: turn.line,
+        settled: null,
+        id: nextId(),
+      });
+      history.current.push({ role: "assistant", content: turn.line });
     }
 
     // Determine if we should speak the reply
     let speakableText: string | null = null;
-    if (turn.kind === "reply") {
-      speakableText = turn.text;
+    if (turn.kind === "reply" || turn.kind === "consent") {
+      speakableText = turn.kind === "reply" ? turn.text : turn.line;
     } else if (turn.kind === "build") {
       const r = turn.result;
       if (r.ok && r.organId) speakableText = `${r.organId} is ready — approve it below.`;
@@ -1083,9 +1084,7 @@ export default function Companion() {
       if (r.ok && r.organId) speakableText = `${r.organId} updated.`;
     } else if (turn.kind === "act") {
       speakableText = `Opening ${turn.organId} below.`;
-    } else if (turn.kind === "deck_command") {
-      speakableText = turn.confirmation;
-    } else if (turn.kind === "briefing" || turn.kind === "help") {
+    } else if (turn.kind === "help") {
       speakableText = turn.text;
     }
 
@@ -1125,6 +1124,48 @@ export default function Companion() {
     runTurn(utterance);
   }
 
+  /**
+   * The owner's answer to a consent card. The card settles first so the
+   * affirmative can never fire twice; only then does the protected
+   * orchestration run. A refusal is spoken as its own calm line — the
+   * companion never pretends a weave began.
+   *
+   * The "settles first" guard is a REF, not the rendered card: `settled` lives
+   * in state, and two clicks inside one batched React tick both read the same
+   * stale `null` and both start a weave. The ref is read and written in the
+   * same synchronous breath as the call, so the second click finds the id
+   * already spent.
+   */
+  function chooseConsent(id: string, confirmed: boolean) {
+    if (settledConsents.current.has(id)) return;
+    const card = items.find((i): i is ConsentCard => i.kind === "consent" && i.id === id);
+    if (!card || card.settled !== null) return;
+    settledConsents.current.add(id);
+    setItems((prev) =>
+      prev.map((i) =>
+        i.kind === "consent" && i.id === id
+          ? { ...i, settled: confirmed ? "confirmed" : "declined" }
+          : i,
+      ),
+    );
+    if (!confirmed) return;
+    void (async () => {
+      try {
+        if (card.consent === "reweave_consent") {
+          const out = await startReweave();
+          if (!out.ok) appendItem({ kind: "bubble", role: "assistant", text: out.reason, id: nextId() });
+        } else if (card.consent === "thread_consent") {
+          await threadLoom();
+          appendItem({ kind: "bubble", role: "assistant", text: LINE_THREADING, id: nextId() });
+        } else if (card.sha) {
+          await returnToGeneration(card.sha);
+        }
+      } catch (err) {
+        appendItem({ kind: "bubble", role: "assistant", text: mapTurnError(err), id: nextId() });
+      }
+    })();
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1160,6 +1201,42 @@ export default function Companion() {
       id: nextId(),
     }]);
     localStorage.setItem("loom.firstGreeting", "1");
+  }, []);
+
+  // The greeting after a weave (Phase 23 — Rebirth). On the first boot of a
+  // new generation the companion says so, once, with no model call, spoken
+  // per voice.speakReplies. Outside the shell, or before any body has been
+  // woven, it stays quiet. The ref guards a double-mount; the stored sha
+  // guards the next boot.
+  const greetedRef = useRef(false);
+  useEffect(() => {
+    if (greetedRef.current) return;
+    greetedRef.current = true;
+    void (async () => {
+      let generation: string | null = null;
+      try {
+        const id = await kernelIdentity();
+        generation = typeof id?.generation === "string" ? id.generation : null;
+      } catch {
+        return; // no shell, or no identity yet — nothing to greet about.
+      }
+      if (generation === null) return;
+      if (localStorage.getItem("loom.lastGeneration") === generation) return;
+      localStorage.setItem("loom.lastGeneration", generation);
+      const line = `I'm back — generation ${generation.slice(0, 6)}.`;
+      appendItem({ kind: "bubble", role: "assistant", text: line, id: nextId() });
+      history.current.push({ role: "assistant", content: line });
+      if (getSetting("voice.speakReplies") !== "always") return;
+      dispatchMood("speaking");
+      try {
+        const raw = await ttsSpeak(line, getSetting("voice.default"));
+        await playWav(new Uint8Array(raw));
+      } catch (e) {
+        console.debug("[Companion] greeting ttsSpeak/playWav failed:", e);
+      } finally {
+        dispatchMood("idle");
+      }
+    })();
   }, []);
 
   // Cleanup: settle all pending reviews on unmount, cancel idle timer, dispatch idle
@@ -1306,6 +1383,9 @@ export default function Companion() {
           }
           if (item.kind === "self-edit-blocked") {
             return <SelfEditBlockedView key={item.id} />;
+          }
+          if (item.kind === "consent") {
+            return <ConsentCardView key={item.id} item={item} onChoose={chooseConsent} />;
           }
           return null;
         })}

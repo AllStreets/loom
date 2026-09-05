@@ -33,3 +33,24 @@ src-tauri/target/
 
 # Test outputs
 *.wav
+
+# Rebirth (Phase 23): the genome bundle is a build output written by
+# scripts/genome-bundle.mjs into the packaged app. Never committed.
+src-tauri/genome/*
+!src-tauri/genome/README.md
+
+# The Cockpit is excised (Phase 23a). Nothing under public/ serves a deck,
+# and Vite copies public/ verbatim into the binary — scratch left here ships.
+public/decks/
+
+# Rebirth (Phase 23): build.rs stages the TTS dylibs here from whichever
+# profile is building, so tauri.conf can name one stable path. Build output.
+src-tauri/libs/
+
+# Rebirth (Phase 23): a dev threading ceremony writes this into the owner's
+# own checkout. It points cargo at loomhome/vendor with `[net] offline = true`,
+# so EVERY later cargo command in this checkout — LOOM's and the owner's —
+# builds from the vendored crates and never reaches the network. It is
+# machine-local (it names an absolute loomhome path) and PROTECTED in the
+# genome; it is not the repository's to carry.
+.cargo/config.toml

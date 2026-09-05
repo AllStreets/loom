@@ -18,6 +18,15 @@
  *                     Clears the pending sentinel: this boot held, so the last
  *                     applied edit is confirmed good.
  *
+ * A NOTE FOR CALLERS (round-4 finding 1): under `<React.StrictMode>` every
+ * effect is mounted, cleaned up, and mounted again in development. A caller
+ * that guards this beacon with "have we SCHEDULED it?" arms the timer on the
+ * first mount, cancels it in the cleanup, and skips the second mount — so the
+ * beacon never fires and every GOOD self-edit is rolled back on the next start.
+ * Schedule freshly on every mount, cancel cleanly, and let the guard mean "the
+ * beacon has FIRED". markBootOk is safe to call more than once: clearing an
+ * absent sentinel is a no-op on the Rust side and errors are swallowed here.
+ *
  * Both swallow errors (outside the desktop shell / no source repo they simply
  * no-op) — recovery must never itself become a boot hazard.
  */
@@ -51,7 +60,15 @@ export function bootHadError(): boolean {
   return bootErrored;
 }
 
-export type RecoveryDetail = { sha: string; failed?: boolean };
+/**
+ * `generation` (Phase 23): the warden healed a woven body that never confirmed
+ * its boot. `sha` is then the generation LOOM came home to (= `prevSha`).
+ */
+export type RecoveryDetail = {
+  sha: string;
+  failed?: boolean;
+  generation?: { failedSha: string; prevSha: string; reason: string };
+};
 
 /**
  * Early-boot guard. Returns the sha LOOM rolled back to (short or full — the
@@ -71,7 +88,17 @@ export async function runBootCheck(
     // test mock of core, or a packaged build with no command) is treated as
     // "no recovery guarantee here" rather than crashing boot.
     const fn = check ?? kernelBootCheck;
-    const { rolledBackTo, rollbackFailed } = await fn();
+    const { rolledBackTo, rollbackFailed, healedGeneration } = await fn();
+    // A healed generation (Phase 23) outranks a source rollback: the body
+    // itself was put back. The notice reads the generation variant.
+    if (healedGeneration && healedGeneration.prevSha) {
+      window.dispatchEvent(
+        new CustomEvent<RecoveryDetail>(RECOVERY_EVENT, {
+          detail: { sha: healedGeneration.prevSha, generation: healedGeneration },
+        }),
+      );
+      return healedGeneration.prevSha;
+    }
     if (rolledBackTo) {
       window.dispatchEvent(
         new CustomEvent<RecoveryDetail>(RECOVERY_EVENT, { detail: { sha: rolledBackTo } }),

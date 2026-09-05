@@ -1,6 +1,5 @@
 import { normalize } from "./normalize";
 import { classifyIntent, type Intent, type HistoryMsg, type IntentResult } from "./intent";
-import type { DeckCommandResult } from "../decks/commands";
 
 export type Compiled = {
   intent: Intent;
@@ -9,8 +8,6 @@ export type Compiled = {
   organId?: string;
   request: string;
   utterance: string;
-  /** Populated when intent === "deck_command" (rules path) */
-  deckCommandResult?: DeckCommandResult;
 };
 
 /**
@@ -27,15 +24,13 @@ export type Compiled = {
  * @param history — Optional conversation history; last 3 turns forwarded to
  *   classifyIntent (each content truncated to 160 chars) for anaphora
  *   resolution and model-fallback context.
- * @param currentDeck — Current cockpit.deck value; forwarded to deck_command rules.
  * @returns Compiled object with intent, confidence, source, organId (if set), request, and utterance
  */
 export async function compile(
   utterance: string,
   organIds: string[],
   askModel: (system: string, prompt: string) => Promise<string>,
-  history: HistoryMsg[] = [],
-  currentDeck: "void" | "globe" | "terminal" = "void"
+  history: HistoryMsg[] = []
 ): Promise<Compiled> {
   // 1. Normalize for classification
   const normalized = normalize(utterance);
@@ -50,8 +45,7 @@ export async function compile(
     normalized,
     organIds,
     askModel,
-    trimmedHistory,
-    currentDeck
+    trimmedHistory
   );
 
   // 4. Assemble result
@@ -66,11 +60,6 @@ export async function compile(
   // Only include organId if it was set by the classifier
   if (intentResult.organId !== undefined) {
     compiled.organId = intentResult.organId;
-  }
-
-  // Propagate deck command result when intent is deck_command
-  if (intentResult.deckCommandResult !== undefined) {
-    compiled.deckCommandResult = intentResult.deckCommandResult;
   }
 
   return compiled;

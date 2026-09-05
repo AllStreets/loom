@@ -1,9 +1,10 @@
-import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, cloudKeyPresent as coreCloudKeyPresent, cloudKeySet as coreCloudKeySet, cloudKeyClear as coreCloudKeyClear, marketChart as coreMarketChart, marketCrypto as coreMarketCrypto, marketBook as coreMarketBook, marketTrades as coreMarketTrades, marketFx as coreMarketFx, timelineLog as coreTimelineLog, FLEET_DEFAULTS, type Msg, type VoiceStatus, type MarketChart, type MarketCrypto, type MarketBook, type MarketTrade, type MarketFx, type Commit } from "../core";
+import { fleetChat, fleetStatus, voiceStatus as coreVoiceStatus, voiceSetup as coreVoiceSetup, sttTranscribe, ttsSpeak, timelineLog as coreTimelineLog, kernelIdentity, threadStatus as coreThreadStatus, THREAD_EVENT, FLEET_DEFAULTS, type Msg, type VoiceStatus, type Commit, type Identity, type ThreadStatus, type ThreadEvent, type Generation } from "../core";
+import { listGenerations } from "../loom/generations";
+import { type StartResult } from "../loom/reweave";
+import { requestBody, BodyRequestDeclined } from "./bodyGate";
 import { getSetting, setSetting, isValidModelTag, VOICE_IDS, VOICE_LABELS, resetAllSettings as resetAllSettingsFn } from "../voice/settings";
 import { startRecording } from "../voice/recorder";
 import { playWav } from "../voice/player";
-import { getSalient } from "../watch/runtime";
-import { getWatchlist, type WatchlistEntry } from "../watch/store";
 import { makeLedger, type BudgetLedger, type BudgetedPower } from "./budgets";
 import { mintNotifyToken, revokeNotifyToken } from "./notifyGate";
 import { buildUiKit, type LoomUiKit } from "./uikit";
@@ -33,14 +34,50 @@ export type LoomSettingsApi = {
   setup(onPct?: (pct: number) => void): Promise<void>;
   models(): Promise<ModelEntry[]>;
   setModel(role: string, tag: string): Promise<{ ok: boolean; error?: string }>;
-  cloudKeyPresent(): Promise<boolean>;
-  cloudKeySet(key: string): Promise<void>;
-  cloudKeyClear(): Promise<void>;
   resetAll(): Promise<void>;
 };
 
-/** One ranked watch item — the read-only shape organs see. */
-export type WatchTopItem = { title: string; source: string; score: number; reasons: string[] };
+/**
+ * The `self` power (Rebirth): LOOM's own body, READ directly and MOVED only by
+ * asking. Reads sit behind `need("self")` and answer straight away. The three
+ * acts — thread, reweave, return — do not touch the protected orchestration at
+ * all: each dispatches a `loom-body-request` (see bodyGate.ts) and waits for
+ * chrome to render the owner's consent card and answer. Round-1 review: organs
+ * share the shell's JS realm, so a capability any organ holds is a capability
+ * every organ's code can reach — the grant decides who may ask through this
+ * api, and the card is where the owner decides.
+ *
+ * That is honesty-enforcement, not a sandbox: same-realm code can dispatch the
+ * request itself or skip the api entirely and invoke the Tauri command. See the
+ * docblock in `bodyGate.ts` for the whole statement.
+ */
+export type LoomSelfApi = {
+  /** `{ mode, genomeSha, genomeHead, generation, threaded, loomhome, loomhomeBytes }`. */
+  identity(): Promise<Identity>;
+  /** The tool table, what is missing, what drifted. */
+  threads(): Promise<ThreadStatus>;
+  /** Every kept generation, newest first. */
+  generations(): Promise<Generation[]>;
+  /** Ask the owner to run the one-time ceremony. `onEvent` gets every
+   *  `loom-thread` line once it starts. Resolves on `done`; rejects with the
+   *  detail on `failed`, and with the calm refusal if the owner declines. */
+  thread(onEvent?: (e: ThreadEvent) => void): Promise<void>;
+  /** Ask the owner to start a reweave — `{ ok: true }` once it is running,
+   *  `{ ok: false, reason }` when the core refuses, and a rejection carrying
+   *  the calm refusal line when the owner says not now. */
+  reweave(): Promise<StartResult>;
+  /** Ask the owner to become `sha` again. LOOM will close and return. */
+  returnTo(sha: string): Promise<void>;
+  /** Arm or disarm the standing yes: after an approved CORE edit, weave without
+   *  a second card. A body decision, so it lives here and not in `settings`. */
+  setAutoReweave(on: boolean): Promise<void>;
+};
+
+/** The one settings key that moves the body, so the body power owns it. */
+export const AUTO_REWEAVE_KEY = "kernel.autoReweave";
+/** Copy law (docs/BRAND.md): fact — hinge — remedy. */
+export const LINE_AUTO_REWEAVE_IS_BODY =
+  "kernel.autoReweave arms a body change — it lives behind the self power, not settings";
 
 export type LoomApi = {
   storage: { get<T>(k: string, fallback: T): T; set(k: string, v: unknown): void; del(k: string): void };
@@ -49,17 +86,7 @@ export type LoomApi = {
   /** Notify power — glass toast via the `loom-notify` event. Old organs may still call it with one arg. */
   notify: (title: string, body?: string) => void;
   settings: LoomSettingsApi;
-  market: {
-    chart(symbol: string): Promise<MarketChart>;
-    crypto(product: string): Promise<MarketCrypto>;
-    book(product: string, depth?: number): Promise<MarketBook>;
-    trades(product: string): Promise<MarketTrade[]>;
-    fx(base: string, symbols: string[]): Promise<MarketFx>;
-  };
-  watch: {
-    top(n?: number): WatchTopItem[];
-    list(): WatchlistEntry[];
-  };
+  self: LoomSelfApi;
   timeline: { log(n?: number): Promise<Commit[]> };
   voice: { say(text: string): Promise<void> };
   pulse: { every(ms: number, fn: () => void): () => void };
@@ -68,14 +95,7 @@ export type LoomApi = {
 export type ApiDeps = {
   chat?: typeof fleetChat;
   notify?: (t: string) => void;
-  marketChart?: typeof coreMarketChart;
-  marketCrypto?: typeof coreMarketCrypto;
-  marketBook?: typeof coreMarketBook;
-  marketTrades?: typeof coreMarketTrades;
-  marketFx?: typeof coreMarketFx;
   timelineLog?: typeof coreTimelineLog;
-  getSalient?: typeof getSalient;
-  getWatchlist?: typeof getWatchlist;
   /** Injectable budget ledger — tests pass makeLedger(fakeClock). */
   ledger?: BudgetLedger;
   voiceStatus?: typeof coreVoiceStatus;
@@ -86,10 +106,15 @@ export type ApiDeps = {
   playWav?: typeof playWav;
   listenProgress?: (cb: (pct: number) => void) => Promise<() => void>;
   fleetStatus?: typeof fleetStatus;
-  cloudKeyPresent?: typeof coreCloudKeyPresent;
-  cloudKeySet?: typeof coreCloudKeySet;
-  cloudKeyClear?: typeof coreCloudKeyClear;
   resetAllSettings?: () => void;
+  // self power seams — reads only. The three ACTS have no seam here on
+  // purpose: they go through bodyGate, and only chrome can answer.
+  identity?: typeof kernelIdentity;
+  threadStatus?: typeof coreThreadStatus;
+  generationsList?: typeof listGenerations;
+  listenThread?: (cb: (e: ThreadEvent) => void) => Promise<() => void>;
+  /** The ask itself — injectable so tests need no chrome. */
+  requestBody?: typeof requestBody;
 };
 
 // ── Pulse registry — live intervals per organ, cleared on unmount/delete ──────
@@ -176,17 +201,7 @@ export function makeLoomApi(
   const _ttsSpeak = deps.ttsSpeak ?? ttsSpeak;
   const _startRecording = deps.startRecording ?? startRecording;
   const _playWav = deps.playWav ?? playWav;
-  const _cloudKeyPresent = deps.cloudKeyPresent ?? coreCloudKeyPresent;
-  const _cloudKeySet = deps.cloudKeySet ?? coreCloudKeySet;
-  const _cloudKeyClear = deps.cloudKeyClear ?? coreCloudKeyClear;
-  const _marketChart = deps.marketChart ?? coreMarketChart;
-  const _marketCrypto = deps.marketCrypto ?? coreMarketCrypto;
-  const _marketBook = deps.marketBook ?? coreMarketBook;
-  const _marketTrades = deps.marketTrades ?? coreMarketTrades;
-  const _marketFx = deps.marketFx ?? coreMarketFx;
   const _timelineLog = deps.timelineLog ?? coreTimelineLog;
-  const _getSalient = deps.getSalient ?? getSalient;
-  const _getWatchlist = deps.getWatchlist ?? getWatchlist;
   const ledger = deps.ledger ?? defaultLedger;
 
   // Spend one budget token or throw calmly — and tell the organ's window so it
@@ -208,6 +223,17 @@ export function makeLoomApi(
       cb(e.payload.pct);
     });
     return unlisten;
+  });
+
+  // self power seams — the reads go straight to the core; the three acts go
+  // through the body gate, where only chrome can answer.
+  const _identity = deps.identity ?? kernelIdentity;
+  const _threadStatus = deps.threadStatus ?? coreThreadStatus;
+  const _generationsList = deps.generationsList ?? listGenerations;
+  const _requestBody = deps.requestBody ?? requestBody;
+  const _listenThread = deps.listenThread ?? (async (cb: (e: ThreadEvent) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<ThreadEvent>(THREAD_EVENT, (e) => { cb(e.payload); });
   });
 
   return {
@@ -243,45 +269,6 @@ export function makeLoomApi(
       }));
       deps.notify?.(String(title));
     },
-    market: {
-      async chart(symbol) {
-        need("market");
-        spend("market");
-        return _marketChart(symbol);
-      },
-      async crypto(product) {
-        need("market");
-        spend("market");
-        return _marketCrypto(product);
-      },
-      async book(product, depth = 10) {
-        need("market");
-        spend("market");
-        return _marketBook(product, depth);
-      },
-      async trades(product) {
-        need("market");
-        spend("market");
-        return _marketTrades(product);
-      },
-      async fx(base, symbols) {
-        need("market");
-        spend("market");
-        return _marketFx(base, symbols);
-      },
-    },
-    watch: {
-      top(n = 10) {
-        need("watch");
-        return _getSalient(n).map(({ title, source, score, reasons }) => ({
-          title, source, score, reasons: [...reasons],
-        }));
-      },
-      list() {
-        need("watch");
-        return _getWatchlist().map((e) => ({ ...e }));
-      },
-    },
     timeline: {
       async log(n = 20) {
         need("timeline");
@@ -295,6 +282,70 @@ export function makeLoomApi(
         const capped = String(text).slice(0, 300);
         const raw = await _ttsSpeak(capped, getSetting("voice.default"));
         await _playWav(new Uint8Array(raw));
+      },
+    },
+    self: {
+      async identity() {
+        need("self");
+        return _identity();
+      },
+      async threads() {
+        need("self");
+        return _threadStatus();
+      },
+      async generations() {
+        need("self");
+        return _generationsList();
+      },
+      async thread(onEvent) {
+        need("self");
+        spend("self");
+        // Listen BEFORE asking so the first line is never missed; the organ
+        // only ever asks — chrome runs the ceremony after the owner agrees.
+        // Settle on the ceremony's own terminal step; always let the listener go.
+        let settle: { resolve: () => void; reject: (e: Error) => void } | null = null;
+        const finished = new Promise<void>((resolve, reject) => { settle = { resolve, reject }; });
+        const unlisten = await _listenThread((e) => {
+          try { onEvent?.(e); } catch { /* an organ's handler must never stop the ceremony */ }
+          if (e.step === "done") settle?.resolve();
+          else if (e.step === "failed") settle?.reject(new Error(e.detail));
+        });
+        try {
+          await _requestBody("thread", organId);
+        } catch (err) {
+          unlisten();
+          throw err;
+        }
+        try {
+          await finished;
+        } finally {
+          unlisten();
+        }
+      },
+      async reweave() {
+        need("self");
+        spend("self");
+        try {
+          await _requestBody("reweave", organId);
+          return { ok: true };
+        } catch (e) {
+          // The owner saying not now is a refusal of the ASK — it rejects, so
+          // an organ cannot mistake it for "the weave could not start". The
+          // core's own refusal keeps the StartResult shape it always had.
+          if (e instanceof BodyRequestDeclined) throw e;
+          return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+        }
+      },
+      async returnTo(sha) {
+        need("self");
+        spend("self");
+        return _requestBody("return", organId, String(sha));
+      },
+      async setAutoReweave(on) {
+        // A preference, not an act: no card, no budget token. What it costs is
+        // the `self` grant, because arming it is a standing yes about the body.
+        need("self");
+        setSetting(AUTO_REWEAVE_KEY, on ? "on" : "off");
       },
     },
     pulse: {
@@ -326,6 +377,15 @@ export function makeLoomApi(
       },
       set(k, v) {
         need("settings");
+        // `kernel.autoReweave` decides whether an approved core edit weaves the
+        // body with NO card at all. Round-2 review: any organ holding the
+        // generic `settings` grant could arm that from behind a permission the
+        // owner reads as harmless. It is a decision about the body, so it lives
+        // on the `self` power — the grant whose card says this organ may ask
+        // about LOOM's body. (Settings are localStorage-backed and organs share
+        // the realm, so this is honesty-enforcement, not a wall: it keeps the
+        // API from handing the key out, nothing more.)
+        if (k === AUTO_REWEAVE_KEY) throw new Error(LINE_AUTO_REWEAVE_IS_BODY);
         setSetting(k, v);
       },
       async voices() {
@@ -411,18 +471,6 @@ export function makeLoomApi(
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
-      },
-      async cloudKeyPresent() {
-        need("settings");
-        return _cloudKeyPresent();
-      },
-      async cloudKeySet(key) {
-        need("settings");
-        return _cloudKeySet(key);
-      },
-      async cloudKeyClear() {
-        need("settings");
-        return _cloudKeyClear();
       },
       async resetAll() {
         need("settings");

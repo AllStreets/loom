@@ -2,16 +2,15 @@
 
 <img src=".github/assets/hero.png" alt="LOOM" width="100%"/>
 
-### the sovereign cockpit
+### the sovereign loom
 
-<em>offline &nbsp;·&nbsp; local models &nbsp;·&nbsp; voice command of the world &nbsp;·&nbsp; it builds itself &nbsp;·&nbsp; yours</em>
+<em>offline &nbsp;·&nbsp; local models &nbsp;·&nbsp; it builds itself &nbsp;·&nbsp; it rebuilds itself &nbsp;·&nbsp; yours</em>
 
 &nbsp;
 
 <img alt="vessel" src="https://img.shields.io/badge/vessel-Tauri_v2-22D3EE?style=for-the-badge&labelColor=060b18"/>
 <img alt="runs" src="https://img.shields.io/badge/runs-100%25_offline-22D3EE?style=for-the-badge&labelColor=060b18"/>
 <img alt="self-building" src="https://img.shields.io/badge/it-builds_itself-7DD3FC?style=for-the-badge&labelColor=060b18"/>
-<img alt="selftest" src="https://img.shields.io/badge/real--model_selftest-10%2F10-4ADE80?style=for-the-badge&labelColor=060b18"/>
 <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-4ADE80?style=for-the-badge&labelColor=060b18"/></a>
 
 <br/>
@@ -25,7 +24,7 @@
 &nbsp;
 
 <a href="#what-this-is"><kbd> &nbsp; <b>What this is</b> &nbsp; </kbd></a> &nbsp;
-<a href="#the-cockpit"><kbd> &nbsp; <b>The Cockpit</b> &nbsp; </kbd></a> &nbsp;
+<a href="#what-has-shipped"><kbd> &nbsp; <b>What has shipped</b> &nbsp; </kbd></a> &nbsp;
 <a href="#how-it-weaves"><kbd> &nbsp; <b>How it weaves</b> &nbsp; </kbd></a> &nbsp;
 <a href="#anatomy"><kbd> &nbsp; <b>Anatomy</b> &nbsp; </kbd></a> &nbsp;
 <a href="#the-fleet"><kbd> &nbsp; <b>The fleet</b> &nbsp; </kbd></a> &nbsp;
@@ -48,275 +47,59 @@ This is a proven idea, generalized. Its predecessor — the Forge engine inside 
 
 ---
 
-## The Cockpit
-
-**Phase 9 — Stage 1 — shipped.**
-
-LOOM is now the Sovereign Cockpit: the orb commands a living world. The ambient void is still the default — quiet, offline, yours. Switch on the globe and the AUSPEX globe deck rises behind the orb: live vessels at sea, geolocated news stories, earthquake events, all the feeds AUSPEX carries, running in a sandboxed iframe with no changes to the upstream AUSPEX repo.
-
-**What shipped in Stage 1:**
-
-- **Living globe deck.** A bundled snapshot of the AUSPEX globe app renders as a full-bleed deck behind the orb band. Toggle VOID / GLOBE from the top bar. Live feeds work as-is (AUSPEX's public Supabase reads, USGS, AIS vessels via your AISSTREAM key). Keyed feeds degrade silently when keys are absent — AUSPEX already handles that.
-
-- **Voice command of the world.** Say the phrase and it happens — no wake word, no lag. The companion rules engine resolves globe commands without a model call:
-  - "show the globe" / "show the world" — switches to globe deck
-  - "hide the globe" / "back to the void" — returns to void
-  - "show military" / "show climate" / "show finance" — filters news by category
-  - "show vessels" / "show ships" — toggles the live AIS vessel overlay
-  - "stop spinning" / "start spinning" — controls globe rotation
-  - "reset the view" — resets globe position
-  - The companion speaks a one-line confirmation; the orb pulses on each command.
-
-- **Cloud-override builder (opt-in).** Settings > Models > Cloud builder: toggle it on, paste your Anthropic API key (write-only — it is stored in a Tauri-side file at OS file permissions, never in the webview, never returned after save). When enabled, the builder routes to `claude-opus-4-8` via the Anthropic Messages API. Local Ollama fleet remains the default and the fallback on any cloud error. Each build card shows which brain built it. The companion and rewriter roles always stay local — only the builder gets the cloud option.
-
-**The orb never moves.** Decks change the world behind it.
-
----
-
-## Stage 2 — The Cockpit Watches
-
-**Phase 10 — Stage 2 — shipped.**
-
-The cockpit now watches the world for you. A salience engine runs in the kernel, ranking live events from two free sensors against your personal watchlist. A living constellation of LOOM's agents rings the orb. Say "brief me" and the cockpit speaks the top of the watch, offline, no model call.
-
-**What shipped in Stage 2:**
-
-- **Salience engine.** A pure scoring function — source trust, category weight, recency decay, watchlist match, engagement signals — ranks every incoming event and emits only when the top-10 ordering changes. Ported and adapted from AgentZeus's factor model; every factor produces a human-readable reason string.
-
-- **Live world sensors.** Two free sensors, no keys required: AUSPEX's public Supabase stories feed (the same anon REST endpoint the globe deck reads), and the USGS all-day earthquake GeoJSON. Both poll on a 120-second interval with AbortSignal timeout and graceful offline degradation.
-
-- **Watch panel.** A collapsible glass panel (WATCH in the top bar) shows the salience-ranked feed: title, source, age, score bar, expandable reasons. Row actions: open (copies URL to clipboard and records engagement), dismiss (hides the row, records engagement), watch+ (adds the matched entity or topic to your watchlist). Watchlist chips at the panel top for add/remove.
-
-- **Living constellation.** An SVG ring of LOOM's agents — builder, companion, rewriter, and the two watch sensors — around the orb. Synaptic bezier wires node-to-orb. `loom-fleet-activity` events light the matching role node and animate a packet along the wire; `loom-salience` pulses the sensor nodes. Reduced-motion: static, no packets.
-
-- **Voice briefings.** Say "brief me", "what matters", "morning brief", "what's happening", or "since I've been gone". The cockpit assembles a spoken briefing from the top 3 salient items — title and first reason — with zero model calls. Empty watch: "The watch is quiet. Nothing crosses your thresholds." Spoken per the existing speakReplies setting.
-
-- **Deck origin isolation (production).** In production builds, the AUSPEX globe iframe is served via a custom `deck://localhost` Tauri protocol (custom `deck` URI scheme), giving it a distinct origin from the LOOM shell. The deck's own localStorage and Supabase fetches continue to work (CORS: anon REST allows any origin). In dev, vite serves as before (shared origin, documented).
-
----
-
-## Stage 3 — Craft
-
-**Phase 11 — Stage 3 — shipped.**
-
-The cockpit grew a written design language and a live market surface.
-
-**Chrome redesigned.**
-
-Every surface was audited against a formal token set: `--t1/t2/t3` text hierarchy, `--line/glass-border` separators, `--accent` reserved for live/selected state only, `--danger/warn` for deltas and alerts. No raw hex values remain in shell chrome. A screenshot gate enforced every step: no phase advanced until the rendered result matched the spec. The orb band, top bar, dock, watch panel, and deck layer all speak the same language.
-
-**Hardening.**
-
-Raw error strings no longer reach the user. Every async boundary has an error handler. LOOM's voice is consistent whether something succeeds or fails — build failures, model timeouts, and network errors all produce calm, human copy. Error boundaries wrap the watch panel, organ windows, and deck layer so a crash in one surface cannot bring down the cockpit.
-
-**Terminal deck — the tape is live.**
-
-A Bloomberg-grade market surface mounts behind the orb when you say "show the terminal", "show markets", or "show the tape". It drives its own quotes poller by lifecycle: `startQuotes()` on mount, `stopQuotes()` on unmount — no background burn while another deck is active.
-
-Panels:
-- Ticker tape — all symbols scrolling at the top, looped seamlessly, paused when the document is hidden.
-- Index hero cards — SPY, QQQ, DIA, IWM with price, delta, sparkline.
-- Movers table — all tracked equities sorted by |delta%| descending.
-- Macro strip — VIX, 10Y yield, gold, crude oil, bitcoin.
-- Finance wire — salience-ranked finance/geo stories from the watch runtime.
-
-Quote source: Yahoo Finance `/v8/chart` endpoint (`interval=15m&range=1d`). In the Tauri desktop app, requests hit Yahoo directly — no proxy, no key. In plain browser dev mode, requests transit `corsproxy.io` carrying only ticker symbols (no credentials, no personal data). The desktop app never uses the proxy.
-
----
-
-## Stage 4a — Ownership
-
-**Phase 12 — Stage 4a — shipped.**
-
-The cockpit now belongs to you. Organs are mortal, the globe is interactive out of the box, the constellation is off by default, and the state you build is durable across restarts.
-
-**What shipped:**
-
-- **Organ deletion with full residue cleanup.** Every organ window's title bar gains a hover-reveal delete affordance. Confirming removes the organ's git files, all `loom.win.<id>` and `organ.<id>.*` storage keys, the windowRegistry entry, the open-window state, and the dock entry. Seeds deleted this way stay deleted — a tombstone list (`loom.organs.deleted`) prevents `installSeeds` from reinstating them on next boot.
-
-- **Reset to defaults.** Settings > System: "Reset LOOM to defaults" clears all `loom.*` keys (positions, settings, watchlist, experience), then reloads. Tombstones are cleared on reset so deleted seed organs return — the confirm copy is honest about this. Organ git files are never touched by reset.
-
-- **Constellation defaults off.** User verdict: clunky and in the way. `cockpit.constellation` now defaults to "off"; the ambient SVG ring renders only when the setting is "on". Toggle is live — no restart required. One setting away; the feature is intact.
-
-- **Interact-by-default.** Deck iframes receive pointer events as soon as a deck is active. The INTERACT segment becomes a LOCK toggle: selected = interacting; clicking it turns pointer-passthrough off for sessions where you want orb-hold priority. Persists across restarts via `cockpit.interact` (default "on"). LOOM chrome (orb band, top bar, dock, chat input, watch panel) sits above the deck in z-order and is never captured by the iframe.
-
-- **Trail hygiene for minimized organs.** Minimizing an organ now removes its windowRegistry entry so the ambient Threads component draws no wire to it. Restoring the window re-registers it. The wire reappears only when the organ is live on screen.
-
-- **Persistence completeness.** WatchPanel open/closed state persists as `cockpit.watchOpen`. Minimized-organ set persists as `loom.minimized` so restored sessions match what you left.
-
-- **Deck-mode legibility.** The `html` background is now explicitly `var(--bg)` (navy #060b18) so any future layout overflow reveals navy, never the browser canvas grey.
-
-- **Orb transparent-mode over decks.** The orb compositor blends the orb into the scene when a deck is active — the glass sphere sits over the AUSPEX globe or the Terminal tape without a hard chrome box. The one visual quirk to know: a brief flicker can appear on first deck mount while the compositor repaints; this is a browser compositing artifact, not a bug, and disappears after the first paint settles.
-
----
-
-## Stage 4b — More Decks
-
-**Phase 13 — Stage 4b — shipped.**
-
-The cockpit now carries five decks: void, globe, terminal, ember, and agora. The deck infrastructure was generalized so all future decks use the same `deck://localhost/<deckname>/` origin pattern and the same lifecycle plumbing.
-
-**EMBER — the failsafe deck.**
-
-Say "show ember", "show survival", or "show the failsafe" and the cockpit mounts EMBER: a bundled, fully offline survival console. EMBER is a static snapshot committed to `public/decks/ember/` from `~/Downloads/EMBER` — the same source project whose Forge engine inspired LOOM's builder. It runs entirely from local files with no network required.
-
-EMBER's Advisor and Forge features call Ollama at `localhost:11434`. Under the `deck://` protocol origin used in packaged builds, Ollama's default CORS policy will reject these requests — EMBER degrades silently (the LLM chip goes offline; the rest of the console remains fully functional). To enable the Advisor in a packaged build, set `OLLAMA_ORIGINS=deck://localhost` in your Ollama environment before launching. EMBER's File System Access API (Forge file editing) may be unavailable inside a sandboxed iframe; EMBER hides or degrades those controls per its own design — it does not crash.
-
-**AGORA — the exchange dock.**
-
-Say "show agora", "show the exchange", or "open the floor" and the cockpit mounts the AGORA deck. AGORA is a dock: the deck iframe points at a configurable local URL (default `http://localhost:3000`). AGORA is a locally-run Next.js app (web + engine WebSocket + Postgres) that you start separately. The deck URL is set in Settings.
-
-When AGORA is reachable the iframe mounts live; pointer events follow the interact toggle exactly as other decks. When AGORA is not running the deck shows an honest offline card: instructions to start the local app, a RETRY button that re-probes on demand, and no polling loop while dark. There is no remote-URL option — the Settings field accepts only `http(s)://localhost` or `http(s)://127.0.0.1` addresses; sovereignty and iframe safety require the app to run on your machine.
-
-*(AGORA removed in Phase 18; the floor lives in the Terminal.)*
-
----
-
-## Stage 6 — Command
-
-**Phase 15 — Stage 6 — shipped.**
-
-The cockpit commands its fleet. AGORA is no longer a dock you have to feed — LOOM starts and stops the exchange itself. The watch's mind is open for inspection. The noisy edges went quiet.
-
-**LOOM starts AGORA.**
-
-Say "show agora" and, if the exchange is dark, the offline card now carries a START control. Press it and LOOM spawns AGORA's dev server as a managed child process — fixed argv (`npm run dev`, no shell, no user-supplied arguments), working directory from Settings > Decks > AGORA path, validated Rust-side before anything spawns: the path must exist, sit under your home directory, and contain a `package.json` with a real `dev` script. One child max. The card shows "IGNITING THE EXCHANGE" with the last lines of live process output while LOOM auto-probes the web URL (every 2s, bounded at 45s); when AGORA answers, the iframe mounts and a STOP chip joins the health strip. The child is killed on STOP and on LOOM exit — no orphaned processes.
-
-**Honest boundary:** LOOM manages the AGORA web process only. Postgres is a system service and stays yours to run — the card says so ("Postgres must be running").
-
-*(AGORA removed in Phase 18; the floor lives in the Terminal.)*
-
-**The owner can read the watch's mind.**
-
-The watch panel gains a LEARNED section: the top positive and negative weights the salience engine has learned from your behavior, as tinted chips with kind glyphs (`#` category, `/` source, `~` word) — `#finance +0.18`, `/dailymail -0.12`. Nothing hidden, nothing cloud: these are the actual weights, recomputed from your local engagement signals. CLEAR LEARNING (with a confirm strip) wipes the signals and the watch forgets everything it inferred about you. Sovereignty includes your own model of yourself.
-
-**Hygiene.** Whisper's C-level token spew is silenced at the log-hook level — voice transcription no longer floods the console. LOOM's own Rust code builds warning-free.
-
-**Verified honestly:** EMBER's Forge cannot run inside the deck — WKWebView has no File System Access API, so EMBER shows its own unsupported callout and everything else works. Forge requires the standalone EMBER app in a Chromium browser; the deck is read/advise mode. Documented, not papered over.
-
----
-
-## Phase 16 — Identity
-
-**Phase 16 — shipped.**
-
-LOOM stopped wearing borrowed clothes. One mark, one grammar, one signature surface no other computer can have.
-
-**The mark.**
-
-A woven monogram — three warp threads, one luminous weft weaving over-under through them and rising toward the top right. The two meanings of the name in one figure: to *weave*, and to *loom* into view. It is the favicon (the Vite leftover is gone), it sits beside the wordmark sharing the orb's mood glow, it draws itself — the weft threading the warp — once at every boot, and it anchors the ABOUT strip in Settings. The identity is codified in [`docs/BRAND.md`](docs/BRAND.md): the palette is law, the voice is calm, sovereign, honest — lowercase statements, no exclamation marks, honesty over reassurance.
-
-**The Tapestry.**
-
-The constellation is dead — removed, setting migrated away. In its place, behind the orb: **LOOM's autobiography, woven.** Warp threads are the machine's own git commits, newest brightest. Weft threads are its organs — alive ones in accent light, deleted ones left as faint scars — the decks you sail, and every build it has survived: a clean pass runs smooth, a repaired build carries a visible knot. What the watch has learned about you tints the cloth. Hover names any thread; click an organ thread and the organ opens; click a commit thread and the timeline opens. Every LOOM weaves a different cloth, because every LOOM lives a different life. No other machine can render this surface, because no other machine builds itself.
-
-**The Shuttle.**
-
-The shuttle is the part of a loom that carries the weft through the warp. Here it carries your intent. **⌘K** opens a glass palette over any deck: every command LOOM understands — decks, watch, build, organs, system — fuzzy-filtered as you type, grouped, keyboard-driven. One catalog, derived from the same tables the voice rules use and test-enforced against drift, feeds both: anything sayable is typeable, anything typeable is sayable. Free text that matches nothing falls through to the companion, exactly like speech. And the voice gained discoverability — say "what can you do" and LOOM answers from the same catalog, no model call.
-
----
-
-## Phase 17 — Depth
-
-**Phase 17 — shipped.**
-
-The Terminal and AGORA decks were empty. Now they are deep — on free, keyless sources, through LOOM's own hands.
-
-**The root cause, killed.** The desktop quote proxy sent no User-Agent; Yahoo answered every request with 429, and the whole Terminal rendered silently blank. Diagnosed live, fixed at the engine: every market request now carries a browser UA (with a second-host retry on 429), and the fix is proven by a live integration test. The old failure mode — a panel that is empty and won't say why — is now against the law: every panel states its condition.
-
-**The market engine.** `market.rs` — five typed commands over hardcoded, allowlisted hosts: Yahoo intraday charts, Coinbase Exchange ticker/24h/order-book/trades, Frankfurter FX. No keys, no third-party proxy on desktop, symbols validated before any request leaves the machine. Browser dev mode uses the same shapes over CORS-open sources.
-
-**The Terminal deepens.** The movers table is now *your* tape — add and remove tickers inline, persisted, the poller follows live. Click any symbol and a detail panel opens: full intraday area chart, open/high/low/prev-close/volume, tinted delta. New CRYPTO strip (BTC/ETH/SOL spot + 24h) and FX strip (EUR/GBP/JPY — labeled *daily*, because the source is daily and LOOM does not fake liveness). Header health chips — EQUITIES · CRYPTO · FX — show green/stale/dark per source with honest ages.
-
-**AGORA gets a floor.** When your local AGORA app isn't running, the deck is no longer one dark card. LOOM renders its own floor: a live order-book ladder (12 levels a side, cumulative depth bars, mid + spread in bps), a flowing trades tape tinted by taker side, product chips (BTC/ETH/SOL). The launch controls compress into a strip above the floor — START still ignites your local exchange, and when it answers, the iframe takes over exactly as before. About 0.9 requests/second worst case against a public limit of ten: a polite guest.
-
-*(AGORA removed in Phase 18; the floor lives in the Terminal.)*
-
----
-
-## Phase 18 — Excision
-
-**Phase 18 — shipped.**
-
-AGORA left the ship. The owner's verdict was final, and LOOM removes cleanly or not at all: the process-spawn subsystem, the deck, the iframe dock, the settings, the voice phrases — all gone, to the last grep. Stored settings from older installs are retired by an idempotent boot migration; a cockpit left pointing at the departed deck wakes in the void. The `libc` dependency left with it.
-
-**The floor stayed.** It never needed AGORA — it was LOOM's own, on Coinbase's open data. It now lives where it belongs: click BTC, ETH, or SOL in the Terminal's crypto strip and the floor opens as an overlay — order-book ladder, cumulative depth bars, mid and spread in basis points, the trades tape tinted by taker side. Its polls run only while it's open. Close it and the feed goes quiet.
-
-Four decks: **void · globe · terminal · ember**. Nothing on board that doesn't earn its keep.
-
----
-
-## Phase 19 — Vigor
-
-**Phase 19 — shipped.**
-
-Built organs had a toy ceiling: storage and a UI kit. *"Alert me when BTC drops 5% in an hour"* could not produce a working thing. Now it can.
-
-**Organs grow hands.** Six powers, each a token the organ's manifest must declare and you must approve:
-
-| power | what it grants |
-|---|---|
-| `market` | read market data — charts, crypto, order books, trades, FX — through LOOM's own engine |
-| `watch` | read the salience feed and your watchlist |
-| `timeline` | read LOOM's own git history |
-| `voice` | speak aloud through the cockpit's voice |
-| `notify` | raise a calm glass notice in the corner of the cockpit |
-| `pulse` | run on a schedule while LOOM is open — down to every 30 seconds |
-
-**Governed the LOOM way.** The permission card lists requested powers in plain language before anything runs. Every power is budgeted per organ — market 30 calls/min, voice one utterance per 30s, notices six an hour — and a throttled organ shows a dim THROTTLED chip instead of crashing. Every power is revocable live from the organ's title bar: flip the toggle and the organ's next call is calmly refused. The validation sandbox mocks all six powers deterministically, so an organ's generated tests prove its behavior — what it notifies, what it says, what it schedules — offline, before you ever approve it.
-
-**The builder knows its hands.** When your sentence implies powers, the builder's prompt carries the exact API contract and a worked example; the model declares the powers it needs, writes code that uses them, and writes tests against the sandbox's recorded outputs. Say the sentence. Approve the card. Own the tool.
-
----
-
-## Phase 20 — Initiative
-
-**Phase 20 — shipped.**
-
-Until now LOOM built only what you asked. It waited. A computer that builds *itself for you* shouldn't wait — so LOOM began to notice, and to propose.
-
-**Earned, never guessed.** LOOM keeps a private, local ledger of how you actually use it — which decks you visit, what you ask for, how often you open the watch, which markets you check. A deterministic observer — no model call, no cloud — reads that ledger against the salience it has already learned about you. When, and *only* when, the evidence crosses a real threshold, it forms an idea and shows its receipt: *"you opened the BTC floor 6 times. I could notify you when it moves more than 3% in an hour."* If it can't quote what you did, it stays silent — and silence is the common case, by design. This is the opposite of a paperclip that guesses.
-
-**Proposed, then consented.** The idea arrives as one calm card near the orb — the woven mark, the reasoning in plain words, and the powers the organ would ask for, shown up front. Three choices: **weave it**, **not now**, **never**. "Weave it" doesn't do anything special — it drops the sentence into the exact same build pipeline a typed request uses, so the organ still plans, tests, and self-proves in the sandbox, and you still approve its powers on the permission card before it runs. "Not now" buys a day of quiet. "Never" retires that idea forever.
-
-**Governed.** At most one idea a day. One setting silences it completely. Every "never" is remembered. The organs LOOM grows on its own initiative are marked as its own in the timeline. A machine that grows tools for you, only ever with your consent — no wrapper can ship that, because no wrapper builds itself.
-
----
-
-## Phase 21 — Selfhood
-
-**Phase 21 — shipped.**
-
-Until now, one thing was always off-limits: the kernel — the code LOOM itself lives in. Organs were free; the machine's own body was not. This is the flip. **LOOM edits its own source, and it cannot brick itself doing it.**
-
-The whole design is the safety. An edit to LOOM's own kernel passes five walls, in order, and can skip none:
-
-1. **Isolation.** LOOM's model drafts the change, but it is never written to the running code. The core spins up an isolated git worktree and applies it there. The live app is untouched while it's judged.
-2. **Proof.** In that isolation, LOOM runs the *real* compiler and the *real* test suite — `tsc` and `vitest` — over the change. Not a sandbox approximation: the same checks that guard every human commit. If it fails, LOOM's builder reads the compiler's own errors and repairs its edit, then proves it again. If it can't be made to pass, it's abandoned and the live tree never knew.
-3. **Approval.** You see the actual diff — the exact lines, added and removed, in the file LOOM wants to change — under a card that says plainly *LOOM wants to change itself*. You approve or you discard. Always.
-4. **Commit.** Only then does the change touch the live tree, as a git commit to LOOM's own source, with the prior state recorded as the last known good.
-5. **Recovery.** And if a change that passed every wall still somehow breaks the running app, LOOM comes home: on the next start it detects that the last edit never confirmed a healthy boot and rolls itself back to the last good commit, before the suspect code even loads. It cannot strand you.
-
-**It cannot edit its own conscience.** One invariant sits above the rest: LOOM may edit its kernel, but never the machinery that keeps the kernel safe — the validator, the isolation, the recovery boot, the approval gate, or the list of what's protected. That set is carved out and refused in the core, before an edit is ever isolated. A machine that can rewrite itself but not disable its own safety.
-
-This first turn is deliberately bounded — the TypeScript kernel, running from source in dev, where an approved change hot-reloads live in front of you. The Rust core and packaged-app self-rebuilds are the next horizon. But the thing the whole project was named for is now real: a computer that weaves itself into being, and can reach back and reweave the loom.
-
----
-
-## Phase 22 — Marrow
-
-**Phase 22 — shipped.**
-
-Phase 21 gave LOOM its own body to edit. Phase 22 reaches the marrow: **LOOM edits its own Rust core — the native binary it lives inside — behind the same five walls, and with the recovery guarantee restored to full strength despite a hole that only the core can open.**
-
-Editing the core is not like editing the surface, and LOOM says so plainly. Two truths the machine states out loud rather than hiding:
-
-- **It doesn't hot-reload.** A TypeScript change reweaves live; the native binary cannot. So a core edit is validated the *right* way — `cargo check` **and** the full `cargo test` suite, run in the same isolated worktree, honestly taking minutes, not the seconds TypeScript takes — and when you approve it, the card tells you the truth: *changed — restart LOOM to load the core.* No pretend live-reload.
-- **The recovery hole is closed, not accepted.** Phase 21's recovery ran inside the Rust startup itself — fine when the binary can't change, but a core edit that compiles yet panics at boot would run *before* the recovery could. That would strand you, and this project doesn't strand you. So the rollback now lives in two places LOOM can never edit: a guard that runs *before the core is recompiled* on every start, and a check that runs before the first line of the core's own startup. A core edit that somehow passes every wall and still fails to boot heals itself on the next start — the source resets to the last good commit before the compiler ever sees it. Zero manual recovery.
-
-**The conscience grew to match.** With the Rust core now editable, its safety machinery — the validator, the isolation, the recovery guard, the entry point, the dependency manifests — moved from "not a file LOOM edits" to explicitly, permanently refused, enumerated and tested. LOOM can now change the marrow of itself; it still cannot touch the parts that keep it safe.
-
-Scope, honestly: this is dev-mode, where LOOM runs from source with the Rust toolchain present. Packaged-app self-rebuild — swapping a running signed binary — is a deliberate later horizon, not this one. And because validating a core edit means compiling and *running its tests*, that validation executes model-authored code on your machine in a worktree; the walls bound it, but the honest threat model is stated, not glossed.
+## What has shipped
+
+LOOM was built in phases, each a working, tested, reviewed milestone. The roadmap table below is the record; this is the shape of it.
+
+**The engine (Phases 1–6).** A Tauri v2 shell over a Rust core; a resident local model fleet; a git Timeline for everything LOOM makes. The Loom itself: a sandboxed validation gate, a three-round self-repair loop, permission-gated organs, an optional review-before-save wall, and a real-model selftest. The Companion (prompt compiler, the presence, organ editing by sentence, seed organs). The orb and the living dashboard; the `loom.ui` design kit and the glass-window desktop; fully offline whisper + piper voice with push-to-talk; threads of light, the ambient field, ignition, and a DOM-grounded builder.
+
+**Identity (Phase 16).** The woven mark on every surface and `docs/BRAND.md`; the Tapestry — LOOM's own git, organ and build history woven live behind the orb; the Shuttle — a ⌘K palette and voice sharing one drift-proof command catalog, and "what can you do" spoken from it.
+
+**Vigor (Phase 19).** Organs grow hands: powers declared in the manifest, carded in plain language, budgeted, revocable live, mocked deterministically in the sandbox so the builder's generated tests are grounded. After Rebirth the powers are `timeline · voice · notify · pulse`.
+
+**Initiative (Phase 20).** LOOM proposes an organ unprompted — a local usage observer and a deterministic rules engine that fires only on earned evidence, a calm consented proposal card, rate-limited, silenceable, tombstoned. After Rebirth one archetype remains: a morning brief rooted in the timeline.
+
+**Selfhood and Marrow (Phases 21–22).** LOOM edits its own TypeScript kernel and its own Rust core, in dev mode, behind five walls: isolated-worktree validation with real `tsc`, `vitest`, `cargo check` and `cargo test`; owner diff-approval; commit to source; recovery boot that rolls a bad edit back; and a self-protection invariant enforced in Rust — it cannot edit its own safety machinery. A pre-compile guard and a pre-`main` heal close the gap where a compile-clean core edit panics at startup.
+
+**The Cockpit (Phases 9–15, 17 — excised in 23a).** For a stretch LOOM grew a world behind the orb: a bundled globe deck, a market terminal with its own Rust quote engine, a salience watch, an opt-in cloud builder. It was good work and none of it was the thesis — any wrapper could ship a dashboard. Phase 18 cut the exchange dock; Phase 23a cut the rest. What survived from that era is what only LOOM has: the Tapestry, the Shuttle, the organ powers, initiative, and the chrome design language. The code stays in git history.
+
+**Rebirth (Phase 23).** The packaged LOOM rebuilds itself, offline. It carries its own **genome** — the full git history it was woven from, bundled into the app. **Threading** the loom is a one-time ceremony: LOOM finds the tools already on the machine (git · cargo · rustc · node · npm · cmake · clang · codesign), seeds the genome into its own home, vendors every crate, installs its node modules, and warms a build. That step needs the network once and says so. From then on, with the cable unplugged, a core edit travels the five walls and then a sixth: **reweave** — assets, core, stage, swap, relaunch — builds a new binary from the genome, shelves the running one as a **generation**, swaps the executable inside the bundle, and relaunches. The **warden** is the previous generation's own binary: it watches the new body's first boot and, if that boot never confirms, brings LOOM home to the last good generation and leaves an honest record. Any kept generation can be returned to from Settings or by voice. The Tapestry weaves each generation as a knot in the cloth.
+
+Round-1 review found that the packaged app had never been built or launched on
+this branch — it failed to compile, and once it compiled it died at startup on a
+missing library, in dev as well. Both are fixed and verified; the app builds,
+bundles, and runs. **The lesson is written into the house rhythm: build it and
+launch it before calling it shipped.**
+
+What CI proves, against fakes: tool discovery and drift, the ceremony's steps and
+resumption, the swap plan as a pure enumerable list, the warden's decision table
+against a faked world, the ledger never pruning a live body, the sentinel's
+ownership rule, the protected set by enumeration, and that no validation argv
+reaches for `npx`. Every cargo argv the code composes carries `--offline`; the
+one deliberate exception is threading's `cargo vendor`, which is one of the two
+steps allowed to touch the network.
+
+**What has actually been run, and what has not.** From a clean clone on a machine
+with no prior LOOM build: `npm ci`, the full test suite, `cargo test` with a cold
+crate registry, `npm run tauri build`, and launching the resulting app — all
+green. Everything downstream of that is unit-tested and **has not been executed
+end to end by anyone.** Threading has never run against real git, npm and cargo;
+no binary has ever been swapped into a bundle; the warden has never been spawned
+as a process; no generation has ever been shelved, returned to, or healed. The
+packaged body builds and launches; the swap, the warden and the generations
+ledger are proven against mocks. Doing it for real is one ceremony: build, launch,
+thread with the network on, unplug, ask for a core change, approve, reweave, and
+watch LOOM come back as its next generation.
+
+Honest residuals: threading needs the network once, and the speech archive it
+fetches lands in a macOS cache LOOM does not own — if the system purges it,
+offline reweaving stops until the network returns; ad-hoc re-signing may make
+macOS ask for the microphone again; a generation that boots and paints is
+confirmed even if it misbehaves later — boot health is the wall, and Generations
+is the way back; loomhome is several gigabytes (vendor + warm build) and Settings
+shows the number; the swap is macOS-only in this generation.
+
+**Rebirth (Phase 23a).** The second excision. Four decks, the watch, the market engine, the cloud override, and every phrase, setting, power, and Rust command that served them are gone — migration-clean, tests green at every commit. One brain: the local fleet.
 
 ---
 
@@ -401,6 +184,8 @@ ollama pull qwen3-coder:30b-a3b-q4_K_M && ollama pull gpt-oss:20b && ollama pull
 npm run check && npm run tauri dev
 ```
 
+To package it: `npm run tauri build`, open the app, then say **"thread the loom"** (or Settings → LOOM → THREAD THE LOOM). That needs the network once. After it, unplug and say *"give yourself …"* — approve the diff, then *"reweave yourself"*, and LOOM returns as its next generation.
+
 Type into LOOM — *"Build an organ that tracks my daily water intake with a goal and a progress bar."* — and press **Enter**. Watch it write, validate, repair if needed, and commit; approve the permission card and your new organ is alive.
 
 ---
@@ -418,21 +203,17 @@ Built in phases, each a working, tested, reviewed milestone.
 | **4.5 · The Atelier** | loom.ui design kit — organs beautiful by construction · OS desktop: glass windows + dock | **shipped** |
 | **5 · Voice** | offline whisper + piper voices · hold-the-orb / Space push-to-talk · spoken replies · Settings organ | **shipped** |
 | **6 · Vitality** | threads of light · ambient field · ignition · kit v2 (hero/spark/section) · DOM-grounded builder · first-run greeting | **shipped** |
-| **9 · The Cockpit (Stage 1)** | deck layer · bundled AUSPEX globe · voice command of the world · cloud-override builder (`claude-opus-4-8`, opt-in) | **shipped** |
-| **10 · The Cockpit (Stage 2)** | salience engine · live world sensors (AUSPEX stories + USGS quakes) · watchlist + engagement · living constellation · watch panel · voice briefings · deck origin isolation (prod custom protocol) | **shipped** |
-| **11 · The Cockpit (Stage 3)** | chrome design language · hardening (error boundaries, LOOM-voice failure copy) · Terminal deck (live tape / indices / movers / macro + finance wire) | **shipped** |
-| **12 · The Cockpit (Stage 4a)** | ownership: organ delete + tombstones · reset-to-defaults · persistence (watchOpen, minimized set) · constellation off-by-default · interact-by-default · deck-mode legibility · orb transparent-mode over decks | **shipped** |
-| **13 · The Cockpit (Stage 4b)** | EMBER failsafe deck · AGORA exchange dock · deckserve generalized to all decks · five decks total | **shipped** |
-| **14 · The Cockpit (Stage 5)** | LOOM-owned Rust quote proxy (desktop never touches third-party) · globe fly-to on briefings and locate · salience learns from owner behavior (transparent local weights) · AGORA engine health strip | **shipped** |
-| **15 · The Cockpit (Stage 6)** | command: LOOM starts/stops AGORA itself (managed child process, validated spawn, exit-kill) · learned-weights inspection + CLEAR LEARNING · whisper log silence · warning-free build | **shipped** |
+| **9–15 · The Cockpit** | decks (globe · terminal · EMBER · AGORA) · salience watch · cloud-override builder · market proxy · chrome design language · ownership | excised (18, 23a) |
 | **16 · Identity** | the brand system (woven mark on every surface, BRAND.md) · the Tapestry (constellation removed; LOOM's history woven live behind the orb) · the Shuttle (⌘K palette + voice sharing one drift-proof command catalog, "what can you do") | **shipped** |
-| **17 · Depth** | the market engine (typed keyless sources: Yahoo UA-fixed · Coinbase Exchange · Frankfurter; 429 root cause dead) · Terminal depth (editable watchlist, symbol detail charts, crypto + FX strips, per-source health) · AGORA's native floor (order-book ladder, trades tape, launch strip) | **shipped** |
+| **17 · Depth** | the keyless market engine and Terminal depth | excised (23a) |
 | **18 · Excision** | AGORA removed entirely (spawn subsystem, deck, settings, voice — migration-clean) · the floor folds into the Terminal as the crypto detail overlay · four decks | **shipped** |
-| **19 · Vigor** | organs grow hands: six real powers (market · watch · timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
+| **19 · Vigor** | organs grow hands: real powers (after Rebirth: timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
 | **20 · Initiative** | LOOM proposes organs unprompted — a local usage observer + a deterministic rules engine that only fires on earned evidence · a calm consented proposal card (weave it / not now / never) whose "weave it" flows into the normal build pipeline · rate-limited, silenceable, tombstoned | **shipped** |
 | **21 · Selfhood** | LOOM edits its own TypeScript kernel behind five walls — isolated-worktree validation (real tsc + vitest) · owner diff-approval · commit to source + hot-reload · recovery boot that rolls back a bad edit · a self-protection invariant (it cannot edit its own safety machinery) | **shipped** |
 | **22 · Marrow** | LOOM edits its own Rust core (dev-mode) — same five walls, `cargo check` + `cargo test` validation · honest "restart to load" (no hot-reload) · the recovery gap closed by a pre-compile guard + pre-`main` rollback so a bad core edit self-heals · self-protection extended over the whole Rust safety core + Cargo manifests | **shipped** |
-| **later** | Packaged self-rebuild (binary swap + toolchain distribution) · EMBER Forge-in-deck · LoRA fine-tune bridge · salience place-field · timeline-aware organs · embedding-based intent classifier · KEEL · PRISM · SIGNET | vision |
+| **23a · Rebirth** | the second excision — the Cockpit is cut in full (decks · watch · market · cloud · their settings, powers, phrases and Rust commands) · one brain (local) · initiative re-rooted in the timeline | **shipped** |
+| **23 · Rebirth** | packaged self-rebuild, offline — the genome bundled into the app · threading (one-time tool discovery, vendor, warm build) · reweave (assets · core · stage · swap · relaunch) · generations ledger with return · the warden (the previous generation guards the next one's first boot and heals) · Settings → LOOM · reweave card · Tapestry generation knots · self-protection over the whole rebirth machinery | **shipped** |
+| **later** | toolchain distribution (rustup/node inside the app) · Windows/Linux swap · Developer-ID signing · sandboxed validation · timeline-aware organs · embedding-based intent classifier · real organ isolation · KEEL · PRISM · SIGNET | vision |
 
 Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
 

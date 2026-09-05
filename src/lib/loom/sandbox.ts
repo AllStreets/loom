@@ -51,60 +51,67 @@ const freshLoom = () => {
     try { fn(); } catch (e) { /* a pulse must never crash the harness */ }
     return function() {};
   };
-  var FX_RATES = { EUR: 0.92, GBP: 0.79, JPY: 155.3, CHF: 0.88 };
-  var WATCH_TOP = [
-    { title: "BTC slides 5% in the hour", source: "auspex", score: 0.92, reasons: ["watchlist: bitcoin"] },
-    { title: "M6.1 quake off Honshu", source: "quakes", score: 0.74, reasons: ["magnitude 6.1"] },
-    { title: "Launch window opens at Boca Chica", source: "auspex", score: 0.55, reasons: ["category: launch"] },
-  ];
-  var WATCHLIST = [{ kind: "topic", value: "bitcoin" }, { kind: "place", value: "tokyo" }];
   var COMMITS = [
     { sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", message: "feat(organ): first weave" },
     { sha: "b2c3d4e5f60718293a4b5c6d7e8f901234567890", message: "fix(organ): calm the edge case" },
   ];
+  // self — a threaded dev body whose generation matches its genome: no
+  // ceremony to run, nothing new to weave, an empty shelf. Every tool present.
+  // The three ACTS only ever ask: in the real shell they dispatch a
+  // loom-body-request and chrome renders the owner's consent card. There is no
+  // owner in a sandbox, so the mock plays a standing yes and records what was
+  // asked — selfApi.asked — which is what an organ's tests can assert. The
+  // one thing they can never do here (as in the shell) is move the body.
+  var SELF_SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+  var SELF_TOOLS = ["git", "cargo", "rustc", "node", "npm", "cmake", "clang", "codesign"];
+  var selfApi = { returned: [], asked: [] };
+  selfApi.identity = async function() {
+    // canSwap is part of Identity in the shell, so it is part of it here: an
+    // organ's tests read a boolean, not undefined. A dev body never swaps.
+    // genomeHead is the genome's HEAD; here it matches the body, which is
+    // what "nothing new to weave" below reports.
+    return { mode: "dev", genomeSha: SELF_SHA, genomeHead: SELF_SHA, generation: SELF_SHA, threaded: true, loomhome: "/sandbox/loom", loomhomeBytes: 0, canSwap: false };
+  };
+  selfApi.threads = async function() {
+    return {
+      threaded: true,
+      tools: SELF_TOOLS.map(function(n) { return { name: n, path: "/usr/bin/" + n, version: n + " 1.0.0", requiredFor: "everything", install: "brew install " + n }; }),
+      missing: [],
+      drifted: [],
+      steps: { seed: true, deps: true, vendor: true, warm: true, register: true },
+      needsNetwork: false,
+    };
+  };
+  selfApi.generations = async function() { return []; };
+  selfApi.thread = async function(onEvent) {
+    selfApi.asked.push({ kind: "thread" });
+    if (onEvent) onEvent({ step: "done", detail: "the loom is threaded", tail: [] });
+  };
+  selfApi.reweave = async function() {
+    selfApi.asked.push({ kind: "reweave" });
+    return { ok: false, reason: "nothing new to weave — the body already matches the genome" };
+  };
+  selfApi.returnTo = async function(sha) {
+    selfApi.asked.push({ kind: "return", sha: String(sha) });
+    selfApi.returned.push(String(sha));
+  };
+  // The one settings key the body owns: armed through this power, never
+  // through loom.settings.set. Reads still come back through settings.get.
+  selfApi.setAutoReweave = async function(on) {
+    selfApi.asked.push({ kind: "autoReweave", on: !!on });
+    settingsMap.set("kernel.autoReweave", on ? "on" : "off");
+  };
   return {
     storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },
     model: { chat: async () => "(model unavailable in sandbox)" },
     ui: makeUi(tokens),
     notify: notifyFn,
-    market: {
-      chart: async function(symbol) {
-        // name is string|null in core.ts — the mock returns the realistic null
-        // case so generated organs learn to guard it before rendering.
-        return { symbol: String(symbol), name: null, price: 512.34, prevClose: 508.1, open: 509.0, high: 514.2, low: 506.8, volume: 1234567, closes: [508.1, 509.4, 511.0, 512.34], timestamps: [1755820800, 1755820860, 1755820920, 1755820980] };
-      },
-      crypto: async function(product) {
-        // changePct24h stays a deterministic -5.0 (the few-shot's tests depend
-        // on it) but is number|null in core.ts — live organs must null-guard.
-        return { product: String(product), price: 61250.0, bid: 61249.5, ask: 61250.5, open24h: 64473.68, high24h: 64980.0, low24h: 60900.0, volume24h: 8421.5, changePct24h: -5.0, time: "2026-08-22T12:00:00Z" };
-      },
-      book: async function(product, depth) {
-        var d = Math.max(1, Math.min(depth || 10, 4));
-        var bids = [{ price: 61249.5, size: 0.8 }, { price: 61249.0, size: 1.2 }, { price: 61248.5, size: 0.4 }, { price: 61248.0, size: 2.1 }];
-        var asks = [{ price: 61250.5, size: 0.6 }, { price: 61251.0, size: 2.0 }, { price: 61251.5, size: 0.9 }, { price: 61252.0, size: 1.5 }];
-        return { product: String(product), bids: bids.slice(0, d), asks: asks.slice(0, d) };
-      },
-      trades: async function(product) {
-        return [
-          { tradeId: 101, time: "2026-08-22T12:00:00Z", price: 61250.0, size: 0.05, side: "buy" },
-          { tradeId: 100, time: "2026-08-22T11:59:58Z", price: 61251.0, size: 0.12, side: "sell" },
-        ];
-      },
-      fx: async function(base, symbols) {
-        var rates = {};
-        (symbols || []).forEach(function(s) { rates[s] = FX_RATES[s] !== undefined ? FX_RATES[s] : 1.0; });
-        return { base: String(base), date: "2026-08-22", rates: rates };
-      },
-    },
-    watch: {
-      top: function(n) { return WATCH_TOP.slice(0, n === undefined ? 10 : n).map(function(r) { return { title: r.title, source: r.source, score: r.score, reasons: r.reasons.slice() }; }); },
-      list: function() { return WATCHLIST.map(function(e) { return { kind: e.kind, value: e.value }; }); },
-    },
     timeline: {
       log: async function(n) { return COMMITS.slice(0, n === undefined ? 20 : n); },
     },
     voice: voiceApi,
     pulse: pulseApi,
+    self: selfApi,
     settings: {
       get: function(k) { return settingsMap.has(k) ? settingsMap.get(k) : ""; },
       set: function(k, v) { settingsMap.set(k, v); },
@@ -114,7 +121,7 @@ const freshLoom = () => {
       voiceStatus: async function() { return { ready: false, whisper: false, voices: [], missing_bytes_hint: null }; },
       setup: async function() {},
       models: async function() {
-        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/;
+        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\\-\\/]*(:[A-Za-z0-9._\\-]+)?$/;
         var DEFS = [
           { role: "builder",   def: "qwen3-coder:30b-a3b-q4_K_M", present: true  },
           { role: "companion", def: "gpt-oss:20b",                 present: true  },
@@ -129,14 +136,11 @@ const freshLoom = () => {
       setModel: async function(role, tag) {
         var validRoles = ["builder", "companion", "rewriter"];
         if (validRoles.indexOf(role) === -1) { return { ok: false, error: "unknown role" }; }
-        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/;
+        var tagRe = /^[A-Za-z0-9][A-Za-z0-9._\\-\\/]*(:[A-Za-z0-9._\\-]+)?$/;
         if (tag !== "" && (!tagRe.test(tag) || tag.length > 128)) { return { ok: false, error: "invalid tag" }; }
         settingsMap.set("model." + role, tag);
         return { ok: true };
       },
-      cloudKeyPresent: async function() { return settingsMap.has("__cloudKey") && !!settingsMap.get("__cloudKey"); },
-      cloudKeySet: async function(key) { settingsMap.set("__cloudKey", key); },
-      cloudKeyClear: async function() { settingsMap.delete("__cloudKey"); },
     },
   };
 };

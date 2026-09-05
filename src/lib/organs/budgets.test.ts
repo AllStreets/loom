@@ -11,64 +11,55 @@ function fixedClock(start = 0) {
 
 describe("POWER_BUDGETS", () => {
   it("declares the three budgeted powers with the spec limits", () => {
-    expect(POWER_BUDGETS.market).toEqual({ capacity: 30, windowMs: 60_000 });
+    expect(Object.keys(POWER_BUDGETS).sort()).toEqual(["notify", "self", "voice"]);
     expect(POWER_BUDGETS.voice).toEqual({ capacity: 1, windowMs: 30_000 });
     expect(POWER_BUDGETS.notify).toEqual({ capacity: 6, windowMs: 3_600_000 });
+    // self actions (thread · reweave · returnTo) each close or rebuild LOOM —
+    // a runaway organ gets three a minute, not a loop.
+    expect(POWER_BUDGETS.self).toEqual({ capacity: 3, windowMs: 60_000 });
   });
 });
 
 describe("makeLedger", () => {
-  it("allows market up to 30 takes in a burst, then throttles", () => {
+  it("throttles a spent bucket and reports a positive retryMs", () => {
     const { clock } = fixedClock();
     const ledger = makeLedger(clock);
-    for (let i = 0; i < 30; i++) {
-      expect(ledger.take("btc", "market").ok).toBe(true);
-    }
-    const r = ledger.take("btc", "market");
+    for (let i = 0; i < 6; i++) expect(ledger.take("nudge", "notify").ok).toBe(true);
+    const r = ledger.take("nudge", "notify");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.retryMs).toBeGreaterThan(0);
-  });
-
-  it("market refills at capacity/window — one token back after 2s", () => {
-    const { clock, advance } = fixedClock();
-    const ledger = makeLedger(clock);
-    for (let i = 0; i < 30; i++) ledger.take("btc", "market");
-    expect(ledger.take("btc", "market").ok).toBe(false);
-    advance(2_000); // 30/60s = 1 token per 2s
-    expect(ledger.take("btc", "market").ok).toBe(true);
-    expect(ledger.take("btc", "market").ok).toBe(false);
   });
 
   it("voice allows exactly 1 per 30s", () => {
     const { clock, advance } = fixedClock();
     const ledger = makeLedger(clock);
-    expect(ledger.take("btc", "voice").ok).toBe(true);
-    expect(ledger.take("btc", "voice").ok).toBe(false);
+    expect(ledger.take("nudge", "voice").ok).toBe(true);
+    expect(ledger.take("nudge", "voice").ok).toBe(false);
     advance(29_999);
-    expect(ledger.take("btc", "voice").ok).toBe(false);
+    expect(ledger.take("nudge", "voice").ok).toBe(false);
     advance(1);
-    expect(ledger.take("btc", "voice").ok).toBe(true);
+    expect(ledger.take("nudge", "voice").ok).toBe(true);
   });
 
   it("notify allows 6 per hour", () => {
     const { clock, advance } = fixedClock();
     const ledger = makeLedger(clock);
-    for (let i = 0; i < 6; i++) expect(ledger.take("btc", "notify").ok).toBe(true);
-    expect(ledger.take("btc", "notify").ok).toBe(false);
+    for (let i = 0; i < 6; i++) expect(ledger.take("nudge", "notify").ok).toBe(true);
+    expect(ledger.take("nudge", "notify").ok).toBe(false);
     advance(600_000); // one token per 10 minutes
-    expect(ledger.take("btc", "notify").ok).toBe(true);
+    expect(ledger.take("nudge", "notify").ok).toBe(true);
   });
 
   it("reports retryMs matching the actual refill time", () => {
     const { clock, advance } = fixedClock();
     const ledger = makeLedger(clock);
-    ledger.take("btc", "voice");
-    const r = ledger.take("btc", "voice");
+    ledger.take("nudge", "voice");
+    const r = ledger.take("nudge", "voice");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.retryMs).toBe(30_000);
       advance(r.retryMs);
-      expect(ledger.take("btc", "voice").ok).toBe(true);
+      expect(ledger.take("nudge", "voice").ok).toBe(true);
     }
   });
 

@@ -8,94 +8,6 @@ import { files as noteFiles } from "../organs/seeds/notes";
 import { recordExperience, retrieveExemplars } from "../lib/loom/experience";
 import type { BuildRecord } from "../lib/loom/experience";
 
-// ── Cloud builder contract selftest ───────────────────────────────────────────
-// Env-gated: only runs when ANTHROPIC_API_KEY is present in the environment.
-// When absent, prints a VISIBLE skip notice (not silently passing).
-
-describe("cloud-builder selftest", { timeout: 60_000 }, () => {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-
-  it("cloud path: ANTHROPIC_API_KEY gate", async () => {
-    if (!apiKey) {
-      console.info(
-        "\n[cloud-selftest] SKIP — ANTHROPIC_API_KEY not set in environment.\n" +
-        "  To run the cloud selftest: ANTHROPIC_API_KEY=sk-ant-... npm run selftest\n"
-      );
-      // Visible skip — NOT a silent pass; we use a special marker so CI logs show it clearly
-      console.warn("[cloud-selftest] SKIPPED (no key) — this is expected in local-only mode");
-      return; // test passes but cloud was not exercised
-    }
-
-    // Mirror cloud.rs request shape exactly (same model, headers, endpoint)
-    const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
-    const ANTHROPIC_MODEL = "claude-opus-4-8";
-    const ANTHROPIC_VERSION = "2023-06-01";
-
-    const FIXED_MANIFEST = JSON.stringify({
-      id: "cloud-test-organ",
-      name: "Cloud Test",
-      description: "A minimal organ built via cloud.",
-      version: 1,
-      permissions: ["storage"],
-    });
-
-    const system = organSystemPrompt("manifest");
-    const user = "Build a minimal counter organ.";
-
-    // Make the Anthropic request exactly as cloud.rs does
-    const body = JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 2048,
-      system,
-      messages: [{ role: "user", content: user }],
-      // NO thinking param (per spec)
-    });
-
-    const resp = await fetch(ANTHROPIC_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_VERSION,
-        "content-type": "application/json",
-      },
-      body,
-      signal: AbortSignal.timeout(45_000),
-    });
-
-    console.info(`[cloud-selftest] HTTP status: ${resp.status}`);
-    expect(resp.status, `Anthropic returned ${resp.status} — check the API key`).toBe(200);
-
-    const json = await resp.json() as {
-      model: string;
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    // Validate response shape mirrors what cloud.rs expects
-    expect(Array.isArray(json.content), "response must have a content array").toBe(true);
-    const textBlocks = json.content.filter((b) => b.type === "text");
-    expect(textBlocks.length, "at least one text content block required").toBeGreaterThan(0);
-
-    const responseText = textBlocks.map((b) => b.text ?? "").join("");
-    expect(responseText.length, "response text must be non-empty").toBeGreaterThan(0);
-
-    // Validate the model matches our constant
-    expect(json.model, "response model must match claude-opus-4-8").toContain("claude-opus-4-8");
-
-    // Try parsing as a manifest
-    const code = extractCode(responseText);
-    const result = manifestGuard(code);
-
-    console.info(`[cloud-selftest] response length: ${responseText.length} chars`);
-    console.info(`[cloud-selftest] manifest guard: ${result.ok ? "PASS" : "FAIL — " + (result as { ok: false; error: string }).error}`);
-    console.info(`[cloud-selftest] brain: cloud, model: ${ANTHROPIC_MODEL}`);
-
-    // Gate pass assertion
-    expect(result.ok, `cloud-built manifest failed gate: ${!result.ok ? (result as { ok: false; error: string }).error : ""}`).toBe(true);
-    if (result.ok) {
-      console.info(`[cloud-selftest] organ id: ${result.manifest.id} — brain:cloud recorded`);
-    }
-  });
-});
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -625,20 +537,20 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
     console.info(`[build-dashboardy-organ] ${passed}/${REPS} passed`);
   });
 
-  it("build-powered-organ: 3 reps — BTC drop alert reaches for pulse+market+notify", async () => {
-    // The one powered selftest case (spec: pulse+market+notify), modeled on the
+  it("build-powered-organ: 3 reps — stand-up reminder reaches for pulse+notify+voice", async () => {
+    // The one powered selftest case (spec: pulse+notify+voice), modeled on the
     // POWERS few-shot. The same fixture is proven offline by the gate tests in
     // prompts.test.ts — here the real model must use its new hands.
     const m = model ?? (await pickBuilder());
-    const request = "Alert me when BTC drops 5% in a day — check every minute and notify me.";
+    const request = "Remind me to stand up every hour — notify me and say it aloud.";
     const system = organSystemPrompt("code", { request });
     // Offline sanity: this request must summon the POWERS block + few-shot
     expect(system).toContain("loom.pulse.every(ms, fn)");
     expect(system).toContain(POWERS_FEWSHOT.manifest);
 
     const POWERED_MANIFEST = JSON.stringify({
-      id: "btc-alert", name: "BTC Alert", description: "Alerts on a 5% BTC drop.",
-      version: 1, permissions: ["storage"], powers: ["market", "notify", "pulse"],
+      id: "stand-up", name: "Stand Up", description: "Hourly reminder to stand.",
+      version: 1, permissions: ["storage"], powers: ["notify", "pulse", "voice"],
     });
     const user = `Request: ${request}\n\nManifest:\n${POWERED_MANIFEST}`;
 
@@ -652,7 +564,7 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
       const hasExportDefault = code.includes("export default");
       const hasRender = code.includes("render");
       const usesPulse = code.includes("pulse.every");
-      const usesMarket = code.includes("market.crypto") || code.includes("market.chart");
+      const usesVoice = code.includes("voice.say");
       const usesNotify = /\bnotify\(/.test(code);
 
       const stripped = code
@@ -667,13 +579,13 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
         fnErr = String(e);
       }
 
-      const ok = hasExportDefault && hasRender && fnOk && usesPulse && usesMarket && usesNotify;
+      const ok = hasExportDefault && hasRender && fnOk && usesPulse && usesVoice && usesNotify;
       if (ok) {
         passed++;
         console.info(`[build-powered-organ] rep ${rep} PASS (${ms}ms)`);
       } else {
         console.info(
-          `[build-powered-organ] rep ${rep} FAIL (${ms}ms) exportDefault=${hasExportDefault} render=${hasRender} fnOk=${fnOk} pulse=${usesPulse} market=${usesMarket} notify=${usesNotify} fnErr=${fnErr}`
+          `[build-powered-organ] rep ${rep} FAIL (${ms}ms) exportDefault=${hasExportDefault} render=${hasRender} fnOk=${fnOk} pulse=${usesPulse} voice=${usesVoice} notify=${usesNotify} fnErr=${fnErr}`
         );
         console.info(`  code snippet:\n${code.slice(0, 400)}`);
       }
@@ -682,7 +594,7 @@ describe.skipIf(!process.env.SELFTEST)("loom selftest", { timeout: 300_000 }, ()
       expect(hasRender, `rep ${rep}: missing 'render'`).toBe(true);
       expect(fnOk, `rep ${rep}: new Function threw: ${fnErr}`).toBe(true);
       expect(usesPulse, `rep ${rep}: organ does not use loom.pulse.every`).toBe(true);
-      expect(usesMarket, `rep ${rep}: organ does not read the market power`).toBe(true);
+      expect(usesVoice, `rep ${rep}: organ does not speak with the voice power`).toBe(true);
       expect(usesNotify, `rep ${rep}: organ never notifies`).toBe(true);
     }
     console.info(`[build-powered-organ] ${passed}/${REPS} passed`);

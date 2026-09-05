@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { purgeOrganStorage, addOrganTombstone, makeLoomApi, clearOrganPulses, organPulseCount, PULSE_MIN_MS, PULSE_MAX_PER_ORGAN } from "./api";
 import { makeLedger } from "./budgets";
 import { isLiveNotifyToken } from "./notifyGate";
-import type { ScoredEvent } from "../watch/types";
+import { BodyRequestDeclined, LINE_DECLINED, LINE_NO_CHROME } from "./bodyGate";
 
 beforeEach(() => { localStorage.clear(); });
 afterEach(() => { localStorage.clear(); vi.useRealTimers(); });
@@ -51,79 +51,29 @@ describe("addOrganTombstone", () => {
   });
 });
 
-// ── The six powers ─────────────────────────────────────────────────────────────
+// ── The four powers ────────────────────────────────────────────────────────────
 
-const SCORED: ScoredEvent[] = [
-  { id: "e1", title: "BTC slides 5%", source: "auspex", category: "finance", publishedAt: "2026-08-22T00:00:00Z", score: 0.9, reasons: ["watchlist: bitcoin"] },
-  { id: "e2", title: "M6.1 quake", source: "quakes", category: "seismic", publishedAt: "2026-08-22T00:01:00Z", score: 0.7, reasons: ["magnitude"] },
-];
-
-describe("power: market", () => {
-  it("every market call throws without the market grant", async () => {
-    const api = makeLoomApi("x", [], { ledger: makeLedger(() => 0) });
-    await expect(api.market.chart("SPY")).rejects.toThrow(/permission "market" not granted/);
-    await expect(api.market.crypto("BTC-USD")).rejects.toThrow(/not granted/);
-    await expect(api.market.book("BTC-USD")).rejects.toThrow(/not granted/);
-    await expect(api.market.trades("BTC-USD")).rejects.toThrow(/not granted/);
-    await expect(api.market.fx("USD", ["EUR"])).rejects.toThrow(/not granted/);
+describe("retired powers (Rebirth)", () => {
+  it("the api object carries no market or watch surface at all", () => {
+    const api = makeLoomApi("x", ["market", "watch"]) as unknown as Record<string, unknown>;
+    expect(api.market).toBeUndefined();
+    expect(api.watch).toBeUndefined();
   });
 
-  it("wraps the core market fns thinly when granted", async () => {
-    const marketChart = vi.fn().mockResolvedValue({ symbol: "SPY", price: 500 });
-    const marketCrypto = vi.fn().mockResolvedValue({ product: "BTC-USD", price: 50000 });
-    const marketBook = vi.fn().mockResolvedValue({ product: "BTC-USD", bids: [], asks: [] });
-    const marketTrades = vi.fn().mockResolvedValue([]);
-    const marketFx = vi.fn().mockResolvedValue({ base: "USD", date: "2026-08-22", rates: { EUR: 0.9 } });
-    const api = makeLoomApi("x", ["market"], { marketChart, marketCrypto, marketBook, marketTrades, marketFx, ledger: makeLedger(() => 0) });
-    await expect(api.market.chart("SPY")).resolves.toMatchObject({ symbol: "SPY" });
-    await api.market.crypto("BTC-USD");
-    await api.market.book("BTC-USD");
-    await api.market.trades("BTC-USD");
-    await api.market.fx("USD", ["EUR"]);
-    expect(marketChart).toHaveBeenCalledWith("SPY");
-    expect(marketBook).toHaveBeenCalledWith("BTC-USD", 10); // default depth
-  });
-
-  it("throttles after 30 calls in a minute and dispatches loom-throttled", async () => {
-    const marketCrypto = vi.fn().mockResolvedValue({ product: "BTC-USD", price: 1 });
-    const api = makeLoomApi("btc", ["market"], { marketCrypto, ledger: makeLedger(() => 0) });
+  it("throttles notify after 6 calls in an hour and dispatches loom-throttled", () => {
+    const api = makeLoomApi("nudge", ["notify"], { ledger: makeLedger(() => 0) });
     const events: unknown[] = [];
     const onThrottle = (e: Event) => events.push((e as CustomEvent).detail);
     window.addEventListener("loom-throttled", onThrottle);
     try {
-      for (let i = 0; i < 30; i++) await api.market.crypto("BTC-USD");
-      await expect(api.market.crypto("BTC-USD")).rejects.toThrow(/"market" budget spent/);
+      for (let i = 0; i < 6; i++) api.notify("stand", "up");
+      expect(() => api.notify("stand", "up")).toThrow(/"notify" budget spent/);
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ id: "btc", power: "market" });
+      expect(events[0]).toMatchObject({ id: "nudge", power: "notify" });
       expect((events[0] as { retryMs: number }).retryMs).toBeGreaterThan(0);
-      expect(marketCrypto).toHaveBeenCalledTimes(30); // the 31st never reached the engine
     } finally {
       window.removeEventListener("loom-throttled", onThrottle);
     }
-  });
-});
-
-describe("power: watch", () => {
-  it("throws without the watch grant", () => {
-    const api = makeLoomApi("x", []);
-    expect(() => api.watch.top()).toThrow(/permission "watch" not granted/);
-    expect(() => api.watch.list()).toThrow(/not granted/);
-  });
-
-  it("top(n) returns the ranked title/source/score/reasons shape only", () => {
-    const api = makeLoomApi("x", ["watch"], { getSalient: (k = 10) => SCORED.slice(0, k) });
-    const top = api.watch.top(1);
-    expect(top).toEqual([{ title: "BTC slides 5%", source: "auspex", score: 0.9, reasons: ["watchlist: bitcoin"] }]);
-    // no leakage of ids/coords/urls
-    expect(Object.keys(top[0]).sort()).toEqual(["reasons", "score", "source", "title"]);
-  });
-
-  it("list() returns the watchlist as copies", () => {
-    const entries = [{ kind: "topic" as const, value: "bitcoin" }];
-    const api = makeLoomApi("x", ["watch"], { getWatchlist: () => entries });
-    const list = api.watch.list();
-    expect(list).toEqual(entries);
-    expect(list[0]).not.toBe(entries[0]); // organ mutation never reaches the store
   });
 });
 
@@ -327,12 +277,12 @@ describe("power: pulse", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
-  it("revocation mid-flight: splicing the granted array makes the next call throw", () => {
-    const granted = ["watch"];
-    const api = makeLoomApi("x", granted, { getSalient: (k = 10) => SCORED.slice(0, k) });
-    expect(api.watch.top(1)).toHaveLength(1);
-    granted.splice(granted.indexOf("watch"), 1); // what the POWERS row revoke does
-    expect(() => api.watch.top(1)).toThrow(/permission "watch" not granted/);
+  it("revocation mid-flight: splicing the granted array makes the next call throw", async () => {
+    const granted = ["timeline"];
+    const api = makeLoomApi("x", granted, { timelineLog: async () => [{ sha: "a", message: "m" }] });
+    await expect(api.timeline.log(1)).resolves.toHaveLength(1);
+    granted.splice(granted.indexOf("timeline"), 1); // what the POWERS row revoke does
+    await expect(api.timeline.log(1)).rejects.toThrow(/permission "timeline" not granted/);
   });
 });
 
@@ -350,5 +300,188 @@ describe("makeLoomApi settings.resetAll", () => {
     // location.reload will throw in jsdom — catch it
     try { await api.settings.resetAll(); } catch { /* jsdom throws on location.reload */ }
     expect(called).toBe(true);
+  });
+});
+
+/**
+ * Round-2 finding 6: `kernel.autoReweave` decides whether an approved core edit
+ * weaves the body with no card at all. It was writable by anything holding the
+ * generic `settings` grant — a body change armed from behind an innocuous
+ * permission. It belongs to the body, so it sits behind the `self` power, whose
+ * grant card is the one that says this organ may ask about LOOM's body.
+ */
+describe("kernel.autoReweave is not a plain setting", () => {
+  it("the settings power cannot write it", () => {
+    const api = makeLoomApi("notes", ["settings"]);
+    expect(() => api.settings.set("kernel.autoReweave", "on")).toThrow(
+      "kernel.autoReweave arms a body change — it lives behind the self power, not settings",
+    );
+    expect(localStorage.getItem("kernel.autoReweave")).toBeNull();
+  });
+
+  it("the settings power still reads it, and still writes every other key", () => {
+    const api = makeLoomApi("notes", ["settings"]);
+    expect(api.settings.get("kernel.autoReweave")).toBe("off");
+    api.settings.set("voice.speakReplies", "never");
+    expect(api.settings.get("voice.speakReplies")).toBe("never");
+  });
+
+  it("the self power arms and disarms it", async () => {
+    const api = makeLoomApi("settings", ["settings", "self"]);
+    await api.self.setAutoReweave(true);
+    expect(api.settings.get("kernel.autoReweave")).toBe("on");
+    await api.self.setAutoReweave(false);
+    expect(api.settings.get("kernel.autoReweave")).toBe("off");
+  });
+
+  it("without the self grant nothing can arm it", async () => {
+    const api = makeLoomApi("notes", ["settings"]);
+    await expect(api.self.setAutoReweave(true)).rejects.toThrow(/permission "self" not granted/);
+    expect(localStorage.getItem("kernel.autoReweave")).toBeNull();
+  });
+});
+
+// ── power: self (Rebirth — Settings → LOOM) ────────────────────────────────────
+
+const IDENTITY = {
+  mode: "packaged" as const,
+  genomeSha: "a".repeat(40),
+  generation: "b".repeat(40),
+  threaded: true,
+  loomhome: "/home/loom",
+  loomhomeBytes: 1_000,
+};
+
+type TEvent = { step: string; detail: string; tail: string[] };
+
+describe("power: self", () => {
+  it("every read and action throws without the self grant", async () => {
+    const api = makeLoomApi("x", ["settings"]);
+    await expect(api.self.identity()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.threads()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.generations()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.thread()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.reweave()).rejects.toThrow(/permission "self" not granted/);
+    await expect(api.self.returnTo("abc")).rejects.toThrow(/permission "self" not granted/);
+  });
+
+  it("identity / threads / generations read through their deps", async () => {
+    const identity = vi.fn().mockResolvedValue(IDENTITY);
+    const threadStatus = vi.fn().mockResolvedValue({ threaded: true, tools: [], missing: [], drifted: [], steps: { seed: true, deps: true, vendor: true, warm: true, register: true }, needsNetwork: false });
+    const generationsList = vi.fn().mockResolvedValue([]);
+    const api = makeLoomApi("x", ["self"], { identity, threadStatus, generationsList });
+    await expect(api.self.identity()).resolves.toEqual(IDENTITY);
+    await expect(api.self.threads()).resolves.toMatchObject({ threaded: true });
+    await expect(api.self.generations()).resolves.toEqual([]);
+  });
+
+  it("thread() listens before it ASKS, streams loom-thread events, resolves on done, and unlistens", async () => {
+    const order: string[] = [];
+    let emit: ((e: TEvent) => void) | null = null;
+    const unlisten = vi.fn(() => { order.push("unlisten"); });
+    const listenThread = vi.fn(async (cb: (e: TEvent) => void) => { order.push("listen"); emit = cb; return unlisten; });
+    const requestBody = vi.fn(async () => { order.push("ask"); });
+    const api = makeLoomApi("x", ["self"], { listenThread, requestBody, ledger: makeLedger(() => 0) });
+    const seen: string[] = [];
+    const done = api.self.thread((e) => seen.push(e.step + ":" + e.detail));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(order).toEqual(["listen", "ask"]);
+    expect(requestBody).toHaveBeenCalledWith("thread", "x");
+    emit!({ step: "seed", detail: "cloning the genome", tail: [] });
+    emit!({ step: "done", detail: "the loom is threaded", tail: [] });
+    await expect(done).resolves.toBeUndefined();
+    expect(seen).toEqual(["seed:cloning the genome", "done:the loom is threaded"]);
+    expect(order).toEqual(["listen", "ask", "unlisten"]);
+  });
+
+  it("thread() rejects with the failure detail when the ceremony fails", async () => {
+    let emit: ((e: TEvent) => void) | null = null;
+    const listenThread = vi.fn(async (cb: (e: TEvent) => void) => { emit = cb; return () => {}; });
+    const requestBody = vi.fn(async () => {});
+    const api = makeLoomApi("x", ["self"], { listenThread, requestBody, ledger: makeLedger(() => 0) });
+    const done = api.self.thread();
+    await new Promise((r) => setTimeout(r, 0));
+    emit!({ step: "failed", detail: "threading needs the network once — after that LOOM weaves offline.", tail: [] });
+    await expect(done).rejects.toThrow(/needs the network once/);
+  });
+
+  it("thread() unlistens and rejects when the owner declines", async () => {
+    const unlisten = vi.fn();
+    const listenThread = vi.fn(async () => unlisten);
+    const requestBody = vi.fn(async () => { throw new BodyRequestDeclined(); });
+    const api = makeLoomApi("x", ["self"], { listenThread, requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.thread()).rejects.toThrow(LINE_DECLINED);
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── the body gate: an organ asks, chrome acts (round-1 finding 1) ─────────────
+
+describe("power: self — the three acts only ever ASK", () => {
+  it("reweave() dispatches a body request and never reaches the orchestration", async () => {
+    const requestBody = vi.fn(async () => {});
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).resolves.toEqual({ ok: true });
+    expect(requestBody).toHaveBeenCalledWith("reweave", "notes");
+  });
+
+  it("returnTo(sha) asks with the sha and the organ that asked", async () => {
+    const requestBody = vi.fn(async () => {});
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await api.self.returnTo("c".repeat(40));
+    expect(requestBody).toHaveBeenCalledWith("return", "notes", "c".repeat(40));
+  });
+
+  it("a declined reweave REJECTS with the calm refusal — never a quiet ok", async () => {
+    const requestBody = vi.fn(async () => { throw new BodyRequestDeclined(); });
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).rejects.toThrow(LINE_DECLINED);
+  });
+
+  it("a declined return rejects too", async () => {
+    const requestBody = vi.fn(async () => { throw new BodyRequestDeclined(); });
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.returnTo("abc")).rejects.toThrow(LINE_DECLINED);
+  });
+
+  it("the core's own refusal keeps the StartResult shape Settings reads", async () => {
+    const requestBody = vi.fn(async () => { throw new Error("a weave is already under way"); });
+    const api = makeLoomApi("notes", ["self"], { requestBody, ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).resolves.toEqual({
+      ok: false,
+      reason: "a weave is already under way",
+    });
+  });
+
+  it("with no chrome mounted, the real gate refuses at once rather than hanging", async () => {
+    const api = makeLoomApi("notes", ["self"], { ledger: makeLedger(() => 0) });
+    await expect(api.self.reweave()).resolves.toEqual({ ok: false, reason: LINE_NO_CHROME });
+  });
+
+  it("api.ts holds no path to the orchestration — the ask is the only door the api opens", async () => {
+    // Structural, not behavioural, and NOT proof of a wall: organs share the
+    // shell's realm and can reach the Tauri bridge directly, card or no card
+    // (see the bodyGate docblock). What this pins is narrower and still worth
+    // pinning — the api LOOM hands an organ does not itself import the
+    // orchestration, so the ask stays the only door the API offers. If someone
+    // reintroduces the import this fails, whatever the call site looks like.
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const src = await fs.readFile(path.resolve("src/lib/organs/api.ts"), "utf8");
+    expect(src).not.toMatch(/startReweave/);
+    expect(src).not.toMatch(/returnToGeneration/);
+    expect(src).not.toMatch(/threadLoom/);
+  });
+
+  it("budget: three asks a minute, then the calm budget error", async () => {
+    let now = 0;
+    const requestBody = vi.fn(async () => {});
+    const api = makeLoomApi("x", ["self"], { requestBody, ledger: makeLedger(() => now) });
+    await api.self.returnTo("a");
+    await api.self.reweave();
+    await api.self.returnTo("b");
+    await expect(api.self.reweave()).rejects.toThrow(/"self" budget spent/);
+    now = 60_000;
+    await expect(api.self.reweave()).resolves.toEqual({ ok: true });
   });
 });

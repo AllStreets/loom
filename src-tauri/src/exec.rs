@@ -14,15 +14,37 @@
 //!     `RING_LINES` lines per stream so a runaway build cannot exhaust memory.
 //!   - `#[cfg(unix)]` `process_group(0)` so the child is its own group leader;
 //!     on timeout AND on drop we `kill(-pgid, SIGKILL)` to take the WHOLE tree
-//!     (npx → tsc/vitest grandchildren) down, not just the npx shim.
+//!     (npx → tsc/vitest grandchildren) down, not just the npx shim. The
+//!     honest limit: a child that exits CLEANLY is reaped, not signalled, so
+//!     a grandchild it backgrounded and left behind survives. None of LOOM's
+//!     own steps background anything; the group kill is the wall for the
+//!     paths that go wrong, not a promise about the ones that go right.
+//!
+//! `run_checked_env` is the same runner with a fixed list of env pairs the
+//! caller composes from constants and LOOM-owned paths. `run_checked_env_stream`
+//! hands each output line to the caller as it arrives (a cargo build's
+//! progress); `run_job_stream` is that plus a `Slot` that holds the child's
+//! pgid so `thread_cancel` / reweave-cancel can take the tree down from
+//! another thread. There is ONE global `JOB` slot: threading and reweave can
+//! never run at once, and a job holds it through a `SlotGuard` so a panicking
+//! job thread frees it on the way out. Each tenancy is named by a `JobToken`,
+//! and `kill(token)` refuses every token but the one currently held — so a
+//! cancel that arrives after its own job ended cannot land on the next one.
+//! `run_detached` is the one exception to
+//! "wait and kill":
+//! it spawns a process meant to outlive us (the warden, the relaunch) and
+//! returns only its pid.
 //!
 //! No shell is ever invoked.
 
 use crate::error::LoomError;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Last N lines retained per stream. A wall between "captured for the owner"
@@ -72,8 +94,16 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        // Safety net: if we return/panic before an explicit reap, take the tree
-        // down. No orphan process group ever survives run_checked.
+        // Safety net: if we return/panic before an explicit reap, take the
+        // tree down. That covers every path out that did NOT end in a clean
+        // exit — timeout, wait error, escape, unwind.
+        //
+        // It does not cover the clean-exit path, and does not claim to: a
+        // child that exits 0 is reaped, `reaped` is set, and nothing is
+        // signalled — so a grandchild it backgrounded and left behind keeps
+        // running. `a_clean_exit_leaves_a_backgrounded_grandchild_alive`
+        // pins that. LOOM's own steps (npm, cargo, git) do not background
+        // anything, which is why this is a stated limit and not a hole.
         self.kill_tree();
     }
 }
@@ -87,22 +117,14 @@ fn ring_tail(bytes: &[u8]) -> String {
     lines.join("\n")
 }
 
-/// Run a fixed argv in `cwd`, which MUST canonicalize to a path under the
-/// canonical `allowed_root`. Kills the whole process group on timeout / drop.
-///
-/// `argv[0]` is the program; `argv[1..]` its arguments. Empty argv is rejected.
-pub fn run_checked(
-    argv: &[&str],
-    cwd: &Path,
-    allowed_root: &Path,
-    timeout: Duration,
-) -> Result<ExecOut, LoomError> {
+/// Validate the argv and the cwd containment shared by every spawn in this
+/// module. Both `cwd` and `allowed_root` are canonicalized before the
+/// `starts_with` check — a symlinked cwd resolving outside the allowed root
+/// must not pass. Returns the canonical cwd to spawn in.
+fn checked_cwd(argv: &[&str], cwd: &Path, allowed_root: &Path) -> Result<PathBuf, LoomError> {
     if argv.is_empty() {
         return Err(LoomError::Parse("exec: empty argv".into()));
     }
-
-    // Canonicalize BOTH sides before the containment check — a symlinked cwd
-    // resolving outside the allowed root must not pass.
     let canonical_cwd = cwd
         .canonicalize()
         .map_err(|e| LoomError::NotFound(format!("exec: canonicalize cwd {}: {e}", cwd.display())))?;
@@ -119,10 +141,42 @@ pub fn run_checked(
             canonical_root.display()
         )));
     }
+    Ok(canonical_cwd)
+}
+
+/// Run a fixed argv in `cwd`, which MUST canonicalize to a path under the
+/// canonical `allowed_root`. Kills the whole process group on timeout / drop.
+///
+/// `argv[0]` is the program; `argv[1..]` its arguments. Empty argv is rejected.
+pub fn run_checked(
+    argv: &[&str],
+    cwd: &Path,
+    allowed_root: &Path,
+    timeout: Duration,
+) -> Result<ExecOut, LoomError> {
+    run_checked_env(argv, cwd, allowed_root, timeout, &[])
+}
+
+/// `run_checked` plus a fixed list of environment pairs set on the child.
+///
+/// `envs` is composed by the caller from constants and LOOM-owned paths
+/// (e.g. `CARGO_TARGET_DIR`, `CARGO_NET_OFFLINE`) — never from model output.
+/// Everything else (containment, group kill, ring-capped output) is identical.
+pub fn run_checked_env(
+    argv: &[&str],
+    cwd: &Path,
+    allowed_root: &Path,
+    timeout: Duration,
+    envs: &[(&str, &str)],
+) -> Result<ExecOut, LoomError> {
+    let canonical_cwd = checked_cwd(argv, cwd, allowed_root)?;
 
     let mut cmd = Command::new(argv[0]);
     for a in &argv[1..] {
         cmd.arg(a);
+    }
+    for (k, v) in envs {
+        cmd.env(k, v);
     }
     cmd.current_dir(&canonical_cwd);
     cmd.stdin(Stdio::null());
@@ -204,6 +258,374 @@ pub fn run_checked(
         stdout,
         stderr,
     })
+}
+
+// ── The job slot ──────────────────────────────────────────────────────────────
+
+/// The name of one job's tenancy of the slot. Monotonic, never reused, and
+/// never zero — zero means "no job". A cancel carries the token of the job it
+/// means to stop, so a kill that arrives after that job ended cannot land on
+/// whichever job took the slot next.
+pub type JobToken = u64;
+
+/// One reusable slot for a long background job (threading now, reweave
+/// later). Holds whether a job is in flight, the token naming that tenancy
+/// and, once its child is spawned, the child's pgid so `kill` can take the
+/// whole tree down from another thread. There is exactly one global `JOB`, so
+/// threading and reweave can never run at once.
+struct SlotState {
+    held: bool,
+    /// The pgid of the running child. It is its own group leader
+    /// (`process_group(0)`), so pgid == pid.
+    pid: Option<u32>,
+    /// The token of the job currently holding the slot; 0 when free.
+    token: JobToken,
+    /// The last token handed out, so the next is always new.
+    issued: JobToken,
+}
+
+pub struct Slot {
+    state: Mutex<SlotState>,
+    /// Set by `kill`; cleared by `try_take` / `release`. Lets the job's owner
+    /// tell "cancelled" from "failed on its own".
+    cancelled: AtomicBool,
+}
+
+impl Slot {
+    pub const fn new() -> Slot {
+        Slot {
+            state: Mutex::new(SlotState { held: false, pid: None, token: 0, issued: 0 }),
+            cancelled: AtomicBool::new(false),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, SlotState> {
+        // A poisoned slot is a job thread that panicked mid-step; the state
+        // itself is four plain values, still meaningful.
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Claim the slot, answering with the token that names this tenancy.
+    /// `None` if a job is already in flight.
+    pub fn try_take(&self) -> Option<JobToken> {
+        let mut s = self.lock();
+        if s.held {
+            return None;
+        }
+        s.issued += 1;
+        s.held = true;
+        s.pid = None;
+        s.token = s.issued;
+        self.cancelled.store(false, Ordering::SeqCst);
+        Some(s.token)
+    }
+
+    /// Record the running child's pgid. Ignored when the slot is not held —
+    /// a stray spawn must never become killable by a job it is not part of.
+    pub fn set_pid(&self, pid: u32) {
+        let mut s = self.lock();
+        if s.held {
+            s.pid = Some(pid);
+        }
+    }
+
+    /// Forget the child (it was reaped); the slot stays held.
+    pub fn clear_pid(&self) {
+        self.lock().pid = None;
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn pid(&self) -> Option<u32> {
+        self.lock().pid
+    }
+
+    /// Free the slot for the next job.
+    pub fn release(&self) {
+        let mut s = self.lock();
+        s.held = false;
+        s.pid = None;
+        s.token = 0;
+        drop(s);
+        self.cancelled.store(false, Ordering::SeqCst);
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Group-kill the running child's tree (unix), if any, and mark the job
+    /// cancelled. The runner that owns the child reaps it and returns
+    /// `code: -1`; the job's owner then reads `cancelled()`.
+    ///
+    /// `token` names the job the caller means to stop. A cancel command reads
+    /// its own in-flight flag and then calls here, and between those two the
+    /// job can end and the other subsystem can claim the slot — so a token
+    /// that is not the one currently held does nothing at all, not even the
+    /// cancel mark. Without that, threading's stop button could group-kill a
+    /// weave, or a weave's cancel could kill the ceremony's `npm ci`.
+    pub fn kill(&self, token: JobToken) {
+        let pid = {
+            let s = self.lock();
+            if token == 0 || s.token != token {
+                return;
+            }
+            s.pid
+        };
+        self.cancelled.store(true, Ordering::SeqCst);
+        if let Some(pid) = pid {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            let _ = pid;
+        }
+    }
+}
+
+/// THE slot: threading and reweave share it, so neither can start while the
+/// other is in flight.
+pub static JOB: Slot = Slot::new();
+
+/// An RAII hold on a `Slot`: taken with `SlotGuard::take`, released when it
+/// drops — including on an unwind. A job thread that panics mid-step would
+/// otherwise leave the slot held forever (`Slot::lock` recovers from
+/// poisoning, so nothing else notices), and every later threading or reweave
+/// would answer "already in flight" until the app restarted.
+///
+/// Hold it for the whole life of the job thread; never call `release`
+/// yourself while one is alive. Both `threads::thread_loom` and
+/// `reweave::spawn_job` hold one.
+pub struct SlotGuard<'a> {
+    slot: &'a Slot,
+    token: JobToken,
+}
+
+impl<'a> SlotGuard<'a> {
+    /// Claim `slot`, or `None` when a job is already in flight.
+    pub fn take(slot: &'a Slot) -> Option<SlotGuard<'a>> {
+        slot.try_take().map(|token| SlotGuard { slot, token })
+    }
+
+    /// The slot being held — for `set_pid` / `cancelled` while the job runs.
+    pub fn slot(&self) -> &'a Slot {
+        self.slot
+    }
+
+    /// The token naming this tenancy. A cancel command carries it so its kill
+    /// can only reach the job it was issued for.
+    pub fn token(&self) -> JobToken {
+        self.token
+    }
+}
+
+impl Drop for SlotGuard<'_> {
+    fn drop(&mut self) {
+        self.slot.release();
+    }
+}
+
+// ── Streaming runner ──────────────────────────────────────────────────────────
+
+/// `run_checked_env` that hands every output line (stdout and stderr, each
+/// in its own order, interleaved as they arrive) to `on_line` while the child
+/// runs, instead of only at the end. Same containment, group kill, timeout
+/// and ring-capped capture. For the long steps whose progress the owner
+/// watches (a cargo build's "Compiling x/y" tail).
+/// Streaming with no job slot. Every production caller owns a job and uses
+/// `run_job_stream`; this is the same runner without the registration, kept as
+/// the honest base case and exercised by the tests that pin streaming, timeout
+/// and containment behaviour on their own.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn run_checked_env_stream(
+    argv: &[&str],
+    cwd: &Path,
+    allowed_root: &Path,
+    timeout: Duration,
+    envs: &[(&str, &str)],
+    on_line: &mut dyn FnMut(&str),
+) -> Result<ExecOut, LoomError> {
+    stream_impl(None, argv, cwd, allowed_root, timeout, envs, on_line)
+}
+
+/// The streaming runner for a job that owns `slot`: the child's pgid is
+/// registered in the slot while it runs, so `slot.kill()` from another
+/// thread takes it down.
+pub fn run_job_stream(
+    slot: &Slot,
+    argv: &[&str],
+    cwd: &Path,
+    allowed_root: &Path,
+    timeout: Duration,
+    envs: &[(&str, &str)],
+    on_line: &mut dyn FnMut(&str),
+) -> Result<ExecOut, LoomError> {
+    stream_impl(Some(slot), argv, cwd, allowed_root, timeout, envs, on_line)
+}
+
+fn ring_push(ring: &mut VecDeque<String>, line: String) {
+    if ring.len() == RING_LINES {
+        ring.pop_front();
+    }
+    ring.push_back(line);
+}
+
+fn ring_join(ring: &VecDeque<String>) -> String {
+    ring.iter().map(String::as_str).collect::<Vec<_>>().join("\n")
+}
+
+/// Spawn a line reader that forwards each line over `tx` tagged with which
+/// stream it came from. Ends when the pipe closes.
+fn pump<R: std::io::Read + Send + 'static>(reader: R, is_err: bool, tx: mpsc::Sender<(bool, String)>) {
+    std::thread::spawn(move || {
+        let buf = std::io::BufReader::new(reader);
+        for line in std::io::BufRead::lines(buf) {
+            match line {
+                Ok(l) => {
+                    if tx.send((is_err, l)).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn stream_impl(
+    slot: Option<&Slot>,
+    argv: &[&str],
+    cwd: &Path,
+    allowed_root: &Path,
+    timeout: Duration,
+    envs: &[(&str, &str)],
+    on_line: &mut dyn FnMut(&str),
+) -> Result<ExecOut, LoomError> {
+    let canonical_cwd = checked_cwd(argv, cwd, allowed_root)?;
+
+    let mut cmd = Command::new(argv[0]);
+    for a in &argv[1..] {
+        cmd.arg(a);
+    }
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    cmd.current_dir(&canonical_cwd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| LoomError::Git(format!("exec: spawn {}: {e}", argv[0])))?;
+    let mut guard = Guard { child, reaped: false };
+    if let Some(s) = slot {
+        s.set_pid(guard.pid());
+    }
+
+    let (tx, rx) = mpsc::channel::<(bool, String)>();
+    if let Some(out) = guard.child.stdout.take() {
+        pump(out, false, tx.clone());
+    }
+    if let Some(err) = guard.child.stderr.take() {
+        pump(err, true, tx.clone());
+    }
+    drop(tx); // only the pumps hold senders; the channel closes when both pipes do
+
+    let mut stdout: VecDeque<String> = VecDeque::new();
+    let mut stderr: VecDeque<String> = VecDeque::new();
+    let mut deliver = |is_err: bool, line: String, stdout: &mut VecDeque<String>, stderr: &mut VecDeque<String>| {
+        on_line(&line);
+        ring_push(if is_err { stderr } else { stdout }, line);
+    };
+
+    let start = Instant::now();
+    let status = loop {
+        match rx.recv_timeout(POLL) {
+            Ok((is_err, line)) => deliver(is_err, line, &mut stdout, &mut stderr),
+            Err(disconnected) => {
+                match guard.child.try_wait() {
+                    Ok(Some(status)) => break status,
+                    Ok(None) => {}
+                    Err(e) => {
+                        guard.kill_tree();
+                        if let Some(s) = slot {
+                            s.clear_pid();
+                        }
+                        return Err(LoomError::Git(format!("exec: wait: {e}")));
+                    }
+                }
+                if disconnected == mpsc::RecvTimeoutError::Disconnected {
+                    // Pipes closed but the child lives on: don't spin.
+                    std::thread::sleep(POLL);
+                }
+            }
+        }
+        // Evaluated on EVERY iteration, not only when the channel is idle. A
+        // chatty child — `cargo build`, `npm ci`, every long step here — hands
+        // us a line on each poll and takes the `Ok` arm above; a timeout that
+        // only fires when the channel goes quiet is no timeout at all.
+        if start.elapsed() >= timeout {
+            // …but the `Ok` arm is also how a backlog drains after the child
+            // has already exited, and a drain is not a run. Ask the child
+            // first: one that is gone gets its output and its exit code, not
+            // a Timeout that discards a successful build.
+            if let Ok(Some(status)) = guard.child.try_wait() {
+                break status;
+            }
+            guard.kill_tree();
+            if let Some(s) = slot {
+                s.clear_pid();
+            }
+            return Err(LoomError::Timeout);
+        }
+    };
+    guard.reaped = true; // exited; Drop must not re-kill/re-wait
+    if let Some(s) = slot {
+        s.clear_pid();
+    }
+
+    // Drain what the pumps still hold. A grandchild that inherited the pipe
+    // could keep it open forever, so this is a short grace, not a join.
+    while let Ok((is_err, line)) = rx.recv_timeout(Duration::from_millis(50)) {
+        deliver(is_err, line, &mut stdout, &mut stderr);
+    }
+
+    Ok(ExecOut {
+        code: status.code().unwrap_or(-1),
+        stdout: ring_join(&stdout),
+        stderr: ring_join(&stderr),
+    })
+}
+
+/// Spawn a fixed argv and let it go: no wait, no kill on drop, all stdio
+/// null, its own process group (unix) so it survives our exit. Returns the
+/// child's pid. Same argv / cwd containment rules as `run_checked`.
+///
+/// Used ONLY for the warden and the relaunch — processes that must outlive
+/// the LOOM that spawned them. Everything else goes through `run_checked`.
+pub fn run_detached(argv: &[&str], cwd: &Path, allowed_root: &Path) -> Result<u32, LoomError> {
+    let canonical_cwd = checked_cwd(argv, cwd, allowed_root)?;
+
+    let mut cmd = Command::new(argv[0]);
+    for a in &argv[1..] {
+        cmd.arg(a);
+    }
+    cmd.current_dir(&canonical_cwd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| LoomError::Git(format!("exec: spawn detached {}: {e}", argv[0])))?;
+    // Dropping a std `Child` neither kills nor waits; the pid is all we keep.
+    Ok(child.id())
 }
 
 #[cfg(test)]
@@ -304,5 +726,338 @@ mod tests {
         assert!(n <= RING_LINES, "stdout retained {n} lines, cap is {RING_LINES}");
         assert!(out.stdout.contains("line1000"), "must keep the tail");
         assert!(!out.stdout.contains("line1\n"), "must have dropped the head");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_pairs_reach_the_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = run_checked_env(
+            &["/usr/bin/env"],
+            dir.path(),
+            dir.path(),
+            Duration::from_secs(5),
+            &[("LOOM_T", "woven")],
+        )
+        .unwrap();
+        assert_eq!(out.code, 0);
+        assert!(out.stdout.contains("LOOM_T=woven"), "stdout was {:?}", out.stdout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_variant_still_rejects_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let res = run_checked_env(
+            &["/usr/bin/env"],
+            outside.path(),
+            root.path(),
+            Duration::from_secs(1),
+            &[("LOOM_T", "woven")],
+        );
+        assert!(matches!(res, Err(LoomError::Parse(_))), "got {res:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_returns_a_live_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid = run_detached(&["/bin/sleep", "2"], dir.path(), dir.path()).unwrap();
+        assert!(pid > 0, "pid must be positive, got {pid}");
+        // The child is alive and not waited on: signal 0 probes without killing.
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+        assert!(alive, "detached child {pid} should still be running");
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_rejects_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let res = run_detached(&["/bin/sleep", "2"], outside.path(), root.path());
+        assert!(matches!(res, Err(LoomError::Parse(_))), "got {res:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stream_delivers_lines_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut seen: Vec<String> = Vec::new();
+        let out = run_checked_env_stream(
+            &["sh", "-c", "for i in 1 2 3; do echo l$i; done; echo e1 1>&2; exit 3"],
+            dir.path(),
+            dir.path(),
+            Duration::from_secs(5),
+            &[("LOOM_T", "woven")],
+            &mut |line| seen.push(line.to_string()),
+        )
+        .unwrap();
+        assert_eq!(out.code, 3);
+        // stdout lines arrive in order; stderr lines are delivered too.
+        let stdout_seen: Vec<&String> = seen.iter().filter(|l| l.starts_with('l')).collect();
+        assert_eq!(stdout_seen, vec!["l1", "l2", "l3"]);
+        assert!(seen.contains(&"e1".to_string()), "stderr line must stream, saw {seen:?}");
+        assert_eq!(out.stdout, "l1\nl2\nl3");
+        assert!(out.stderr.contains("e1"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stream_honors_timeout_and_containment() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut n = 0;
+        let res = run_checked_env_stream(
+            &["sh", "-c", "echo hi"],
+            outside.path(),
+            root.path(),
+            Duration::from_secs(1),
+            &[],
+            &mut |_| n += 1,
+        );
+        assert!(matches!(res, Err(LoomError::Parse(_))), "got {res:?}");
+        assert_eq!(n, 0, "nothing spawned on escape");
+        let start = Instant::now();
+        let res = run_checked_env_stream(
+            &["sh", "-c", "sleep 30"],
+            root.path(),
+            root.path(),
+            Duration::from_millis(300),
+            &[],
+            &mut |_| {},
+        );
+        assert!(matches!(res, Err(LoomError::Timeout)), "got {res:?}");
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+
+    /// A chatty child — `cargo build`, `npm ci`, every long step in the
+    /// ceremony — hands the runner a line on every poll. The timeout must be
+    /// evaluated on those iterations too, or the longest jobs in the product
+    /// have no timeout at all.
+    #[cfg(unix)]
+    #[test]
+    fn stream_timeout_fires_while_the_child_keeps_printing() {
+        let dir = tempfile::tempdir().unwrap();
+        // The talker is backgrounded so its pid is recorded: the group kill
+        // must reach it, not only the shell that waits on it.
+        let script = "(while :; do echo compiling; done) & echo $! > pid.txt; wait";
+        let start = Instant::now();
+        let mut lines = 0usize;
+        let res = run_checked_env_stream(
+            &["sh", "-c", script],
+            dir.path(),
+            dir.path(),
+            Duration::from_millis(500),
+            &[],
+            &mut |_| lines += 1,
+        );
+        assert!(matches!(res, Err(LoomError::Timeout)), "got {res:?} after {:?}", start.elapsed());
+        assert!(start.elapsed() < Duration::from_secs(5), "timeout must fire promptly");
+        assert!(lines > 0, "the child was chatty — every poll took the Ok arm");
+
+        std::thread::sleep(Duration::from_millis(250));
+        let pid = std::fs::read_to_string(dir.path().join("pid.txt")).unwrap().trim().to_string();
+        let out = Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(
+            stat.is_empty() || stat.starts_with('Z'),
+            "the talking grandchild must be dead after the timeout kill, got stat={stat:?}"
+        );
+    }
+
+    #[test]
+    fn slot_refuses_a_second_job() {
+        let slot = Slot::new();
+        let first = slot.try_take().expect("a free slot is taken");
+        assert!(slot.try_take().is_none(), "a held slot refuses a second job");
+        slot.set_pid(4242);
+        assert_eq!(slot.pid(), Some(4242));
+        slot.release();
+        assert_eq!(slot.pid(), None, "release forgets the pid");
+        let second = slot.try_take().expect("released slot is free again");
+        assert!(second > first, "tokens are monotonic and never reused");
+        slot.release();
+        // A kill for a job nobody holds is nothing at all.
+        slot.kill(second);
+        assert!(!slot.cancelled(), "a kill on a free slot marks nothing");
+    }
+
+    #[test]
+    fn a_panicking_job_thread_frees_the_slot() {
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+        let job = std::thread::spawn(move || {
+            let _held = SlotGuard::take(slot).expect("a free slot is taken");
+            panic!("a step blew up mid-ceremony");
+        });
+        assert!(job.join().is_err(), "the job thread panicked");
+        assert!(
+            slot.try_take().is_some(),
+            "a panicking job must not strand the slot — every later weave would answer IN_FLIGHT until restart"
+        );
+        slot.release();
+    }
+
+    #[test]
+    fn slot_guard_holds_then_releases() {
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+        {
+            let held = SlotGuard::take(slot).expect("a free slot is taken");
+            assert!(SlotGuard::take(slot).is_none(), "a held slot refuses a second job");
+            assert!(held.token() > 0, "a held slot names its tenancy");
+            held.slot().set_pid(77);
+            assert_eq!(slot.pid(), Some(77));
+        }
+        assert_eq!(slot.pid(), None, "drop released the slot");
+        assert!(slot.try_take().is_some(), "the slot is free again");
+        slot.release();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn slot_kill_takes_the_running_job_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+        let token = slot.try_take().expect("a free slot is taken");
+        let cwd = dir.path().to_path_buf();
+        let job = std::thread::spawn(move || {
+            run_job_stream(
+                slot,
+                &["sh", "-c", "sleep 30"],
+                &cwd,
+                &cwd,
+                Duration::from_secs(60),
+                &[],
+                &mut |_| {},
+            )
+        });
+        // Wait until the runner has registered the child's pid.
+        let start = Instant::now();
+        while slot.pid().is_none() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(slot.pid().is_some(), "runner registers its pid in the slot");
+        slot.kill(token);
+        let out = job.join().unwrap().unwrap();
+        assert_eq!(out.code, -1, "killed by signal → -1");
+        assert!(start.elapsed() < Duration::from_secs(10));
+        assert!(slot.cancelled(), "kill marks the job cancelled");
+        slot.release();
+        assert!(!slot.cancelled(), "release clears the cancel mark");
+    }
+
+    /// Round-2 review, Finding 5. The elapsed check runs on the `Ok(line)`
+    /// arm too, so a child that has ALREADY EXITED while its backlog is
+    /// still draining could cross the deadline and have its whole `ExecOut`
+    /// discarded as a timeout. A drain is not a run.
+    #[cfg(unix)]
+    #[test]
+    fn a_drain_after_the_child_exits_is_never_a_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut n = 0usize;
+        // The child prints 400 lines and exits 0 at once; the consumer is
+        // slow, so the deadline passes while only the backlog is left.
+        let res = run_checked_env_stream(
+            &["sh", "-c", "for i in $(seq 1 400); do echo line$i; done; exit 0"],
+            dir.path(),
+            dir.path(),
+            Duration::from_millis(150),
+            &[],
+            &mut |_| {
+                n += 1;
+                std::thread::sleep(Duration::from_millis(1));
+            },
+        );
+        let out = res.expect("a successful run must not be discarded as a timeout");
+        assert_eq!(out.code, 0, "the child exited 0");
+        assert!(n >= 400, "every line was delivered, saw {n}");
+        assert!(out.stdout.contains("line400"), "the tail is kept: {:?}", out.stdout);
+    }
+
+    /// Round-2 review, Finding 3. Check-then-kill is not atomic: a cancel
+    /// reads its own flag, then calls the shared `JOB.kill()`. Between those
+    /// the job can end and the OTHER subsystem can take the slot — and the
+    /// stale kill lands on it. The token is the wall: a kill naming a job
+    /// that no longer holds the slot does nothing at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_kill_cannot_land_on_the_next_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+
+        // Job A takes the slot and ends.
+        let stale = slot.try_take().expect("a free slot is taken");
+        slot.release();
+
+        // Job B takes it next and starts a child.
+        let fresh = slot.try_take().expect("the released slot is free again");
+        assert_ne!(stale, fresh, "each job gets its own token");
+        let cwd = dir.path().to_path_buf();
+        let job = std::thread::spawn(move || {
+            run_job_stream(
+                slot,
+                &["sh", "-c", "sleep 30"],
+                &cwd,
+                &cwd,
+                Duration::from_secs(60),
+                &[],
+                &mut |_| {},
+            )
+        });
+        let start = Instant::now();
+        while slot.pid().is_none() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid = slot.pid().expect("job B registered its child");
+
+        // Job A's cancel arrives late. It must not touch job B.
+        slot.kill(stale);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!slot.cancelled(), "a stale kill must not mark the live job cancelled");
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+        assert!(alive, "job B's child {pid} must survive a kill meant for job A");
+
+        // B's own cancel still works.
+        slot.kill(fresh);
+        let out = job.join().unwrap().unwrap();
+        assert_eq!(out.code, -1, "the job's own kill still takes it down");
+        assert!(slot.cancelled());
+        slot.release();
+    }
+
+    /// Round-2 review, Finding 7. The Guard's group kill covers the timeout
+    /// and error paths; a child that exits CLEANLY is never group-killed, so
+    /// a grandchild it backgrounded outlives `run_checked`. The module doc
+    /// used to claim otherwise. This pins what is actually true.
+    #[cfg(unix)]
+    #[test]
+    fn a_clean_exit_leaves_a_backgrounded_grandchild_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        // The grandchild's stdio is closed, so it does not hold the pipes open
+        // — the runner returns the moment the shell exits, with the sleep
+        // still running in the group nobody signalled.
+        let out = sh(
+            "sleep 5 >/dev/null 2>&1 </dev/null & echo $! > pid.txt; exit 0",
+            dir.path(),
+            5000,
+        )
+        .unwrap();
+        assert_eq!(out.code, 0);
+        let pid: i32 = std::fs::read_to_string(dir.path().join("pid.txt"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(
+            alive,
+            "a cleanly-exited child's backgrounded grandchild survives — the module must not claim it never does"
+        );
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
     }
 }

@@ -8,8 +8,6 @@
  * it, so the sayable and the typeable cannot drift apart.
  *
  * Nothing here is invented: every entry is DERIVED from a real capability —
- *   decks  → DECK_COMMAND_META + CAT_LABELS (src/lib/decks/commands.ts)
- *   watch  → BRIEFING_PHRASES               (src/lib/compiler/intent.ts)
  *   build  → the build_organ intent ("build me a …" template)
  *   organs → the live organ list ("open <organ>" via act_on_organ)
  *   system → the settings organ + HELP_PHRASES
@@ -19,12 +17,18 @@
  * transcripts take. Pure data + pure functions; no side effects, no I/O.
  */
 
-import { DECK_COMMAND_META, CAT_LABELS } from "../decks/commands";
-import { BRIEFING_PHRASES, HELP_PHRASES, SELF_EDIT_PHRASES } from "../compiler/intent";
+import {
+  HELP_PHRASES,
+  SELF_EDIT_PHRASES,
+  REWEAVE_PHRASES,
+  THREAD_PHRASES,
+  IDENTITY_PHRASES,
+  GENERATION_RETURN_PHRASES,
+} from "../compiler/intent";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type CatalogGroup = "decks" | "watch" | "build" | "organs" | "system";
+export type CatalogGroup = "build" | "organs" | "system";
 
 export type CatalogEntry = {
   id: string;
@@ -49,50 +53,12 @@ export type CatalogCtx = {
 
 /** Palette + help ordering. Groups render contiguously in this order. */
 export const GROUP_ORDER: readonly CatalogGroup[] = [
-  "decks",
-  "watch",
   "build",
   "organs",
   "system",
 ];
 
 // ── Catalog derivation ───────────────────────────────────────────────────────
-
-function deckEntries(): CatalogEntry[] {
-  const fromMeta: CatalogEntry[] = DECK_COMMAND_META.map((m) => ({
-    id: m.id,
-    phrase: m.phrase,
-    aliases: [...m.aliases],
-    hint: m.hint,
-    group: "decks" as const,
-    kind: "utterance" as const,
-  }));
-  // Category filters derived from the real category table — "show <label> news"
-  // matches CAT_RE for every label ("all" needs the news-context word anyway).
-  const fromCats: CatalogEntry[] = Object.entries(CAT_LABELS).map(([cat, label]) => ({
-    id: `globe-cat-${cat}`,
-    phrase: `show ${label} news`,
-    aliases: [`switch to ${label} news`],
-    hint: `filter the globe: ${label}`,
-    group: "decks" as const,
-    kind: "utterance" as const,
-  }));
-  return [...fromMeta, ...fromCats];
-}
-
-function watchEntries(): CatalogEntry[] {
-  const [canonical, ...aliases] = BRIEFING_PHRASES;
-  return [
-    {
-      id: "watch-briefing",
-      phrase: canonical,
-      aliases: [...aliases],
-      hint: "top of the watch — what crossed your thresholds",
-      group: "watch",
-      kind: "utterance",
-    },
-  ];
-}
 
 function buildEntries(): CatalogEntry[] {
   return [
@@ -139,7 +105,7 @@ function systemEntries(ctx: CatalogCtx): CatalogEntry[] {
       id: "system-settings",
       phrase: "open settings",
       aliases: ["settings"],
-      hint: "voice, models, cockpit",
+      hint: "voice, models",
       group: "system",
       kind: "utterance",
     });
@@ -166,6 +132,20 @@ function systemEntries(ctx: CatalogCtx): CatalogEntry[] {
     group: "system",
     kind: "template",
   });
+  // Rebirth (Phase 23) — the body. Each entry derives from the intent phrase
+  // table so the sayable and the typeable cannot drift. Immediate utterances:
+  // reweave and return each answer with a consent line before anything
+  // happens; thread and identity are a ceremony and a read.
+  const rebirth: [string, readonly string[], string][] = [
+    ["system-reweave", REWEAVE_PHRASES, "weave a new generation from the genome — asks first"],
+    ["system-thread", THREAD_PHRASES, "find the machine's tools and warm the build — asks first, network once"],
+    ["system-identity", IDENTITY_PHRASES, "generation · mode · threaded"],
+    ["system-generation-return", GENERATION_RETURN_PHRASES, "become the previous body again — asks first"],
+  ];
+  for (const [id, phrases, hint] of rebirth) {
+    const [canonical, ...aliases] = phrases;
+    entries.push({ id, phrase: canonical, aliases: [...aliases], hint, group: "system", kind: "utterance" });
+  }
   return entries;
 }
 
@@ -175,8 +155,6 @@ function systemEntries(ctx: CatalogCtx): CatalogEntry[] {
  */
 export function buildCatalog(ctx: CatalogCtx = {}): CatalogEntry[] {
   return [
-    ...deckEntries(),
-    ...watchEntries(),
     ...buildEntries(),
     ...organEntries(ctx),
     ...systemEntries(ctx),

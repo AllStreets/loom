@@ -8,8 +8,6 @@ import {
   VOICE_IDS,
   VOICE_LABELS,
   isValidModelTag,
-  isValidSymbolList,
-  WATCHLIST_MAX,
 } from "./settings";
 
 // jsdom provides localStorage
@@ -21,7 +19,7 @@ afterEach(() => {
 });
 
 describe("settings whitelist", () => {
-  it("SETTINGS_KEYS contains the required keys including model.cloudBuilder", () => {
+  it("SETTINGS_KEYS contains exactly the surviving keys", () => {
     expect(SETTINGS_KEYS).toContain("voice.default");
     expect(SETTINGS_KEYS).toContain("voice.speakReplies");
     expect(SETTINGS_KEYS).toContain("orb.tier");
@@ -29,15 +27,14 @@ describe("settings whitelist", () => {
     expect(SETTINGS_KEYS).toContain("model.builder");
     expect(SETTINGS_KEYS).toContain("model.companion");
     expect(SETTINGS_KEYS).toContain("model.rewriter");
-    expect(SETTINGS_KEYS).toContain("model.cloudBuilder");
-    expect(SETTINGS_KEYS).toContain("cockpit.deck");
-    expect(SETTINGS_KEYS).toContain("cockpit.interact");
     expect(SETTINGS_KEYS).toContain("cockpit.tapestry");
-    expect(SETTINGS_KEYS).toContain("cockpit.watchOpen");
     expect(SETTINGS_KEYS).toContain("cockpit.chatMin");
     expect(SETTINGS_KEYS).toContain("cockpit.initiative");
-    expect(SETTINGS_KEYS).toContain("terminal.symbols");
-    expect(SETTINGS_KEYS).toHaveLength(15);
+    expect(SETTINGS_KEYS).toContain("kernel.autoReweave");
+    for (const retired of ["model.cloudBuilder", "cockpit.deck", "cockpit.interact", "cockpit.watchOpen", "terminal.symbols"]) {
+      expect(SETTINGS_KEYS).not.toContain(retired);
+    }
+    expect(SETTINGS_KEYS).toHaveLength(11);
   });
 
   it("throws on unknown key in getSetting", () => {
@@ -107,43 +104,21 @@ describe("cockpit.tapestry setting", () => {
   });
 });
 
-describe("terminal.symbols setting", () => {
-  it("defaults to the pre-watchlist hardcoded equities list", () => {
-    expect(getSetting("terminal.symbols")).toBe("AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA");
+describe("kernel.autoReweave setting (Rebirth)", () => {
+  it("defaults to off — a reweave closes LOOM, so it is opt-in", () => {
+    expect(getSetting("kernel.autoReweave")).toBe("off");
   });
 
-  it("accepts a canonical comma-joined list including index/future forms", () => {
-    setSetting("terminal.symbols", "AAPL,^VIX,GC=F,BRK.B,BTC-USD");
-    expect(getSetting("terminal.symbols")).toBe("AAPL,^VIX,GC=F,BRK.B,BTC-USD");
+  it("accepts 'on' and 'off'", () => {
+    setSetting("kernel.autoReweave", "on");
+    expect(getSetting("kernel.autoReweave")).toBe("on");
+    setSetting("kernel.autoReweave", "off");
+    expect(getSetting("kernel.autoReweave")).toBe("off");
   });
 
-  it("accepts the empty string (empty watchlist — stated, not hidden)", () => {
-    setSetting("terminal.symbols", "");
-    expect(getSetting("terminal.symbols")).toBe("");
-  });
-
-  it("rejects lowercase, whitespace, junk chars, and over-long tickers", () => {
-    expect(() => setSetting("terminal.symbols", "aapl")).toThrow(/Invalid symbol list/);
-    expect(() => setSetting("terminal.symbols", "AAPL, MSFT")).toThrow(/Invalid symbol list/);
-    expect(() => setSetting("terminal.symbols", "AAPL,BAD$")).toThrow(/Invalid symbol list/);
-    expect(() => setSetting("terminal.symbols", "TOOLONGSYMBOL")).toThrow(/Invalid symbol list/);
-  });
-
-  it("rejects a list longer than WATCHLIST_MAX (rate friendliness)", () => {
-    const list = Array.from({ length: WATCHLIST_MAX + 1 }, (_, i) => `S${i}`).join(",");
-    expect(() => setSetting("terminal.symbols", list)).toThrow(/Invalid symbol list/);
-  });
-});
-
-describe("isValidSymbolList", () => {
-  it("validates each comma-joined ticker against the ticker regex", () => {
-    expect(isValidSymbolList("AAPL")).toBe(true);
-    expect(isValidSymbolList("AAPL,MSFT")).toBe(true);
-    expect(isValidSymbolList("^TNX,CL=F,BRK-B")).toBe(true);
-    expect(isValidSymbolList("")).toBe(true);
-    expect(isValidSymbolList(",")).toBe(false); // empty entries
-    expect(isValidSymbolList("AAPL,,MSFT")).toBe(false);
-    expect(isValidSymbolList("aapl")).toBe(false);
+  it("rejects anything else", () => {
+    expect(() => setSetting("kernel.autoReweave", "true")).toThrow(/Invalid value/);
+    expect(() => setSetting("kernel.autoReweave", "1")).toThrow(/Invalid value/);
   });
 });
 
@@ -172,17 +147,25 @@ describe("migrateSettings — retired-key boot migration", () => {
     }
   });
 
-  it("resets a stored cockpit.deck of 'agora' back to the default (void)", () => {
-    localStorage.setItem("cockpit.deck", "agora");
+  it("deletes every Cockpit key and store (Phase 23a — Rebirth)", () => {
+    localStorage.setItem("cockpit.deck", "globe");
+    localStorage.setItem("cockpit.interact", "off");
+    localStorage.setItem("cockpit.watchOpen", "on");
+    localStorage.setItem("terminal.symbols", "AAPL");
+    localStorage.setItem("model.cloudBuilder", "anthropic");
+    localStorage.setItem("loom.watch.v1", "{}");
+    localStorage.setItem("auspex.tour.seen.v1", "1");
     migrateSettings();
-    expect(localStorage.getItem("cockpit.deck")).toBeNull();
-    expect(getSetting("cockpit.deck")).toBe("void");
+    for (const k of ["cockpit.deck", "cockpit.interact", "cockpit.watchOpen", "terminal.symbols", "model.cloudBuilder", "loom.watch.v1", "auspex.tour.seen.v1"]) {
+      expect(localStorage.getItem(k)).toBeNull();
+    }
   });
 
-  it("leaves a live cockpit.deck value alone", () => {
-    setSetting("cockpit.deck", "terminal");
-    migrateSettings();
-    expect(getSetting("cockpit.deck")).toBe("terminal");
+  it("the Cockpit keys are no longer settings keys", () => {
+    for (const k of ["cockpit.deck", "cockpit.interact", "cockpit.watchOpen", "terminal.symbols", "model.cloudBuilder"]) {
+      expect(() => getSetting(k)).toThrow(/Unknown settings key/);
+      expect(() => setSetting(k, "on")).toThrow(/Unknown settings key/);
+    }
   });
 
   it("is idempotent — running twice (or with nothing stored) is a no-op", () => {
@@ -199,10 +182,10 @@ describe("migrateSettings — retired-key boot migration", () => {
 
   it("does not touch live settings keys", () => {
     setSetting("cockpit.tapestry", "off");
-    setSetting("cockpit.watchOpen", "on");
+    setSetting("cockpit.chatMin", "on");
     migrateSettings();
     expect(getSetting("cockpit.tapestry")).toBe("off");
-    expect(getSetting("cockpit.watchOpen")).toBe("on");
+    expect(getSetting("cockpit.chatMin")).toBe("on");
   });
 });
 
@@ -366,23 +349,6 @@ describe("model.* settings", () => {
   });
 });
 
-describe("cockpit.watchOpen setting", () => {
-  it("cockpit.watchOpen default is 'off'", () => {
-    expect(getSetting("cockpit.watchOpen")).toBe("off");
-  });
-
-  it("cockpit.watchOpen accepts 'on' and 'off'", () => {
-    setSetting("cockpit.watchOpen", "on");
-    expect(getSetting("cockpit.watchOpen")).toBe("on");
-    setSetting("cockpit.watchOpen", "off");
-    expect(getSetting("cockpit.watchOpen")).toBe("off");
-  });
-
-  it("cockpit.watchOpen rejects unknown values", () => {
-    expect(() => setSetting("cockpit.watchOpen", "maybe")).toThrow();
-  });
-});
-
 describe("cockpit.initiative setting", () => {
   it("cockpit.initiative default is 'on'", () => {
     expect(getSetting("cockpit.initiative")).toBe("on");
@@ -402,8 +368,8 @@ describe("cockpit.initiative setting", () => {
 
 describe("resetAllSettings", () => {
   it("clears all SETTINGS_KEYS", () => {
-    setSetting("cockpit.watchOpen", "on");
-    setSetting("cockpit.interact", "off");
+    setSetting("cockpit.chatMin", "on");
+    setSetting("cockpit.initiative", "off");
     resetAllSettings();
     for (const k of SETTINGS_KEYS) {
       expect(localStorage.getItem(k)).toBeNull();
@@ -418,12 +384,6 @@ describe("resetAllSettings", () => {
     expect(localStorage.getItem("loom.minimized")).toBeNull();
     expect(localStorage.getItem("loom.win.notes")).toBeNull();
     expect(localStorage.getItem("loom.organs.deleted")).toBeNull();
-  });
-
-  it("removes auspex.tour.seen.v1", () => {
-    localStorage.setItem("auspex.tour.seen.v1", "1");
-    resetAllSettings();
-    expect(localStorage.getItem("auspex.tour.seen.v1")).toBeNull();
   });
 
   it("removes loom.organs.deleted tombstones", () => {

@@ -10,7 +10,7 @@
  * consumes — so the orb pulses, confirmations land in the conversation, and
  * free text with no catalog match falls through to companion chat naturally.
  *
- * Keyboard: Cmd+K / Ctrl+K toggles (window CAPTURE phase so it wins over deck
+ * Keyboard: Cmd+K / Ctrl+K toggles (window CAPTURE phase so it wins over
  * iframes while the shell has focus; nothing else is intercepted, so Space
  * PTT and other inputs are untouched). Arrows move, Enter executes, Esc
  * closes, Tab is trapped, click-outside closes. Reduced motion: fade only.
@@ -28,8 +28,6 @@ import {
 } from "../lib/shuttle/catalog";
 
 const GROUP_LABELS: Record<CatalogGroup, string> = {
-  decks: "DECKS",
-  watch: "WATCH",
   build: "BUILD",
   organs: "ORGANS",
   system: "SYSTEM",
@@ -121,7 +119,7 @@ export default function Shuttle() {
     function onOpenEvent() {
       openPalette();
     }
-    // CAPTURE phase: the toggle wins over deck iframes / focused panels while
+    // CAPTURE phase: the toggle wins over focused panels while
     // the shell document has focus. Only Cmd/Ctrl+K is intercepted — Space
     // PTT and normal typing pass through untouched.
     window.addEventListener("keydown", onKeyDown, true);
@@ -226,7 +224,7 @@ export default function Shuttle() {
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 3000, // above desktop windows (2000), dock (1000), watch panel (900)
+        zIndex: 3000, // above desktop windows (2000), dock (1000)
         display: "flex",
         justifyContent: "center",
         alignItems: "flex-start",

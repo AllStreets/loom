@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "node scripts/kernel-preboot.mjs && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "node scripts/genome-bundle.mjs && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -31,12 +31,17 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "../public/decks/auspex": "decks/auspex",
-      "../public/decks/ember": "decks/ember"
-    },
     "macOS": {
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "minimumSystemVersion": "11.0",
+      "frameworks": [
+        "libs/libonnxruntime.1.17.1.dylib",
+        "libs/libsherpa-onnx-c-api.dylib",
+        "libs/libsherpa-onnx-cxx-api.dylib"
+      ]
+    },
+    "resources": {
+      "genome": "genome"
     }
   }
 }

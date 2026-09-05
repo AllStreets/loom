@@ -1,10 +1,42 @@
 import { compile } from "../compiler/compile";
 import type { BuildResult } from "../loom/build";
-import type { Msg } from "../core";
+import {
+  kernelIdentity,
+  threadStatus,
+  type Generation,
+  type Identity,
+  type Msg,
+  type ThreadStatus,
+} from "../core";
+import { reweaveReadiness, type Readiness } from "../loom/reweave";
+import { listGenerations, previousGeneration } from "../loom/generations";
 import { COMPANION_SYSTEM, windowMessages } from "./persona";
-import type { DeckCommandResult } from "../decks/commands";
-import type { ScoredEvent } from "../watch/types";
 import { buildCatalog, helpText } from "../shuttle/catalog";
+
+/**
+ * The body's seams (Phase 23 — Rebirth). Every one is a READ; nothing here
+ * moves the body. The runtime composes the sentence the owner reads, and the
+ * Companion carries the owner's answer to the protected orchestration.
+ *
+ * `commitsAhead` used to live here, hardwired to null: no command could ever
+ * count, so the consent line could never say "from 4 commits" and the spec's
+ * own example was unreachable. The parameter is gone rather than kept as a
+ * promise the code cannot keep — a `genome_ahead` Rust command would bring
+ * the count (and the line) back honestly.
+ */
+export type RebirthDeps = {
+  readiness: () => Promise<Readiness>;
+  threadStatus: () => Promise<ThreadStatus>;
+  identity: () => Promise<Identity>;
+  generations: () => Promise<Generation[]>;
+};
+
+const REBIRTH_DEFAULTS: RebirthDeps = {
+  readiness: () => reweaveReadiness(),
+  threadStatus,
+  identity: kernelIdentity,
+  generations: listGenerations,
+};
 
 export type CompanionDeps = {
   chat: (role: string, messages: Msg[], opts?: object) => Promise<string>;
@@ -12,13 +44,20 @@ export type CompanionDeps = {
   edit: (organId: string, request: string) => Promise<BuildResult>;
   organIds: () => Promise<string[]>;
   askModel: (system: string, prompt: string) => Promise<string>;
-  /** Current cockpit deck state — used for deck_command auto-switch logic */
-  currentDeck?: () => "void" | "globe" | "terminal";
-  /** Returns the top-k salient events for the briefing fast path */
-  getSalient?: (k: number) => ScoredEvent[];
-  /** Send bridge commands to the globe deck (fly_to steering from briefings) */
-  sendDeckCommands?: (cmds: import("../decks/commands").BridgeCmd[]) => void;
+  /** Optional overrides for the body's seams; the core wrappers by default. */
+  rebirth?: Partial<RebirthDeps>;
 };
+
+/**
+ * A consent turn asks before the body changes. The Companion renders it with
+ * an affirmative action (REWEAVE / RETURN) and NOT NOW; only the affirmative
+ * reaches the protected orchestration. The line is what the owner reads and
+ * hears.
+ */
+export type ConsentTurn =
+  | { kind: "consent"; consent: "reweave_consent"; line: string }
+  | { kind: "consent"; consent: "thread_consent"; line: string }
+  | { kind: "consent"; consent: "generation_return_consent"; sha: string; line: string };
 
 export type CompanionTurn =
   | { kind: "reply"; text: string }
@@ -26,9 +65,96 @@ export type CompanionTurn =
   | { kind: "build"; result: BuildResult }
   | { kind: "edit"; organId: string; result: BuildResult }
   | { kind: "act"; organId: string }
-  | { kind: "deck_command"; deckCommandResult: DeckCommandResult; confirmation: string }
-  | { kind: "briefing"; text: string }
-  | { kind: "help"; text: string };
+  | { kind: "help"; text: string }
+  | ConsentTurn;
+
+// ── Copy law (docs/BRAND.md): fact — hinge — remedy, lowercase, no exclamation ──
+
+const short = (sha: string) => sha.slice(0, 6);
+/** The branch a returned-to generation lands on is `generation/<sha7>`. */
+const sha7 = (sha: string) => sha.slice(0, 7);
+
+export const LINE_THREADING = "threading the loom — this needs the network once";
+export const LINE_NO_PREVIOUS = "there is no previous generation to return to";
+/**
+ * The third consent turn. Threading is the one step in an offline-and-yours
+ * computer that reaches the network, so the owner reads that fact BEFORE the
+ * fetch, not after it started. Word for word the line Settings already shows
+ * beside THREAD THE LOOM — one wording, enforced by a drift test.
+ */
+export const LINE_THREAD_CONSENT =
+  "threading needs the network once — after that LOOM weaves offline";
+export const missingToolLine = (tool: string, install: string) =>
+  `the loom can't be threaded yet — ${tool} is missing: ${install}`;
+
+/**
+ * What a weave will actually do, said before it is agreed to. Three endings,
+ * because there are three truths:
+ *   - packaged on macOS — the swap happens: LOOM closes and returns;
+ *   - dev — `tauri dev` owns the binary, so the body stays (Settings' sentence);
+ *   - packaged elsewhere — `platform.rs` has no swap yet: the build and the
+ *     ledger still work, the body does not change.
+ *
+ * The sha named is the genome's HEAD — what the core will actually weave
+ * (`run_job` takes `kernel::head_sha(&ctx.source)` as its target). Round-3
+ * review, Finding 2: this named `genomeSha`, the sha the running binary was
+ * compiled from, so the one state where the old gate let a weave through said
+ * "weave generation <the body you are already in>" while the core wove
+ * something else — a sentence naming a third thing from the act.
+ *
+ * A `null` head (no source cloned, or git silent) is not named at all: LOOM
+ * does not put a sha in the owner's sentence that it could not read.
+ *
+ * Round-4 review, Finding 4: `failedBefore` is the shelf's memory that this
+ * exact generation was woven, swapped in, and did not boot. LOOM will still
+ * weave it — the failure can be environmental and the fix may be what the
+ * owner just committed — but it does not offer it as if nothing had happened.
+ */
+export const reweaveConsentLine = (
+  genomeHead: string | null,
+  mode: Identity["mode"],
+  canSwap: boolean,
+  failedBefore = false,
+) => {
+  const named = genomeHead ? `weave generation ${short(genomeHead)}` : "weave the genome's head";
+  const head = failedBefore ? `${named} again — it didn't boot last time` : named;
+  if (mode === "dev") return `${head} — in dev the body stays; restart tauri dev to become it`;
+  if (!canSwap) {
+    return `${head} — the swap is macOS-only in this generation; the build and the ledger still work, the body stays`;
+  }
+  return `${head} — LOOM will close and return`;
+};
+
+/** The same three truths for a return to a kept generation. */
+export const returnConsentLine = (sha: string, mode: Identity["mode"], canSwap: boolean) => {
+  const head = `return to generation ${short(sha)}`;
+  if (mode === "dev") {
+    return `${head} — in dev the body stays; the genome moves to generation/${sha7(sha)}`;
+  }
+  if (!canSwap) {
+    return `${head} — the swap is macOS-only in this generation; the genome moves, the body stays`;
+  }
+  return `${head} — LOOM will close and return`;
+};
+/** What `build.rs` bakes into a body built outside the genome. */
+export const UNNAMED_SHA = "unknown";
+
+/**
+ * "which generation is this".
+ *
+ * Round-4 review, Finding 2: this read `id.generation` — the LEDGER's claim
+ * about which body is on disk. The ledger is allowed to lag the body (the
+ * swap writes it before the new body has ever booted, and the warden writes
+ * it back after a heal), so in the state a half-finished swap leaves behind
+ * it names the body that is NOT running, and a torn ledger reads `null` and
+ * called a real woven body "unwoven". `genomeSha` is compiled into the
+ * binary that is answering: it cannot be wrong about which body that is.
+ *
+ * The one body that genuinely cannot name itself is one built outside the
+ * genome, whose baked sha is the literal `"unknown"`.
+ */
+export const identityLine = (id: Identity) =>
+  `generation ${id.genomeSha === UNNAMED_SHA ? "unnamed" : short(id.genomeSha)} · ${id.mode} · ${id.threaded ? "threaded" : "not threaded"}`;
 
 export async function handle(
   utterance: string,
@@ -36,64 +162,68 @@ export async function handle(
   deps: CompanionDeps
 ): Promise<CompanionTurn> {
   const ids = await deps.organIds();
-  const currentDeck = deps.currentDeck ? deps.currentDeck() : "void";
-  const c = await compile(utterance, ids, deps.askModel, history, currentDeck);
+  const c = await compile(utterance, ids, deps.askModel, history);
+  const body: RebirthDeps = { ...REBIRTH_DEFAULTS, ...(deps.rebirth ?? {}) };
 
   switch (c.intent) {
-    case "briefing": {
-      // Fast path — zero model calls. Assembles spoken briefing from salient events.
-      const items = deps.getSalient ? deps.getSalient(3) : [];
-      if (items.length === 0) {
-        return { kind: "briefing", text: "The watch is quiet. Nothing crosses your thresholds." };
+    // ── Rebirth (Phase 23): rules about the body, never a model call ──────────
+
+    case "reweave": {
+      // The dry run first: a refusal reads the same line the card would show;
+      // readiness becomes a consent line, and nothing starts until the owner
+      // presses REWEAVE in the Companion.
+      const ready = await body.readiness();
+      if (!ready.ok) return { kind: "reply", text: ready.reason };
+      return {
+        kind: "consent",
+        consent: "reweave_consent",
+        line: reweaveConsentLine(
+          ready.genomeHead,
+          ready.mode,
+          ready.canSwap,
+          ready.failedBefore,
+        ),
+      };
+    }
+
+    case "thread": {
+      // Threading is the ceremony that reaches the network — once. It gets a
+      // card like the other two acts on the body, and the card carries the
+      // network line, so the owner reads it before anything is fetched.
+      const status = await body.threadStatus();
+      const missingName = status.missing[0];
+      if (missingName !== undefined) {
+        const tool = status.tools.find((t) => t.name === missingName);
+        return { kind: "reply", text: missingToolLine(missingName, tool?.install ?? "see Settings") };
       }
-      const sentences = items.map((item) =>
-        item.reasons.length > 0
-          ? `${item.title} — ${item.reasons[0]}.`
-          : `${item.title}.`
-      );
-      // Steer the globe when active and top item has coords
-      if (
-        deps.sendDeckCommands &&
-        deps.currentDeck &&
-        deps.currentDeck() === "globe"
-      ) {
-        const located = items.find((item) => typeof item.lat === "number" && typeof item.lng === "number");
-        if (located) {
-          deps.sendDeckCommands([{ type: "fly_to", lat: located.lat!, lng: located.lng! }]);
-        }
-      }
-      return { kind: "briefing", text: "Top of the watch: " + sentences.join(" ") };
+      return { kind: "consent", consent: "thread_consent", line: LINE_THREAD_CONSENT };
+    }
+
+    case "identity": {
+      const id = await body.identity();
+      return { kind: "reply", text: identityLine(id) };
+    }
+
+    case "generation_return": {
+      // Not `find(g => g.isPrevious)`: after a heal the ledger's PREVIOUS is
+      // the body that just failed to boot (round-4 review, Finding 3).
+      const previous = previousGeneration(await body.generations());
+      if (!previous) return { kind: "reply", text: LINE_NO_PREVIOUS };
+      const id = await body.identity();
+      return {
+        kind: "consent",
+        consent: "generation_return_consent",
+        sha: previous.sha,
+        line: returnConsentLine(previous.sha, id.mode, id.canSwap),
+      };
     }
 
     case "help": {
       // Fast path — zero model calls. Speaks the command grammar generated
-      // FROM the shuttle catalog (same no-model pattern as briefings), so
-      // voice discoverability and the Cmd+K palette can never drift apart.
+      // FROM the shuttle catalog, so voice discoverability and the Cmd+K
+      // palette can never drift apart.
       const catalog = buildCatalog({ organs: ids.map((id) => ({ id, title: id })) });
       return { kind: "help", text: helpText(catalog) };
-    }
-
-    case "deck_command": {
-      // Fast path — no model call. The deck command result is already fully
-      // resolved by the rule classifier (classifyDeckCommand).
-      const dcr = c.deckCommandResult;
-      if (!dcr) {
-        // Should not happen: rules always populate deckCommandResult for deck_command.
-        // Fall through to converse as a safety net.
-        const windowed = windowMessages(history.filter((m) => m.role !== "system"));
-        const messages: Msg[] = [
-          { role: "system", content: COMPANION_SYSTEM },
-          ...windowed,
-          { role: "user", content: c.request },
-        ];
-        const text = await deps.chat("companion", messages);
-        return { kind: "reply", text };
-      }
-      return {
-        kind: "deck_command",
-        deckCommandResult: dcr,
-        confirmation: dcr.confirmation,
-      };
     }
 
     case "converse": {

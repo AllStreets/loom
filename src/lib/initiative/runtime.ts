@@ -21,8 +21,6 @@ import { mountObserver, loadUsage } from "./observe";
 import { proposeFromObservation, type Proposal, type OrganRef } from "./propose";
 import { getInitiativeState } from "./store";
 import { getSetting } from "../voice/settings";
-import { getSignals, getWatchlist } from "../watch/store";
-import { computeWeights } from "../watch/learned";
 import { organList } from "../core";
 
 /** Debounce window: a burst of activity collapses into one evaluation. */
@@ -30,11 +28,9 @@ const EVAL_DEBOUNCE_MS = 1200;
 
 /** The events that mean "the ledger may have just changed" — evaluate after. */
 const ACTIVITY_EVENTS = [
-  "loom-deck",
   "loom-utterance",
   "loom-settings-changed",
-  "loom-floor-open",
-  "loom-salience",
+  "organs-changed",
 ] as const;
 
 /** Read the installed organs as OrganRefs, tolerating a broken/absent shell. */
@@ -89,10 +85,7 @@ export function mountInitiative(): () => void {
 
     const proposal: Proposal | null = proposeFromObservation({
       ledger: loadUsage(),
-      signals: getSignals(),
-      weights: computeWeights(getSignals()),
       organs,
-      watchlistCount: getWatchlist().length,
       neverList: gov.neverList,
       lastProposalTs: gov.lastProposalTs,
       now: Date.now(),

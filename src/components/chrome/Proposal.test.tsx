@@ -12,12 +12,12 @@ vi.mock("framer-motion", async (importOriginal) => {
 });
 
 const SAMPLE: ProposalType = {
-  id: "price-alert:btc",
-  archetype: "price-alert",
-  title: "a btc price alert",
-  rationale: "you opened the btc floor 6 times. i could notify you when it moves more than 3% in an hour.",
-  request: "Build a price-alert organ that notifies me when btc moves more than 3% in an hour.",
-  powers: ["pulse", "market", "notify"],
+  id: "morning-brief",
+  archetype: "morning-brief",
+  title: "a morning brief",
+  rationale: "you've been here 4 mornings running, and the weave holds 2 organs. i could read aloud what changed in the weave each morning.",
+  request: "Build a morning-brief organ that each morning reads aloud the three most recent commits in my timeline.",
+  powers: ["pulse", "timeline", "voice"],
 };
 
 function propose(p: ProposalType = SAMPLE) {
@@ -45,14 +45,15 @@ describe("Proposal", () => {
     render(<Proposal />);
     propose();
     expect(screen.getByTestId("proposal-card")).toBeTruthy();
-    expect(screen.getByTestId("proposal-title").textContent).toBe("a btc price alert");
-    expect(screen.getByTestId("proposal-rationale").textContent).toContain("opened the btc floor 6 times");
+    expect(screen.getByTestId("proposal-title").textContent).toBe("a morning brief");
+    expect(screen.getByTestId("proposal-rationale").textContent).toContain("4 mornings running");
     // Powers rendered via POWER_LABELS, dot-joined
     const powers = screen.getByTestId("proposal-powers").textContent ?? "";
     expect(powers).toContain("it will ask to:");
     expect(powers).toContain("run on a schedule");
-    expect(powers).toContain("read market data");
-    expect(powers).toContain("notify you");
+    expect(powers).toContain("read the timeline");
+    expect(powers).toContain("speak aloud");
+    expect(powers).not.toContain("market");
   });
 
   it("ignores malformed proposals without an id/title", () => {
@@ -68,7 +69,7 @@ describe("Proposal", () => {
     render(<Proposal />);
     propose(SAMPLE);
     propose({ ...SAMPLE, id: "morning-brief", title: "a morning brief" });
-    expect(screen.getByTestId("proposal-title").textContent).toBe("a btc price alert");
+    expect(screen.getByTestId("proposal-title").textContent).toBe("a morning brief");
   });
 
   it("first-ever proposal (empty neverList AND lastProposalTs 0) shows the calm intro line", () => {
@@ -121,7 +122,7 @@ describe("Proposal", () => {
     propose();
     fireEvent.click(screen.getByTestId("proposal-never"));
     const state = getInitiativeState();
-    expect(state.neverList).toContain("price-alert:btc");
+    expect(state.neverList).toContain("morning-brief");
     expect(state.lastProposalTs).toBeGreaterThan(0);
     await waitForElementToBeRemoved(() => screen.queryByTestId("proposal-card"));
   });
@@ -148,7 +149,7 @@ describe("Proposal", () => {
     render(<Proposal />);
     propose();
     expect(screen.getByTestId("proposal-card")).toBeTruthy();
-    expect(screen.getByTestId("proposal-title").textContent).toBe("a btc price alert");
+    expect(screen.getByTestId("proposal-title").textContent).toBe("a morning brief");
   });
 
   it("renders the rationale as text — a crafted rationale is escaped, never HTML", () => {

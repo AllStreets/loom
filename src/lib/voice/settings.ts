@@ -35,27 +35,6 @@ export function isValidModelTag(tag: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._\-\/]*(:[A-Za-z0-9._\-]+)?$/.test(tag);
 }
 
-// ── Terminal watchlist validation ─────────────────────────────────────────────
-
-/** One equity/index/future ticker: uppercase, 1–12 chars of A-Z 0-9 . ^ = - */
-export const TICKER_RE = /^[A-Z0-9.^=-]{1,12}$/;
-
-/** Rate-friendliness cap — the Terminal fans out one request per symbol. */
-export const WATCHLIST_MAX = 24;
-
-/**
- * Validate a candidate `terminal.symbols` value: a comma-joined list of
- * canonical tickers (no whitespace, already uppercased), each matching
- * TICKER_RE, at most WATCHLIST_MAX entries. Empty string = empty watchlist
- * (valid — the movers panel states it honestly).
- */
-export function isValidSymbolList(value: string): boolean {
-  if (value === "") return true;
-  const parts = value.split(",");
-  if (parts.length > WATCHLIST_MAX) return false;
-  return parts.every((t) => TICKER_RE.test(t));
-}
-
 // ── Whitelist ──────────────────────────────────────────────────────────────────
 
 export type SettingsKey =
@@ -66,14 +45,10 @@ export type SettingsKey =
   | "model.builder"
   | "model.companion"
   | "model.rewriter"
-  | "model.cloudBuilder"
-  | "cockpit.deck"
-  | "cockpit.interact"
   | "cockpit.tapestry"
-  | "cockpit.watchOpen"
   | "cockpit.chatMin"
   | "cockpit.initiative"
-  | "terminal.symbols";
+  | "kernel.autoReweave";
 
 export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "voice.default",
@@ -83,21 +58,14 @@ export const SETTINGS_KEYS: readonly SettingsKey[] = [
   "model.builder",
   "model.companion",
   "model.rewriter",
-  "model.cloudBuilder",
-  "cockpit.deck",
-  "cockpit.interact",
   "cockpit.tapestry",
-  "cockpit.watchOpen",
   "cockpit.chatMin",
   "cockpit.initiative",
-  "terminal.symbols",
+  "kernel.autoReweave",
 ];
 
 // Keys that use free-text model-tag validation instead of enumeration
 const MODEL_KEYS = new Set<SettingsKey>(["model.builder", "model.companion", "model.rewriter"]);
-
-// Keys that hold a comma-joined ticker watchlist (isValidSymbolList)
-const SYMBOL_LIST_KEYS = new Set<SettingsKey>(["terminal.symbols"]);
 
 // Allowed values for enumerated keys (model.* keys validate via isValidModelTag instead)
 const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
@@ -105,13 +73,10 @@ const ALLOWED: Partial<Record<SettingsKey, readonly string[]>> = {
   "voice.speakReplies": ["always", "whenSpoken", "never"],
   "orb.tier": ["auto", "flat"],
   "loom.reviewBeforeSave": ["0", "1"],
-  "model.cloudBuilder": ["off", "anthropic"],
-  "cockpit.deck": ["void", "globe", "terminal", "ember"],
-  "cockpit.interact": ["on", "off"],
   "cockpit.tapestry": ["on", "off"],
-  "cockpit.watchOpen": ["on", "off"],
   "cockpit.chatMin": ["on", "off"],
   "cockpit.initiative": ["on", "off"],
+  "kernel.autoReweave": ["on", "off"],
 };
 
 const DEFAULTS: Record<SettingsKey, string> = {
@@ -122,19 +87,16 @@ const DEFAULTS: Record<SettingsKey, string> = {
   "model.builder": "",
   "model.companion": "",
   "model.rewriter": "",
-  "model.cloudBuilder": "off",
-  "cockpit.deck": "void",
-  "cockpit.interact": "on",
   // Default ON — the Tapestry is the brand, not decoration.
   "cockpit.tapestry": "on",
-  "cockpit.watchOpen": "off",
   // Default OFF — the typing box is present until its owner folds it away.
   "cockpit.chatMin": "off",
   // Default ON — initiative is the vision; the toggle honors the house rule
   // that any active surface must be silenceable.
   "cockpit.initiative": "on",
-  // The Terminal's default tape — the pre-watchlist hardcoded equities list.
-  "terminal.symbols": "AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA",
+  // Default OFF — a reweave closes LOOM and returns it; the owner opts in to
+  // that happening on its own after every approved core edit (Phase 23).
+  "kernel.autoReweave": "off",
 };
 
 // Legacy key the orb's detectTier reads
@@ -150,6 +112,15 @@ const RETIRED_KEYS: readonly string[] = [
   "deck.agora.url",
   "deck.agora.path",
   "deck.agora.product",
+  // Phase 23a (Rebirth): the Cockpit is gone — decks, watch, terminal, cloud.
+  "cockpit.deck",
+  "cockpit.interact",
+  "cockpit.watchOpen",
+  "terminal.symbols",
+  "model.cloudBuilder",
+  // The Cockpit's own stores (watch signals / watchlist / weights, the AUSPEX tour flag).
+  "loom.watch.v1",
+  "auspex.tour.seen.v1",
 ];
 
 /**
@@ -164,16 +135,6 @@ export function migrateSettings(): void {
     } catch {
       // storage unavailable — nothing to migrate
     }
-  }
-  // A retired VALUE can hide under a live key: an owner whose last deck was
-  // AGORA still has cockpit.deck="agora" stored. Deleting it falls back to
-  // the default ("void") — removing an absent key stays a no-op (idempotent).
-  try {
-    if (localStorage.getItem("cockpit.deck") === "agora") {
-      localStorage.removeItem("cockpit.deck");
-    }
-  } catch {
-    // storage unavailable — nothing to migrate
   }
 }
 
@@ -209,13 +170,6 @@ export function setSetting(key: string, value: string): void {
         `Invalid model tag "${value}" for key "${key}". Must match ^[A-Za-z0-9][A-Za-z0-9._\\-\\/]*(:[A-Za-z0-9._\\-]+)?$ (max 128 chars) or be empty.`
       );
     }
-  } else if (SYMBOL_LIST_KEYS.has(k)) {
-    // Comma-joined ticker watchlist; empty = empty watchlist
-    if (!isValidSymbolList(value)) {
-      throw new Error(
-        `Invalid symbol list "${value}" for key "${key}". Comma-joined tickers matching ${TICKER_RE}, max ${WATCHLIST_MAX}, or empty.`
-      );
-    }
   } else {
     const allowed = ALLOWED[k]!;
     if (!allowed.includes(value)) {
@@ -242,7 +196,7 @@ export function setSetting(key: string, value: string): void {
 }
 
 /**
- * Clear all user settings, loom.* keys, and auspex tour key.
+ * Clear all user settings and loom.* keys.
  * Called by loom.settings.resetAll() in api.ts (also clears tombstones).
  * Does NOT touch organ git files.
  */
@@ -258,6 +212,4 @@ export function resetAllSettings(): void {
     if (k && k.startsWith("loom.")) loomKeys.push(k);
   }
   loomKeys.forEach((k) => localStorage.removeItem(k));
-  // Also remove the auspex tour key
-  localStorage.removeItem("auspex.tour.seen.v1");
 }

@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { classifyByRules, classifyIntent } from "./intent";
+import {
+  classifyByRules,
+  classifyIntent,
+  REWEAVE_PHRASES,
+  THREAD_PHRASES,
+  IDENTITY_PHRASES,
+  GENERATION_RETURN_PHRASES,
+} from "./intent";
 
 // ---- classifyByRules -------------------------------------------------------
 
@@ -343,149 +350,36 @@ describe("classifyIntent — model fallback", () => {
     expect(promptArg).toContain("Built notes");
     expect(promptArg).toContain("show it to me");
   });
-
-  it("few-shot system contains deck_command examples", async () => {
-    const askModel = vi
-      .fn()
-      .mockResolvedValue('{"intent":"deck_command","organId":null}');
-    await classifyIntent("blorp fizzle quux", [], askModel);
-    const [systemArg] = askModel.mock.calls[0] as [string, string];
-    expect(systemArg).toContain("deck_command");
-    expect(systemArg).toContain("show the globe");
-  });
 });
 
-// ── T2 deck_command intent rules ────────────────────────────────────────────
+// ── Retired Cockpit intents (Rebirth) ────────────────────────────────────────
 
-describe("classifyByRules — deck_command", () => {
-  it("'show the globe' → deck_command with deckSwitch:globe", () => {
-    const result = classifyByRules("show the globe", [], [], "void");
-    expect(result).not.toBeNull();
-    expect(result!.intent).toBe("deck_command");
-    expect(result!.confidence).toBe(0.95);
-    expect(result!.source).toBe("rules");
-    expect(result!.deckCommandResult?.deckSwitch).toBe("globe");
-    expect(result!.deckCommandResult?.bridgeCmds).toHaveLength(0);
+describe("classifyByRules — deck and briefing phrases no longer exist", () => {
+  it("'show the globe' is not a rule hit — it falls to the model", () => {
+    expect(classifyByRules("show the globe", [])).toBeNull();
   });
 
-  it("'show military news' → deck_command with set_cat military", () => {
-    const result = classifyByRules("show military news", [], [], "globe");
-    expect(result!.intent).toBe("deck_command");
-    expect(result!.deckCommandResult?.bridgeCmds[0]).toEqual({ type: "set_cat", cat: "military" });
-    expect(result!.deckCommandResult?.deckSwitch).toBeUndefined();
+  it("'brief me' is not a rule hit — it falls to the model", () => {
+    expect(classifyByRules("brief me", [])).toBeNull();
   });
 
-  it("'show vessels' from void → deck_command with deckSwitch:globe + toggle_overlay vessels", () => {
-    const result = classifyByRules("show vessels", [], [], "void");
-    expect(result!.intent).toBe("deck_command");
-    expect(result!.deckCommandResult?.deckSwitch).toBe("globe");
-    expect(result!.deckCommandResult?.bridgeCmds[0]).toEqual({ type: "toggle_overlay", overlay: "vessels" });
+  it("'what's happening?' routes to converse by the question rule", () => {
+    expect(classifyByRules("what's happening?", [])?.intent).toBe("converse");
   });
 
-  it("'reset the view' → deck_command with reset_view", () => {
-    const result = classifyByRules("reset the view", [], [], "globe");
-    expect(result!.intent).toBe("deck_command");
-    expect(result!.deckCommandResult?.bridgeCmds[0]).toEqual({ type: "reset_view" });
-  });
-
-  it("'stop spinning' → deck_command with set_spin false", () => {
-    const result = classifyByRules("stop spinning", [], [], "globe");
-    expect(result!.intent).toBe("deck_command");
-    expect(result!.deckCommandResult?.bridgeCmds[0]).toEqual({ type: "set_spin", on: false });
-  });
-
-  it("deck_command fires WITHOUT calling askModel", async () => {
-    const askModel = vi.fn();
-    const result = await classifyIntent("show the globe", [], askModel, [], "void");
-    expect(result.intent).toBe("deck_command");
-    expect(askModel).not.toHaveBeenCalled();
-  });
-});
-
-// ── Precedence regressions: deck does NOT steal build/edit/act phrases ───────
-
-describe("classifyByRules — deck_command does NOT regress build/edit/act", () => {
-  it("'build me a water tracker' still → build_organ (not deck_command)", () => {
-    const result = classifyByRules("build me a water tracker", [], [], "void");
-    expect(result!.intent).toBe("build_organ");
-  });
-
-  it("'show me a water tracker' with organ → act_on_organ (not deck_command)", () => {
-    const result = classifyByRules("show me a water tracker", ["water-tracker"], [], "void");
-    expect(result!.intent).toBe("act_on_organ");
-    expect(result!.organId).toBe("water-tracker");
-  });
-
-  it("'make it blue' anaphora + edit verb → edit_organ (not deck_command)", () => {
-    const history = [
-      { role: "assistant", content: "Built water-tracker: organ ready. Passed in 0 repair round(s)." },
-    ];
-    const result = classifyByRules("make it blue", [], history, "void");
-    expect(result!.intent).toBe("edit_organ");
-    expect(result!.organId).toBe("water-tracker");
-  });
-
-  it("'make me something like notes but for tasks' → build_organ (not deck_command)", () => {
-    const result = classifyByRules("make me something like notes but for tasks", ["notes"], [], "void");
-    expect(result!.intent).toBe("build_organ");
-  });
-
-  it("'show me a water tracker' with no organs → null (falls to model, not deck_command)", () => {
-    // Water tracker not in organ list, no organ match — but "water tracker" is not
-    // a deck keyword either, so should return null (fall through to model).
-    const result = classifyByRules("show me a water tracker", [], [], "void");
-    expect(result).toBeNull();
-  });
-});
-
-// ── Briefing intent rules ────────────────────────────────────────────────────
-
-describe("classifyByRules — briefing intent", () => {
-  it("'brief me' → briefing", () => {
-    const result = classifyByRules("brief me", []);
-    expect(result?.intent).toBe("briefing");
-    expect(result?.confidence).toBe(0.95);
-    expect(result?.source).toBe("rules");
-  });
-
-  it("'what matters' → briefing", () => {
-    const result = classifyByRules("what matters", []);
-    expect(result?.intent).toBe("briefing");
-  });
-
-  it("'what's happening' → briefing (case-insensitive)", () => {
-    const result = classifyByRules("what's happening", []);
-    expect(result?.intent).toBe("briefing");
-  });
-
-  it("'morning brief' → briefing", () => {
-    const result = classifyByRules("morning brief", []);
-    expect(result?.intent).toBe("briefing");
-  });
-
-  it("'since i've been gone' → briefing", () => {
-    const result = classifyByRules("since i've been gone", []);
-    expect(result?.intent).toBe("briefing");
-  });
-
-  it("'whats the watch' → briefing", () => {
-    const result = classifyByRules("whats the watch", []);
-    expect(result?.intent).toBe("briefing");
-  });
-
-  it("briefing fires without calling askModel", async () => {
-    const askModel = vi.fn();
-    const result = await classifyIntent("brief me", [], askModel);
-    expect(result.intent).toBe("briefing");
-    expect(askModel).not.toHaveBeenCalled();
-  });
-
-  it("few-shot system contains briefing examples", async () => {
+  it("the few-shot system names no retired intent", async () => {
     const askModel = vi.fn().mockResolvedValue('{"intent":"converse","organId":null}');
     await classifyIntent("blorp fizzle quux", [], askModel);
     const [systemArg] = askModel.mock.calls[0] as [string, string];
-    expect(systemArg).toContain("briefing");
-    expect(systemArg).toContain("brief me");
+    expect(systemArg).not.toContain("deck_command");
+    expect(systemArg).not.toContain("briefing");
+  });
+
+  it("a model reply naming a retired intent is rejected → converse default", async () => {
+    const askModel = vi.fn().mockResolvedValue('{"intent":"deck_command","organId":null}');
+    const result = await classifyIntent("blorp fizzle quux", [], askModel);
+    expect(result.intent).toBe("converse");
+    expect(result.confidence).toBe(0.3);
   });
 });
 
@@ -542,5 +436,69 @@ describe("classifyByRules — self_edit", () => {
       "edit_organ",
     );
     expect(classifyByRules("build me a sleep tracker", [])?.intent).toBe("build_organ");
+  });
+});
+
+// ---- rebirth rules (Phase 23) — reweave / thread / identity / return -------
+
+describe("classifyByRules — rebirth rules (no model call)", () => {
+  const table: [string, string][] = [
+    ["reweave yourself", "reweave"],
+    ["rebuild yourself", "reweave"],
+    ["become the new version", "reweave"],
+    ["weave the new generation", "reweave"],
+    ["reweave", "reweave"],
+    ["please reweave yourself now", "reweave"],
+    ["thread the loom", "thread"],
+    ["thread yourself", "thread"],
+    ["which generation is this", "identity"],
+    ["which generation is this?", "identity"],
+    ["what generation are you", "identity"],
+    ["what generation are you?", "identity"],
+    ["return to the previous generation", "generation_return"],
+    ["go back a generation", "generation_return"],
+    ["go back to the previous generation", "generation_return"],
+    ["return to the last generation", "generation_return"],
+  ];
+
+  for (const [utterance, intent] of table) {
+    it(`"${utterance}" → ${intent} from rules with high confidence`, () => {
+      const result = classifyByRules(utterance, ["water-tracker", "settings"]);
+      expect(result).not.toBeNull();
+      expect(result!.intent).toBe(intent);
+      expect(result!.source).toBe("rules");
+      expect(result!.confidence).toBeGreaterThanOrEqual(0.9);
+      expect(result!.organId).toBeUndefined();
+    });
+  }
+
+  it("the rebirth rules outrank self_edit, build, and converse", () => {
+    // "rebuild yourself" must never become a build_organ or a self_edit.
+    expect(classifyByRules("rebuild yourself", [])?.intent).toBe("reweave");
+    // a trailing question mark must not swallow identity into converse.
+    expect(classifyByRules("which generation is this?", [])?.intent).toBe("identity");
+  });
+
+  it("does not misfire on ordinary organ talk mentioning threads or generations", () => {
+    expect(classifyByRules("build me a thread tracker", [])?.intent).toBe("build_organ");
+    expect(
+      classifyByRules("add a generation column to the water tracker", ["water-tracker"])?.intent,
+    ).toBe("edit_organ");
+    expect(classifyByRules("change yourself so the orb is brighter", [])?.intent).toBe("self_edit");
+  });
+
+  it("every phrase in the exported tables classifies to its intent (the catalog derives from them)", () => {
+    const tables: [readonly string[], string][] = [
+      [REWEAVE_PHRASES, "reweave"],
+      [THREAD_PHRASES, "thread"],
+      [IDENTITY_PHRASES, "identity"],
+      [GENERATION_RETURN_PHRASES, "generation_return"],
+    ];
+    for (const [phrases, intent] of tables) {
+      expect(phrases.length).toBeGreaterThan(0);
+      for (const p of phrases) {
+        expect(classifyByRules(p, [])?.intent, `"${p}" must be ${intent}`).toBe(intent);
+      }
+    }
   });
 });

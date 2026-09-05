@@ -13,13 +13,23 @@
 //! machinery — `is_editable` denies the protected set BEFORE any fs op.
 //!
 //! Isolation model: a proposal creates a detached `git worktree` at HEAD in a
-//! temp dir. Edits and validation happen THERE. `kernel_apply` re-derives the
-//! same patch and writes it to the live tree only on an explicit, separate
-//! call. Every error path cleans up the worktree (`git worktree remove` +
-//! `git worktree prune`) so no orphan survives.
+//! temp dir (dev) or under `loomhome/worktrees/` (packaged). Edits and
+//! validation happen THERE. `kernel_apply` re-derives the same patch and writes
+//! it to the live tree only on an explicit, separate call. Every error path
+//! cleans up the worktree (`git worktree remove` + `git worktree prune`) so no
+//! orphan survives.
+//!
+//! Phase 23 (Rebirth): validation is OFFLINE. The worktree borrows the source
+//! tree's `node_modules` through a symlink, `tsc`/`vitest` are invoked as
+//! files under it through the recorded `node` binary (never `npx`, whose own
+//! cache was an unstated network dependency), and cargo runs `--offline`
+//! against the shared loomhome `target/` in packaged mode.
 
 use crate::error::LoomError;
-use crate::exec::{run_checked, ExecOut};
+use crate::exec::{run_checked, run_checked_env, run_detached, ExecOut};
+use crate::loomhome::{mode, Home, Mode};
+use crate::platform::AppLayout;
+use crate::{generations, platform, threads, warden};
 use git2::Repository;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -56,6 +66,12 @@ const PROTECTED: &[&str] = &[
     "index.html",
     "vite.config.ts",
     "package.json",
+    // Phase 23 (Rebirth): a dependency edit is an arbitrary-code vector — the
+    // lockfile decides what `npm ci` runs during threading.
+    "package-lock.json",
+    // Phase 23 (Rebirth): the script that bundles the genome into the build —
+    // it decides what history the next binary carries.
+    "scripts/genome-bundle.mjs",
 ];
 
 /// Protected by STEM PREFIX — every file whose lowercased path *starts with*
@@ -73,6 +89,43 @@ const PROTECTED_PREFIXES: &[&str] = &[
     "src/components/chrome/kerneldiff", // the approval diff card (+ tests)
     "src/components/chrome/recovery",  // recoveryNotice UI (+ tests)
     "src/components/errorboundary",    // drives noteBootError → boot-health veto
+    // Phase 23 (Rebirth): Tauri capability grants — what the webview may ask
+    // of the shell. Widening them is widening the walls.
+    "src-tauri/capabilities/",
+    // Phase 23 (Rebirth): the bundled genome (genome.bundle + genome.json) —
+    // gitignored build output, but a path LOOM must never write.
+    "src-tauri/genome/",
+    // Phase 23 (Rebirth): the TS side of the reweave — starts a binary swap
+    // and returns bodies; a self-edit here could weave without consent.
+    "src/lib/loom/reweave",           // reweave orchestration (+ tests)
+    "src/lib/loom/generations",       // generations orchestration (+ tests)
+    // Round-1 review: the rule is "anything that implements a wall", and these
+    // implement the walls around the body. `api` holds the `need()` grant seam
+    // every organ power passes through; `budgets` meters it; `validate` decides
+    // which powers a manifest may declare AND supplies the label the owner
+    // reads on the permission card; `chrome/reweave` is the only surface
+    // carrying CANCEL before the point of return; the settings seed is the only
+    // one offering the generations list — the road home. Protecting one caller
+    // of the orchestration above and not the others was the gap.
+    "src/lib/organs/api",             // the power grant seam (+ tests)
+    "src/lib/organs/budgets",         // the meter on that seam (+ tests)
+    "src/lib/loom/validate",          // manifest wall + the owner-facing labels
+    "src/components/chrome/reweave",  // the reweave card — CANCEL lives here
+    // Round-3 review: the ceremony that spends the owner's single network trip
+    // and runs for tens of minutes had no surface and no stop button. These two
+    // are that surface — the only caller of `thread_cancel` in the product, and
+    // the only listener of `loom-thread` outside an organ power. Same class as
+    // the reweave card: a self-edit here could detach the stop from the job, or
+    // stop the card from ever appearing, and threading would run blind again.
+    "src/lib/loom/threading",         // threading orchestration (+ tests)
+    "src/components/chrome/threading", // the threading card — CANCEL lives here
+    "src/organs/seeds/settings",      // the generations list: the road home
+    // Round-1 fixes moved the consent for a body change out of the organ API
+    // and into shell-owned chrome. That chrome is now the ONLY wall between an
+    // organ and the binary swap, so it joins the set it replaced.
+    "src/lib/organs/bodygate",        // an organ may ask; this is the asking
+    "src/components/chrome/bodyrequest", // the shell answers — the only caller
+    "src/components/chrome/consentcard", // the card the owner actually reads
 ];
 
 /// tsconfig*.json — matched by name pattern (tsconfig.json, tsconfig.node.json…).
@@ -101,6 +154,19 @@ const PROTECTED_RUST: &[&str] = &[
     "src-tauri/src/exec.rs",     // hardened fixed-argv spawn (the validation wall)
     "src-tauri/src/error.rs",    // the typed-error surface the walls speak in
     "src-tauri/src/timeline.rs", // rollback discipline the recovery reuses
+    // Phase 23 (Rebirth): the loomhome / build / bundle surface. These are
+    // already outside the `src-tauri/src/**/*.rs` whitelist (build.rs,
+    // tauri.conf.json) or would be inside it (loomhome.rs) — either way they
+    // are NAMED here so the protection is explicit and enumerable, not an
+    // accident of the whitelist's shape.
+    "src-tauri/src/platform.rs", // the swap plan + execution — replaces the running body's file
+    "src-tauri/src/generations.rs", // the ledger — decides which bodies survive on disk
+    "src-tauri/src/loomhome.rs", // identity + every path the reweave reads/writes
+    "src-tauri/src/threads.rs",  // tool discovery + the threading ceremony (spawns tools)
+    "src-tauri/src/reweave.rs",  // the build job — assets, core, stage, swap, relaunch
+    "src-tauri/src/warden.rs",   // the birth guard — argv dispatch, watch, heal
+    "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA — a generation's own name
+    "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
 ];
 
 /// The guard script and Cargo manifests are protected by BASENAME anywhere in
@@ -115,11 +181,21 @@ const PROTECTED_RUST_BASENAMES: &[&str] = &[
     "cargo.lock",
 ];
 
+/// `.cargo/config.toml` at ANY depth is protected (Phase 23 / Rebirth): it is
+/// where threading pins the vendored source and `net.offline`; an edit there
+/// could point cargo at an arbitrary registry or reopen the network.
+fn is_cargo_config(rel_lower: &str) -> bool {
+    rel_lower == ".cargo/config.toml" || rel_lower.ends_with("/.cargo/config.toml")
+}
+
 /// True if `rel_lower` (already normalized + lowercased) is a Rust-side safety
 /// file that LOOM must never edit — the enumerated core paths OR a protected
 /// basename anywhere. Checked BEFORE the positive Rust whitelist (deny wins).
 fn is_protected_rust(rel_lower: &str) -> bool {
     if PROTECTED_RUST.contains(&rel_lower) {
+        return true;
+    }
+    if is_cargo_config(rel_lower) {
         return true;
     }
     let base = rel_lower.rsplit('/').next().unwrap_or(rel_lower);
@@ -207,16 +283,59 @@ pub fn is_editable(rel: &str) -> bool {
 
 // ── Source-repo resolution ────────────────────────────────────────────────────
 
-/// Resolve the SOURCE repo root: the `override_opt` setting if a non-empty
-/// value is supplied, else the process cwd. Canonicalized, asserted to be a git
-/// WORK dir (`.git` present + `Repository::open` succeeds, not bare). Typed
-/// error otherwise. This is the sovereignty guard — LOOM only ever edits the
-/// repo it is running from (or an explicitly configured one).
+/// Re-check the whitelist against where a path ACTUALLY landed.
+///
+/// `is_editable` judges the path as spelled. Canonicalization then resolves
+/// symlinks — so a link inside the repo named `src/lib/foo.ts` pointing at
+/// `src-tauri/src/kernel.rs` would pass the spelled check and be written
+/// through to a protected file. The tree holds no symlinks today (`git
+/// ls-files -s` shows none), but that is an unstated invariant the whole
+/// whitelist rests on, so we re-derive the repo-relative path from the
+/// canonical one and judge THAT too. Deny wins, as everywhere else.
+fn assert_lands_editable(root: &Path, canon: &Path, rel: &str) -> Result<(), LoomError> {
+    let landed = canon
+        .strip_prefix(root)
+        .map_err(|_| LoomError::Parse(format!("path escapes source repo: {rel}")))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    if !is_editable(&landed) {
+        return Err(LoomError::Parse(format!(
+            "{rel} resolves to {landed}, which is not editable"
+        )));
+    }
+    Ok(())
+}
+
+/// Resolve the SOURCE repo root in DEV mode: the `override_opt` setting if a
+/// non-empty value is supplied, else the process cwd. Canonicalized, asserted
+/// to be a git WORK dir (`.git` present + `Repository::open` succeeds, not
+/// bare). Typed error otherwise. This is the sovereignty guard — LOOM only
+/// ever edits the repo it is running from (or an explicitly configured one).
+/// Commands go through `resolve_source_repo_for` so packaged mode answers
+/// `loomhome/source` instead; this dev entry serves the tests today.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn resolve_source_repo(override_opt: Option<&str>) -> Result<PathBuf, LoomError> {
-    let raw: PathBuf = match override_opt {
-        Some(s) if !s.trim().is_empty() => PathBuf::from(s.trim()),
-        _ => std::env::current_dir()
-            .map_err(|e| LoomError::NotFound(format!("cwd unavailable: {e}")))?,
+    resolve_source_repo_at(Mode::Dev, override_opt, None)
+}
+
+/// The mode-aware core. Packaged → `home.source()`, the `kernel.sourceRepo`
+/// override is dev-only and ignored (a packaged LOOM edits its own genome,
+/// never an arbitrary checkout). Dev → the override, else the cwd. Pure in
+/// `mode` so a test can exercise the packaged branch without a built app.
+pub fn resolve_source_repo_at(
+    mode: Mode,
+    override_opt: Option<&str>,
+    home: Option<&Home>,
+) -> Result<PathBuf, LoomError> {
+    let raw: PathBuf = match mode {
+        Mode::Packaged => home
+            .ok_or_else(|| LoomError::NotFound("loomhome unavailable — cannot locate source".into()))?
+            .source(),
+        Mode::Dev => match override_opt {
+            Some(s) if !s.trim().is_empty() => PathBuf::from(s.trim()),
+            _ => std::env::current_dir()
+                .map_err(|e| LoomError::NotFound(format!("cwd unavailable: {e}")))?,
+        },
     };
     let canonical = raw
         .canonicalize()
@@ -236,6 +355,15 @@ pub fn resolve_source_repo(override_opt: Option<&str>) -> Result<PathBuf, LoomEr
         )));
     }
     Ok(canonical)
+}
+
+/// What every command uses: the process mode + the app's loomhome.
+fn resolve_source_repo_for(
+    app: &tauri::AppHandle,
+    override_opt: Option<&str>,
+) -> Result<PathBuf, LoomError> {
+    let home = Home::from_app(app)?;
+    resolve_source_repo_at(mode(), override_opt, Some(&home))
 }
 
 // ── git helpers (hardened, fixed argv, via exec) ──────────────────────────────
@@ -260,24 +388,28 @@ fn git_ok(cwd: &Path, allowed_root: &Path, args: &[&str]) -> Result<String, Loom
     Ok(out.stdout)
 }
 
-/// Current HEAD sha of the repo at `root`.
-fn head_sha(root: &Path) -> Result<String, LoomError> {
+/// Current HEAD sha of the repo at `root`. `pub(crate)`: reweave.rs names
+/// the sha a weave targets with the same call `kernel_apply` records.
+pub(crate) fn head_sha(root: &Path) -> Result<String, LoomError> {
     Ok(git_ok(root, root, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
 // ── Validator toolchain resolution (Finding 8) ────────────────────────────────
 //
-// `kernel_validate` must not spawn `npx` resolved from an inherited PATH on
-// every call: a PATH hijacked between startup and a validate call could swap in
-// a validator that lies. Instead we resolve the ABSOLUTE path of `npx` ONCE (a
-// OnceLock cache) by walking PATH ourselves, and use that absolute path as
-// argv[0] thereafter — keeping the fixed-argv discipline intact.
+// `kernel_validate` must not spawn a validator resolved from an inherited PATH
+// on every call: a PATH hijacked between startup and a validate call could
+// swap in a validator that lies. The ABSOLUTE path of `node` is taken from
+// `threads.json` (recorded at threading) when a loomhome is at hand, else
+// resolved ONCE (a OnceLock cache) by walking PATH ourselves, and used as
+// argv[0] thereafter — keeping the fixed-argv discipline intact. The compiler
+// and test runner themselves are files under the worktree's `node_modules`
+// (a symlink to the source install), so nothing is looked up by name.
 //
 // Residual, stated honestly: if PATH is ALREADY hijacked at process startup the
 // machine is already compromised and no in-process check can save it. This
 // removes the *per-call re-resolution* window, not that root compromise.
 
-static NPX_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static NODE_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// Walk `PATH` looking for an executable named `bin` (with common Windows
 /// extensions on that platform). Returns the first absolute match.
@@ -300,23 +432,33 @@ fn which(bin: &str) -> Option<PathBuf> {
     None
 }
 
-/// The absolute `npx` path, resolved once and cached. `None` if unresolvable —
-/// in which case `kernel_validate` fails honestly (can't prove → can't pass).
-fn npx_path() -> Option<PathBuf> {
-    NPX_PATH.get_or_init(|| which("npx")).clone()
+/// The absolute `node` path: the recorded thread first (`threads.json`, if it
+/// still exists on disk — `threads::tool_path` handles the drift), else the
+/// PATH walk resolved once and cached. `None` if unresolvable — in which case
+/// `kernel_validate` fails honestly (can't prove → can't pass).
+fn node_path(home: Option<&Home>) -> Option<PathBuf> {
+    home.and_then(|h| crate::threads::tool_path(h, "node"))
+        .or_else(|| NODE_PATH.get_or_init(|| which("node")).clone())
 }
 
-// cargo gets the SAME treatment as npx (Phase 22): resolve the absolute path
+// cargo gets the SAME treatment as node (Phase 22): resolve the absolute path
 // ONCE via the shared PATH-walk `which`, cache it, and use it as argv[0] so a
 // PATH hijacked between startup and a validate call cannot swap in a `cargo`
 // that lies. Same residual: a PATH already hijacked at process startup is
 // out of scope (the machine is already compromised).
 static CARGO_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
-/// The absolute `cargo` path, resolved once and cached. `None` if unresolvable —
-/// in which case a Rust validate fails honestly (can't prove → can't pass).
-fn cargo_path() -> Option<PathBuf> {
-    CARGO_PATH.get_or_init(|| which("cargo")).clone()
+/// The absolute `cargo` path: the recorded thread first, else the threads
+/// table's fixed candidate order (`~/.cargo/bin` first — a cargo that PATH
+/// cannot see, e.g. a packaged app launched from Finder, is still found), else
+/// the PATH walk; the fallback is resolved once and cached. `None` if
+/// unresolvable — a Rust validate then fails honestly (can't prove → can't pass).
+fn cargo_path(home: Option<&Home>) -> Option<PathBuf> {
+    home.and_then(|h| crate::threads::tool_path(h, "cargo")).or_else(|| {
+        CARGO_PATH
+            .get_or_init(|| crate::threads::locate_now("cargo").or_else(|| which("cargo")))
+            .clone()
+    })
 }
 
 // ── SEARCH/REPLACE (exact, unique) ─────────────────────────────────────────────
@@ -385,6 +527,17 @@ fn with_registry<T>(f: impl FnOnce(&mut HashMap<String, Proposal>) -> T) -> T {
 /// Remove a worktree directory and prune the source repo's worktree metadata.
 /// Best-effort but thorough — used on every error path and on apply/discard.
 fn cleanup_worktree(source_root: &Path, worktree: &Path) {
+    // The borrowed `node_modules` symlink goes FIRST, by unlink — so neither
+    // git nor remove_dir_all below can ever be tempted to walk into the source
+    // tree's real install. `symlink_metadata` does not follow; `remove_file`
+    // on a symlink removes the link, never the target.
+    let link = worktree.join("node_modules");
+    if std::fs::symlink_metadata(&link)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_file(&link);
+    }
     // `git worktree remove --force` unregisters and deletes it. If the path is
     // not valid UTF-8 we can't form the git argv (fixed-argv discipline forbids
     // lossy coercion) — fall straight through to remove_dir_all, which takes a
@@ -486,14 +639,31 @@ fn sentinel_path(app: &tauri::AppHandle) -> Result<PathBuf, LoomError> {
     Ok(dir.join("kernel-boot.json"))
 }
 
-fn read_sentinel(path: &Path) -> Option<Sentinel> {
+/// The sentinel at `path`, or `None` when absent or torn. `pub(crate)` for
+/// the warden, which reads the app_data sentinel by path (no AppHandle).
+pub(crate) fn read_sentinel(path: &Path) -> Option<Sentinel> {
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
+/// Every write of the sentinel goes through the same atomic helper as the
+/// rest of loomhome (round-1 review, Finding 4): a staging file, fsync,
+/// rename. A torn sentinel reads as `None`, and a boot that reads `None`
+/// proceeds unguarded — permanently.
 fn write_sentinel(path: &Path, s: &Sentinel) -> Result<(), LoomError> {
-    let json = serde_json::to_string_pretty(s).map_err(|e| LoomError::Parse(e.to_string()))?;
-    std::fs::write(path, json).map_err(|e| LoomError::Git(e.to_string()))
+    crate::threads::write_json_atomic(path, s)
+}
+
+/// Write a sentinel at an explicit path (Phase 23 / Rebirth). The swap
+/// (platform.rs) and the warden (warden.rs) write `applied`/`healed` at
+/// `Home::sentinel_json()` without an AppHandle — the same file
+/// `sentinel_path` resolves for the running app. Thin wrapper over the
+/// private writer so the sentinel's shape has exactly one author.
+pub fn write_sentinel_at(path: &Path, s: &Sentinel) -> Result<(), LoomError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| LoomError::Git(e.to_string()))?;
+    }
+    write_sentinel(path, s)
 }
 
 // ── Return shapes ─────────────────────────────────────────────────────────────
@@ -525,7 +695,7 @@ pub struct ApplyOut {
     pub prev_sha: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Debug)]
 pub struct BootCheckOut {
     #[serde(rename = "rolledBackTo")]
     pub rolled_back_to: Option<String>,
@@ -535,6 +705,29 @@ pub struct BootCheckOut {
     /// The shell surfaces this so the user isn't silently stranded.
     #[serde(rename = "rollbackFailed")]
     pub rollback_failed: bool,
+    /// Phase 23: the warden (or the pre-main backstop) healed a woven body
+    /// that never confirmed its boot. Read from `loomhome/recovery.json` and
+    /// surfaced EXACTLY ONCE — the record is deleted as it is reported.
+    #[serde(rename = "healedGeneration")]
+    pub healed_generation: Option<HealedGeneration>,
+}
+
+/// `healedGeneration` — the warden's recovery record without its log tail.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HealedGeneration {
+    pub failed_sha: String,
+    pub prev_sha: String,
+    /// Why the birth ended: `"crashed"`, or one of the two "never confirmed"
+    /// readings. Never `REASON_ROLLBACK_FAILED` — a heal that failed is
+    /// reported as `rollbackFailed`, not as a generation LOOM came home to.
+    pub reason: String,
+}
+
+impl From<warden::Recovery> for HealedGeneration {
+    fn from(r: warden::Recovery) -> Self {
+        HealedGeneration { failed_sha: r.failed_sha, prev_sha: r.prev_sha, reason: r.reason }
+    }
 }
 
 /// The full protected list surfaced to the UI/prompt (concrete + prefixes +
@@ -559,9 +752,53 @@ fn protected_list() -> Vec<String> {
 
 // ── Core operations (testable, app-independent) ───────────────────────────────
 
+/// Where validation worktrees live. Packaged → `loomhome/worktrees/` (inside
+/// loomhome, next to the shared `target/`, so the cargo env pair names two
+/// LOOM-owned paths); dev → the system temp dir, as in Phase 21.
+pub fn worktree_parent(mode: Mode, home: &Home) -> PathBuf {
+    match mode {
+        Mode::Packaged => home.worktrees(),
+        Mode::Dev => std::env::temp_dir(),
+    }
+}
+
+/// Lend the source tree's `node_modules` to a worktree: a symlink
+/// `<worktree>/node_modules → <source_node_modules>`. A worktree is a bare
+/// checkout with no install of its own, and Phase 21's `npx` quietly filled
+/// that gap from its own cache — a network dependency. The link makes the
+/// worktree's `tsc`/`vitest` the source tree's, offline. Untracked (the tree
+/// gitignores it), so the proposal diff is unaffected.
+#[cfg(unix)]
+fn link_node_modules(source_node_modules: &Path, worktree: &Path) -> Result<(), LoomError> {
+    std::os::unix::fs::symlink(source_node_modules, worktree.join("node_modules")).map_err(|e| {
+        LoomError::Git(format!(
+            "link node_modules into worktree {}: {e}",
+            worktree.display()
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn link_node_modules(_source_node_modules: &Path, _worktree: &Path) -> Result<(), LoomError> {
+    // No symlink on this platform: validation then fails honestly at the
+    // missing compiler rather than reaching for the network.
+    Ok(())
+}
+
 /// Create a worktree, apply the edits, produce a unified diff. Live tree
-/// untouched. Cleans up the worktree on ANY error before returning.
+/// untouched. Cleans up the worktree on ANY error before returning. Dev
+/// entry: worktrees under the temp dir. Commands use `propose_in` with the
+/// mode's parent.
+#[cfg_attr(not(test), allow(dead_code))]
 fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut, LoomError> {
+    propose_in(source_root, edits, &std::env::temp_dir())
+}
+
+fn propose_in(
+    source_root: &Path,
+    edits: &[KernelEdit],
+    parent: &Path,
+) -> Result<ProposeOut, LoomError> {
     // WALL 0 (self-protection): reject non-editable paths BEFORE any fs/worktree
     // op. This runs before isolation so a protected-path proposal never even
     // creates a worktree.
@@ -579,9 +816,12 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
 
     let base_sha = head_sha(source_root)?;
 
-    // Unique worktree path under the system temp dir (OUTSIDE the source tree).
-    // A monotonic counter + nanos guarantees no collision across concurrent
-    // proposals in the same process.
+    // Unique worktree path under `parent` (OUTSIDE the source tree: the temp
+    // dir in dev, `loomhome/worktrees/` packaged). A monotonic counter + nanos
+    // guarantees no collision across concurrent proposals in the same process.
+    std::fs::create_dir_all(parent).map_err(|e| {
+        LoomError::Git(format!("create worktree parent {}: {e}", parent.display()))
+    })?;
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
@@ -595,7 +835,7 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
         seq,
         nanos
     );
-    let worktree = std::env::temp_dir().join(&id);
+    let worktree = parent.join(&id);
     // If a stale dir exists (crash), clear it first.
     if worktree.exists() {
         cleanup_worktree(source_root, &worktree);
@@ -619,6 +859,14 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
         source_root,
         &["worktree", "add", "--detach", worktree_str, &base_sha],
     ) {
+        cleanup_worktree(source_root, &worktree);
+        return Err(e);
+    }
+
+    // Lend the source install to the worktree (offline validation, see
+    // link_node_modules). Unconditional: if the source has no node_modules the
+    // link dangles and tsc fails honestly at "file not found" — never npx.
+    if let Err(e) = link_node_modules(&source_root.join("node_modules"), &worktree) {
         cleanup_worktree(source_root, &worktree);
         return Err(e);
     }
@@ -691,9 +939,16 @@ fn propose_inner(source_root: &Path, edits: &[KernelEdit]) -> Result<ProposeOut,
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
+// The commands take `app: tauri::AppHandle` (injected by Tauri, invisible to
+// the TS wrappers' argument objects) so every source-root lookup goes through
+// the mode + loomhome. `source_repo` stays the dev-only override.
+
 #[tauri::command]
-pub fn kernel_editable(source_repo: Option<String>) -> Result<EditableMeta, LoomError> {
-    let root = resolve_source_repo(source_repo.as_deref())?;
+pub fn kernel_editable(
+    app: tauri::AppHandle,
+    source_repo: Option<String>,
+) -> Result<EditableMeta, LoomError> {
+    let root = resolve_source_repo_for(&app, source_repo.as_deref())?;
     Ok(EditableMeta {
         root: root.to_string_lossy().to_string(),
         protected: protected_list(),
@@ -701,8 +956,12 @@ pub fn kernel_editable(source_repo: Option<String>) -> Result<EditableMeta, Loom
 }
 
 #[tauri::command]
-pub fn kernel_read(source_repo: Option<String>, path: String) -> Result<String, LoomError> {
-    let root = resolve_source_repo(source_repo.as_deref())?;
+pub fn kernel_read(
+    app: tauri::AppHandle,
+    source_repo: Option<String>,
+    path: String,
+) -> Result<String, LoomError> {
+    let root = resolve_source_repo_for(&app, source_repo.as_deref())?;
     if !is_editable(&path) {
         return Err(LoomError::Parse(format!(
             "path is not editable (protected or outside whitelist): {path}"
@@ -716,22 +975,28 @@ pub fn kernel_read(source_repo: Option<String>, path: String) -> Result<String, 
     if !canon.starts_with(&root) {
         return Err(LoomError::Parse(format!("path escapes source repo: {norm}")));
     }
+    assert_lands_editable(&root, &canon, &norm)?;
     std::fs::read_to_string(&canon).map_err(|e| LoomError::NotFound(format!("read {norm}: {e}")))
 }
 
 #[tauri::command]
 pub fn kernel_propose(
+    app: tauri::AppHandle,
     source_repo: Option<String>,
     edits: Vec<KernelEdit>,
 ) -> Result<ProposeOut, LoomError> {
-    let root = resolve_source_repo(source_repo.as_deref())?;
-    propose_inner(&root, &edits)
+    let home = Home::from_app(&app)?;
+    let m = mode();
+    let root = resolve_source_repo_at(m, source_repo.as_deref(), Some(&home))?;
+    propose_in(&root, &edits, &worktree_parent(m, &home))
 }
 
 #[tauri::command]
-pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
+pub fn kernel_validate(app: tauri::AppHandle, worktree_id: String) -> Result<ValidateOut, LoomError> {
     let prop = with_registry(|reg| reg.get(&worktree_id).cloned())
         .ok_or_else(|| LoomError::NotFound(format!("unknown worktreeId: {worktree_id}")))?;
+    let home = Home::from_app(&app)?;
+    let m = mode();
 
     // Re-validation resets the gate: a validate call must re-prove the current
     // proposal from scratch, so clear validated (and, since re-validating means
@@ -752,12 +1017,12 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
     let touches_rust = prop.edits.iter().any(|(rel, _, _)| rel.ends_with(".rs"));
 
     if touches_ts {
-        if let Some(fail) = validate_ts(&prop)? {
+        if let Some(fail) = validate_ts(&prop, Some(&home))? {
             return Ok(fail);
         }
     }
     if touches_rust {
-        if let Some(fail) = validate_rust(&prop)? {
+        if let Some(fail) = validate_rust(&prop, m, &home)? {
             return Ok(fail);
         }
     }
@@ -773,34 +1038,55 @@ pub fn kernel_validate(worktree_id: String) -> Result<ValidateOut, LoomError> {
     })
 }
 
+/// The env every spawn of the recorded `node` carries: that node's own
+/// directory leading PATH, then everything this process already had —
+/// `threads::npm_path_env`, the same composer the ceremony's npm steps and
+/// the weave's assets stage use, so there is one answer to "where does node
+/// live" and not two. Empty only when the node path has no directory to name,
+/// which leaves the child with the environment it would have had anyway.
+fn node_env(node: &Path) -> Vec<(String, String)> {
+    crate::threads::npm_path_env(node)
+        .map(|p| vec![("PATH".to_string(), p)])
+        .unwrap_or_default()
+}
+
+/// The two TS validation argvs, composed from the recorded `node`, the
+/// worktree and the targeted test files: `(tsc, vitest)`. Both run a FILE
+/// under `<worktree>/node_modules` (the symlink to the source install) through
+/// `node` — never a name resolved by PATH or `npx` (whose own cache was an
+/// unstated network dependency). Pure, so the shape is testable without a
+/// spawn. Lossy path coercion is refused by the caller (`to_str`), not here.
+pub fn ts_argv(node: &Path, wt: &Path, tests: &[String]) -> (Vec<String>, Vec<String>) {
+    let node = node.to_string_lossy().to_string();
+    let tsc = wt.join("node_modules/typescript/bin/tsc");
+    let vitest = wt.join("node_modules/vitest/vitest.mjs");
+    let tsc_argv = vec![
+        node.clone(),
+        tsc.to_string_lossy().to_string(),
+        "--noEmit".to_string(),
+    ];
+    let mut vitest_argv = vec![
+        node,
+        vitest.to_string_lossy().to_string(),
+        "run".to_string(),
+    ];
+    vitest_argv.extend(tests.iter().cloned());
+    (tsc_argv, vitest_argv)
+}
+
 /// Run the TS validation toolchain (tsc --noEmit, then targeted vitest) in the
 /// worktree. Returns `Ok(None)` if both pass, `Ok(Some(fail))` with the failing
 /// stage+output on the first failure, or `Err` for an infrastructure fault
 /// (validator unresolvable, spawn failure, timeout).
-fn validate_ts(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
-    // Resolve the validator's ABSOLUTE path once (Finding 8). If npx can't be
-    // found we cannot prove the edit is safe → we must not pass.
-    let npx = npx_path().ok_or_else(|| {
-        LoomError::NotFound("npx not found on PATH — cannot validate".into())
+fn validate_ts(prop: &Proposal, home: Option<&Home>) -> Result<Option<ValidateOut>, LoomError> {
+    // Resolve node's ABSOLUTE path (recorded thread, else once via PATH —
+    // Finding 8). If node can't be found we cannot prove the edit is safe → we
+    // must not pass.
+    let node = node_path(home).ok_or_else(|| {
+        LoomError::NotFound("node not found (threads.json or PATH) — cannot validate".into())
     })?;
-    let npx = npx
-        .to_str()
-        .ok_or_else(|| LoomError::Parse("npx path is not valid UTF-8".into()))?;
-
-    // tsc first, then targeted vitest. Fixed argv; cwd is the worktree, asserted
-    // under itself. First failure returns stage+output.
-    let tsc = run_checked(
-        &[npx, "tsc", "--noEmit"],
-        &prop.worktree,
-        &prop.worktree,
-        TSC_TIMEOUT,
-    )?;
-    if tsc.code != 0 {
-        return Ok(Some(ValidateOut {
-            ok: false,
-            stage: "tsc".into(),
-            output: format!("{}\n{}", tsc.stdout, tsc.stderr).trim().to_string(),
-        }));
+    if node.to_str().is_none() || prop.worktree.to_str().is_none() {
+        return Err(LoomError::Parse("node or worktree path is not valid UTF-8".into()));
     }
 
     // Targeted vitest: the edited .ts(x) files + their `.test` siblings that
@@ -820,11 +1106,31 @@ fn validate_ts(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
     // De-dup while preserving order.
     targets.dedup();
 
-    let mut argv: Vec<&str> = vec![npx, "vitest", "run"];
-    for t in &targets {
-        argv.push(t.as_str());
+    let (tsc_argv, vitest_argv) = ts_argv(&node, &prop.worktree, &targets);
+    // The recorded node's own directory leads the child's PATH. argv[0] is
+    // already absolute, so this is not what makes tsc run — it is what keeps
+    // anything tsc or vitest spawns BY NAME (a node the toolchain reaches
+    // for, a resolver's helper) from resolving against launchd's PATH, which
+    // a Dock-launched app inherits and which holds neither nvm nor homebrew.
+    // Same lesson as the cargo half, kept on this one before it is learned
+    // again the expensive way (round-4 review, Finding 1).
+    let node_env = node_env(&node);
+    let envs: Vec<(&str, &str)> = node_env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+
+    // tsc first, then targeted vitest. Fixed argv; cwd is the worktree, asserted
+    // under itself. First failure returns stage+output.
+    let argv: Vec<&str> = tsc_argv.iter().map(String::as_str).collect();
+    let tsc = run_checked_env(&argv, &prop.worktree, &prop.worktree, TSC_TIMEOUT, &envs)?;
+    if tsc.code != 0 {
+        return Ok(Some(ValidateOut {
+            ok: false,
+            stage: "tsc".into(),
+            output: format!("{}\n{}", tsc.stdout, tsc.stderr).trim().to_string(),
+        }));
     }
-    let vitest = run_checked(&argv, &prop.worktree, &prop.worktree, VITEST_TIMEOUT)?;
+
+    let argv: Vec<&str> = vitest_argv.iter().map(String::as_str).collect();
+    let vitest = run_checked_env(&argv, &prop.worktree, &prop.worktree, VITEST_TIMEOUT, &envs)?;
     if vitest.code != 0 {
         return Ok(Some(ValidateOut {
             ok: false,
@@ -837,21 +1143,111 @@ fn validate_ts(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
     Ok(None)
 }
 
+/// A cargo argv: `[cargo, <sub…>, "--offline"]`. Pure, and private: the argv
+/// is only ever built through `CargoRun::argv`, which cannot be had without
+/// the env that goes with it.
+fn cargo_argv(cargo: &Path, sub: &[&str]) -> Vec<String> {
+    let mut argv = vec![cargo.to_string_lossy().to_string()];
+    argv.extend(sub.iter().map(|s| s.to_string()));
+    argv.push("--offline".to_string());
+    argv
+}
+
+/// A cargo spawn: the absolute cargo, and the env every cargo LOOM runs
+/// carries. Built by `cargo_run` and by nothing else — `argv` and `envs` come
+/// out together so no caller can take one half and compose the other itself.
+///
+/// **This is the only way to build a cargo argv+env in LOOM.** Three review
+/// rounds found the same bug in three different places — the ceremony's warm
+/// step, the weave's core stage, and validation — each time because a caller
+/// had assembled its own pair and left the toolchain off it. A new cargo
+/// spawn goes through here; anything else is the bug again.
+pub struct CargoRun {
+    cargo: PathBuf,
+    envs: Vec<(String, String)>,
+}
+
+impl CargoRun {
+    /// `[cargo, <sub…>, "--offline"]`. `--offline` is ALWAYS appended — no
+    /// cargo LOOM runs touches the network (the crates were fetched once, at
+    /// threading in packaged mode, by the dev build in dev).
+    pub fn argv(&self, sub: &[&str]) -> Vec<String> {
+        cargo_argv(&self.cargo, sub)
+    }
+
+    /// The env pairs, borrowed for `exec::run_checked_env`.
+    pub fn envs(&self) -> Vec<(&str, &str)> {
+        self.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+    }
+}
+
+/// The tool table every cargo spawn resolves through: the paths threading
+/// recorded (`threads::tool_path`, which re-searches when a recorded tool has
+/// moved), except cargo itself, which keeps kernel's own hardened resolution
+/// — recorded first, then the fixed candidate dirs, then a PATH walk cached
+/// once, so a PATH hijacked mid-session cannot swap in a cargo that lies.
+pub fn home_tools(home: &Home) -> impl Fn(&str) -> Option<PathBuf> + '_ {
+    move |name: &str| match name {
+        "cargo" => cargo_path(Some(home)),
+        other => crate::threads::tool_path(home, other),
+    }
+}
+
+/// Compose a cargo spawn: the recorded toolchain's PATH and `CMAKE` (from
+/// `threads::cargo_with_path`, the one helper both the ceremony and the weave
+/// already spawn through), `CARGO_NET_OFFLINE=true`, and — when a target dir
+/// is given — `CARGO_TARGET_DIR`.
+///
+/// `target_dir` is passed rather than derived from the mode because the two
+/// callers differ honestly: validation shares loomhome's warm `target/` only
+/// in packaged mode (in dev the worktree keeps its own), while the weave
+/// always builds into loomhome's, because that is where it then goes looking
+/// for the body it shelves.
+///
+/// Everything here is LOOM's own — a constant, or the parent of a path the
+/// tool table found — so the pair keeps `exec`'s fixed-env contract: nothing
+/// is ever composed from model output.
+pub fn cargo_run(
+    tools: &dyn Fn(&str) -> Option<PathBuf>,
+    target_dir: Option<&Path>,
+) -> Result<CargoRun, LoomError> {
+    let spawn = crate::threads::cargo_with_path(tools)?;
+    let mut envs = spawn.envs;
+    if let Some(dir) = target_dir {
+        let dir = dir.to_str().ok_or_else(|| {
+            LoomError::Parse("the target directory is not valid UTF-8".into())
+        })?;
+        envs.push(("CARGO_TARGET_DIR".to_string(), dir.to_string()));
+    }
+    envs.push(("CARGO_NET_OFFLINE".to_string(), "true".to_string()));
+    Ok(CargoRun { cargo: PathBuf::from(spawn.cargo), envs })
+}
+
+/// The target dir validation's cargo builds into: loomhome's shared, warm
+/// `target/` in packaged mode — dependencies compiled once at threading, so a
+/// core edit validates in incremental time — and the worktree's own in dev.
+fn validate_target_dir(mode: Mode, home: &Home) -> Option<PathBuf> {
+    (mode == Mode::Packaged).then(|| home.target())
+}
+
 /// Run the Rust validation toolchain (`cargo check` then `cargo test`) in the
 /// worktree's `src-tauri/` dir. A `git worktree add` at HEAD contains the full
-/// repo, so `src-tauri/Cargo.toml` is present with no shared `target/` — the
-/// compile is cold (minutes). Returns `Ok(None)` if both pass, `Ok(Some(fail))`
-/// on the first failing stage, or `Err` for an infrastructure fault (cargo
+/// repo, so `src-tauri/Cargo.toml` is present. In dev there is no shared
+/// `target/` — the compile is cold (minutes); packaged, the loomhome target is
+/// shared and warm. Returns `Ok(None)` if both pass, `Ok(Some(fail))` on the
+/// first failing stage, or `Err` for an infrastructure fault (cargo
 /// unresolvable, the worktree lacks src-tauri/, spawn failure, timeout).
-fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
-    // Resolve cargo's ABSOLUTE path once (mirror of the npx hardening). If cargo
-    // can't be found we cannot prove the edit compiles → we must not pass.
-    let cargo = cargo_path().ok_or_else(|| {
-        LoomError::NotFound("cargo not found on PATH — cannot validate Rust".into())
-    })?;
-    let cargo = cargo
-        .to_str()
-        .ok_or_else(|| LoomError::Parse("cargo path is not valid UTF-8".into()))?;
+fn validate_rust(prop: &Proposal, mode: Mode, home: &Home) -> Result<Option<ValidateOut>, LoomError> {
+    // The spawn — argv AND env — from the one helper that builds them.
+    // cargo's absolute path is resolved the hardened way (recorded thread,
+    // else once), and the recorded toolchain's directories lead the child's
+    // PATH: a Dock-launched app inherits launchd's, which holds neither
+    // rustup nor homebrew, and cargo cannot even run `rustc -vV` on it.
+    // If cargo can't be found we cannot prove the edit compiles → we fail
+    // honestly rather than pass (round-4 review, Finding 1).
+    let tools = home_tools(home);
+    let cargo = cargo_run(&tools, validate_target_dir(mode, home).as_deref())?;
+    let envs = cargo.envs();
 
     // cargo runs in the worktree's src-tauri/ (where Cargo.toml lives), asserted
     // under the worktree by run_checked's containment check.
@@ -875,12 +1271,9 @@ fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
     // validation (see docs/FOLLOWUPS.md "Validation threat model"); the safety
     // envelope here is compile-validation (cargo check + cargo test --no-run) +
     // human diff-review + the recovery boot, not test EXECUTION.
-    let check = run_checked(
-        &[cargo, "check"],
-        &cargo_cwd,
-        &prop.worktree,
-        CARGO_CHECK_TIMEOUT,
-    )?;
+    let check_argv = cargo.argv(&["check"]);
+    let argv: Vec<&str> = check_argv.iter().map(String::as_str).collect();
+    let check = run_checked_env(&argv, &cargo_cwd, &prop.worktree, CARGO_CHECK_TIMEOUT, &envs)?;
     if check.code != 0 {
         return Ok(Some(ValidateOut {
             ok: false,
@@ -889,12 +1282,9 @@ fn validate_rust(prop: &Proposal) -> Result<Option<ValidateOut>, LoomError> {
         }));
     }
 
-    let test = run_checked(
-        &[cargo, "test", "--no-run"],
-        &cargo_cwd,
-        &prop.worktree,
-        CARGO_TEST_TIMEOUT,
-    )?;
+    let test_argv = cargo.argv(&["test", "--no-run"]);
+    let argv: Vec<&str> = test_argv.iter().map(String::as_str).collect();
+    let test = run_checked_env(&argv, &cargo_cwd, &prop.worktree, CARGO_TEST_TIMEOUT, &envs)?;
     if test.code != 0 {
         return Ok(Some(ValidateOut {
             ok: false,
@@ -973,7 +1363,28 @@ pub fn kernel_apply(
     worktree_id: String,
     message: String,
 ) -> Result<ApplyOut, LoomError> {
-    let prop = with_registry(|reg| reg.get(&worktree_id).cloned())
+    let sp = sentinel_path(&app)?;
+    apply_at(mode(), &sp, &worktree_id, &message)
+}
+
+/// Does a source apply arm the boot sentinel (the mirror at the source root
+/// and, for a TS edit, the app_data `pending`)? Only in DEV: there the edit
+/// hot-reloads (TS) or recompiles under `tauri dev` (Rust), so the next boot
+/// IS the edit and the guard / pre-main hook must be armed to judge it.
+///
+/// PACKAGED (Phase 23 / Rebirth): a source apply changes the genome only.
+/// The running body is a built binary — nothing hot-reloads, nothing
+/// recompiles, NOTHING BOOTS UNTIL A REWEAVE. Arming a sentinel here would
+/// be a record of a birth that is not happening; the reweave's swap writes
+/// its own (`applied`, `armedBy: "reweave"`) and the warden judges it.
+pub fn apply_arms_sentinel(mode: Mode) -> bool {
+    mode == Mode::Dev
+}
+
+/// `kernel_apply` over an explicit mode and app_data sentinel path, so the
+/// packaged branch is testable without a built app.
+fn apply_at(mode: Mode, app_sentinel: &Path, worktree_id: &str, message: &str) -> Result<ApplyOut, LoomError> {
+    let prop = with_registry(|reg| reg.get(worktree_id).cloned())
         .ok_or_else(|| LoomError::NotFound(format!("unknown worktreeId: {worktree_id}")))?;
 
     // WALL ORDERING, ENFORCED IN RUST (Finding 1/5). The live tree is NEVER
@@ -1021,29 +1432,34 @@ pub fn kernel_apply(
         // Freshly applied, not yet armed by either actor (round-1, Finding 2/3).
         armed_by: None,
     };
-    if let Err(e) = write_mirror(&source_root, &sentinel) {
-        // Mirror write failed → we cannot guarantee recovery. Abort BEFORE any
-        // live change: drop the worktree, forget the proposal, return the error.
-        cleanup_worktree(&prop.source_root, &prop.worktree);
-        with_registry(|reg| {
-            reg.remove(&worktree_id);
-        });
-        return Err(LoomError::Git(format!(
-            "refusing apply: could not write the mandatory recovery mirror ({}): {e}",
-            mirror_path(&source_root).display()
-        )));
+    // Packaged mode writes NO sentinel at all (see `apply_arms_sentinel`):
+    // the genome moves, the body does not, and the reweave owns the next boot.
+    let arms = apply_arms_sentinel(mode);
+    if arms {
+        if let Err(e) = write_mirror(&source_root, &sentinel) {
+            // Mirror write failed → we cannot guarantee recovery. Abort BEFORE any
+            // live change: drop the worktree, forget the proposal, return the error.
+            cleanup_worktree(&prop.source_root, &prop.worktree);
+            with_registry(|reg| {
+                reg.remove(worktree_id);
+            });
+            return Err(LoomError::Git(format!(
+                "refusing apply: could not write the mandatory recovery mirror ({}): {e}",
+                mirror_path(&source_root).display()
+            )));
+        }
     }
 
     // The recovery record now exists. Apply the edit to the live tree + commit.
     // apply_inner re-reads HEAD (== prev_sha; nothing wrote between the read
     // above and here) and refuses if HEAD moved — the recovery record is
     // therefore consistent with what apply_inner commits against.
-    let out = apply_inner(&prop, &message);
+    let out = apply_inner(&prop, message);
 
     // Whatever happened, drop the worktree (success or failure) and forget it.
     cleanup_worktree(&prop.source_root, &prop.worktree);
     with_registry(|reg| {
-        reg.remove(&worktree_id);
+        reg.remove(worktree_id);
     });
 
     let (sha, prev_sha) = match out {
@@ -1065,22 +1481,23 @@ pub fn kernel_apply(
     // sentinel too would make setup()'s boot_recover perform a redundant second
     // rollback (double-rollback) of the same edit the guard/pre-main hook
     // already owns. A TS (or mixed) edit still writes "pending" as before.
-    if touches_ts {
+    if arms && touches_ts {
         let ts_sentinel = Sentinel {
             status: "pending".into(),
             applied_sha: sha.clone(),
             ..sentinel.clone()
         };
-        let sp = sentinel_path(&app)?;
-        write_sentinel(&sp, &ts_sentinel)?;
+        write_sentinel(app_sentinel, &ts_sentinel)?;
     }
 
     // After the commit, best-effort update the mirror's applied_sha
     // (INFORMATIONAL only — recovery never keys off it). The load-bearing
     // {status:"applied", prev_sha, source_root, armed_by:null} already landed
     // above, so a hiccup here cannot reopen the gap.
-    sentinel.applied_sha = sha.clone();
-    let _ = write_mirror(&source_root, &sentinel);
+    if arms {
+        sentinel.applied_sha = sha.clone();
+        let _ = write_mirror(&source_root, &sentinel);
+    }
 
     Ok(ApplyOut { sha, prev_sha })
 }
@@ -1117,6 +1534,7 @@ fn apply_inner(prop: &Proposal, message: &str) -> Result<(String, String), LoomE
         if !canon.starts_with(root) {
             return Err(LoomError::Parse(format!("path escapes source repo: {rel}")));
         }
+        assert_lands_editable(root, &canon, rel)?;
         let content = std::fs::read_to_string(&canon)
             .map_err(|e| LoomError::NotFound(format!("read {rel}: {e}")))?;
         let next = apply_exact_unique(&content, search, replace)?;
@@ -1155,8 +1573,12 @@ pub fn kernel_discard(worktree_id: String) -> Result<(), LoomError> {
 }
 
 #[tauri::command]
-pub fn kernel_rollback(source_repo: Option<String>, sha: String) -> Result<(), LoomError> {
-    let root = resolve_source_repo(source_repo.as_deref())?;
+pub fn kernel_rollback(
+    app: tauri::AppHandle,
+    source_repo: Option<String>,
+    sha: String,
+) -> Result<(), LoomError> {
+    let root = resolve_source_repo_for(&app, source_repo.as_deref())?;
     rollback_to(&root, &sha)
 }
 
@@ -1175,11 +1597,8 @@ fn rollback_to(root: &Path, sha: &str) -> Result<(), LoomError> {
 #[tauri::command]
 pub fn kernel_boot_ok(app: tauri::AppHandle) -> Result<(), LoomError> {
     let sp = sentinel_path(&app)?;
-    // Clear the app_data sentinel (TS flow): this boot held.
-    if let Some(mut s) = read_sentinel(&sp) {
-        s.status = "ok".into();
-        write_sentinel(&sp, &s)?;
-    }
+    let home = Home::from_app(&app).ok();
+    boot_ok_at(&sp, home.as_ref())?;
     // Clear the source-relative mirror (Rust flow) to `healed`: for a Rust edit
     // this fires on the NEXT launch (no hot-reload), confirming the applied edit
     // booted cleanly so the guard/pre-main hook will NOT roll it back. Best
@@ -1187,6 +1606,42 @@ pub fn kernel_boot_ok(app: tauri::AppHandle) -> Result<(), LoomError> {
     // the sentinel's own source_root (or, for a healthy launch with no app_data
     // sentinel, the mirror in cwd if present).
     clear_mirror_healed(&app);
+    Ok(())
+}
+
+/// The app-independent core of `kernel_boot_ok`: the app_data sentinel goes
+/// `ok` (this boot held) and, Phase 23, a ledger that exists is marked
+/// `confirmed: true` — the warden reads the sentinel, the owner reads the
+/// ledger. No ledger is ever invented here: a dev LOOM has none.
+///
+/// ONLY AN UNCONFIRMED SENTINEL IS CONFIRMED (round-3 review, Finding 2).
+/// This was the one consumer of the state machine that did not guard with
+/// `is_unconfirmed`, and the `HealedNextLaunch` ending walks straight into
+/// it: a usable generation misses the deadline, the warden heals and
+/// deliberately leaves that process running, and the process then beacons
+/// late. Writing `ok` over `healed` erases the only durable statement that
+/// the birth ended badly, and stamps `confirmed: true` on a `current` the
+/// beaconing process is not running. The same call erased `rollback-failed`,
+/// the record of a body that could not come home at all. A terminal state is
+/// somebody else's verdict; this beacon is too late to overturn it, and the
+/// ledger is left alone with it.
+fn boot_ok_at(sp: &Path, home: Option<&Home>) -> Result<(), LoomError> {
+    if let Some(mut s) = read_sentinel(sp) {
+        if !is_unconfirmed(&s.status) {
+            return Ok(());
+        }
+        s.status = "ok".into();
+        write_sentinel(sp, &s)?;
+    }
+    if let Some(home) = home {
+        if home.ledger_json().is_file() {
+            let mut ledger = generations::read(home);
+            if !ledger.confirmed {
+                ledger.confirmed = true;
+                generations::write(home, &ledger)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1246,9 +1701,196 @@ fn clear_mirror_healed(app: &tauri::AppHandle) {
 /// Reducing visibility blocks any external re-export path; same-crate calls from
 /// an editable module remain bounded by human diff-review of the applied diff.
 pub(crate) fn preboot_heal() {
-    // No panics: guard the whole body.
-    let Ok(cwd) = std::env::current_dir() else { return };
-    preboot_heal_at(&cwd);
+    match mode() {
+        Mode::Dev => {
+            // No panics: guard the whole body.
+            let Ok(cwd) = std::env::current_dir() else { return };
+            preboot_heal_at(&cwd);
+        }
+        Mode::Packaged => preboot_heal_packaged(),
+    }
+}
+
+/// What the pre-main hook does with a sentinel (round-1 Marrow review's
+/// ownership rule, extended by Phase 23's `armedBy: "reweave"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// First sighting of a new body/edit: mark it `booting`, let it try.
+    Arm,
+    /// Second sighting, nobody else owns it: bring it home.
+    Heal,
+    /// Not ours — a live guard or warden owns it, or there is nothing to do.
+    Leave,
+}
+
+/// PURE: the pre-main decision table. `warden_alive` is whether `warden.json`
+/// holds a job for THIS birth — its `newSha` is the sentinel's `applied_sha`
+/// — naming a pid that is still running.
+///
+/// - `applied` armed by `reweave` → Arm (either mode: the first sighting of a
+///   woven body). Any other `applied` → Arm in dev (Phase 22's guard-absent
+///   arm), Leave in packaged (a source-only apply boots nothing until a
+///   reweave; `boot_check` judges it).
+/// - `booting` armed by `guard` → Leave: the Node guard owns its live attempt.
+/// - `booting` armed by `reweave` → Leave while the warden lives (it owns the
+///   birth); Heal in packaged mode when no warden is alive (the backstop);
+///   Leave in dev (nothing was swapped).
+/// - `booting` armed by `premain` or unarmed → Heal in dev (Phase 22's
+///   backstop), Leave in packaged.
+/// - everything else (`pending`, `ok`, `healed`, `rollback-failed`, unknown)
+///   → Leave.
+pub fn decide(status: &str, armed_by: Option<&str>, warden_alive: bool, mode: Mode) -> Action {
+    match (status, armed_by, mode) {
+        ("applied", Some("reweave"), _) => Action::Arm,
+        ("applied", _, Mode::Dev) => Action::Arm,
+        ("applied", _, Mode::Packaged) => Action::Leave,
+        ("booting", Some("guard"), _) => Action::Leave,
+        ("booting", Some("reweave"), Mode::Packaged) => {
+            if warden_alive { Action::Leave } else { Action::Heal }
+        }
+        ("booting", Some("reweave"), Mode::Dev) => Action::Leave,
+        ("booting", _, Mode::Dev) => Action::Heal,
+        ("booting", _, Mode::Packaged) => Action::Leave,
+        _ => Action::Leave,
+    }
+}
+
+/// The bundle identifier from `tauri.conf.json`, which names the app_data
+/// dir. Pre-main has no AppHandle to ask, so the packaged loomhome is
+/// resolved from this (a unit test pins it to the config file).
+const APP_IDENTIFIER: &str = "com.connorevans.loom";
+
+/// The packaged loomhome — `~/Library/Application Support/<identifier>/loom`,
+/// exactly what `Home::from_app` resolves once Tauri is up — but only if it
+/// already exists (a first launch has nothing to heal). macOS only: the swap
+/// that could leave a sentinel here is macOS-only.
+fn packaged_home_under(user_home: &Path) -> Option<Home> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let root = user_home
+        .join("Library/Application Support")
+        .join(APP_IDENTIFIER)
+        .join("loom");
+    root.is_dir().then(|| Home::at(root))
+}
+
+/// What the packaged backstop did — returned, not acted on, so the loop is
+/// testable; `preboot_heal_packaged` turns it into the exit.
+#[derive(Debug)]
+pub(crate) enum Backstop {
+    Left,
+    Armed,
+    /// Healed in-process; `warden` is the previous body spawned with a
+    /// relaunch-only job (or why it could not be).
+    Healed { warden: Result<u32, LoomError> },
+    HealFailed(LoomError),
+}
+
+/// PRE-MAIN BACKSTOP, packaged (spec §The warden, "when no warden is alive").
+/// A `booting` armed by `reweave` seen with no live warden pid is a woven
+/// body that never confirmed and nobody is guarding: heal it here, exactly as
+/// the warden would, then hand the relaunch to the previous body and exit —
+/// this process IS the unconfirmed body, and it never reaches the Tauri
+/// builder. Panic-free / best-effort throughout.
+fn preboot_heal_packaged() {
+    let Some(user_home) = std::env::var_os("HOME") else { return };
+    let Some(home) = packaged_home_under(Path::new(&user_home)) else { return };
+    let layout = platform::app_layout().ok();
+    let tools = |name: &str| threads::tool_path(&home, name);
+    let alive = |pid: u32| warden::pid_alive(pid);
+    match preboot_heal_packaged_in(&home, layout.as_ref(), &alive, &tools) {
+        Backstop::Left | Backstop::Armed => {}
+        Backstop::Healed { warden: Ok(pid) } => {
+            eprintln!("[kernel] pre-main heal: a woven body never confirmed — LOOM came home; the previous generation (pid {pid}) reopens it");
+            std::process::exit(0);
+        }
+        Backstop::Healed { warden: Err(e) } => {
+            eprintln!("[kernel] pre-main heal: LOOM came home, but the previous body could not be started as the warden — {e}; reopening directly");
+            if let Some(l) = layout {
+                let mut world = warden::RealWorld::new(&home);
+                let _ = warden::World::open_app(&mut world, &l.app_path);
+            }
+            std::process::exit(0);
+        }
+        Backstop::HealFailed(e) => {
+            // The sentinel is `rollback-failed`: no loop. Boot on and let the
+            // notice say what happened.
+            eprintln!("[kernel] pre-main heal: a woven body never confirmed AND the heal failed — {e}");
+        }
+    }
+}
+
+/// The app-independent core of the packaged backstop. `layout` is this
+/// process's bundle (falls back to the warden job's paths); `pid_alive` and
+/// `tools` are injected so the table runs against a fake app in a tempdir.
+fn preboot_heal_packaged_in(
+    home: &Home,
+    layout: Option<&AppLayout>,
+    pid_alive: &dyn Fn(u32) -> bool,
+    tools: &dyn Fn(&str) -> Option<PathBuf>,
+) -> Backstop {
+    let sp = home.sentinel_json();
+    let Some(mut s) = read_sentinel(&sp) else { return Backstop::Left };
+    let job: Option<warden::Job> = std::fs::read_to_string(home.warden_json())
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    // A live warden is a job that names THIS birth and whose pid is still
+    // running (round-1 review, Finding 5). `warden.json` is never deleted, so
+    // a job left by an earlier birth — whose pid the system may since have
+    // handed to something else — is a leftover, not a guard: trusting it
+    // would disarm the backstop forever. A warden that exits normally also
+    // clears its own pid (round-2 review, Finding 8), so a job for THIS birth
+    // whose warden has left names no guard either, however alive the machine
+    // says that number is.
+    let warden_alive = job.as_ref().map_or(false, |j| {
+        j.new_sha == s.applied_sha && j.warden_pid.map_or(false, |p| pid_alive(p))
+    });
+
+    match decide(&s.status, s.armed_by.as_deref(), warden_alive, Mode::Packaged) {
+        Action::Leave => Backstop::Left,
+        Action::Arm => {
+            // First sighting of the woven body: let it try. The warden keeps
+            // ownership (`armedBy` stays `reweave`).
+            s.status = "booting".into();
+            let _ = write_sentinel(&sp, &s);
+            Backstop::Armed
+        }
+        Action::Heal => {
+            let layout = match (layout, &job) {
+                (Some(l), _) => l.clone(),
+                (None, Some(j)) => AppLayout { app_path: j.app_path.clone(), exe_path: j.exe_path.clone() },
+                (None, None) => {
+                    return Backstop::HealFailed(LoomError::NotFound(
+                        "the app bundle — neither current_exe nor warden.json names it".into(),
+                    ))
+                }
+            };
+            let (new_sha, prev_sha) = (s.applied_sha.clone(), s.prev_sha.clone());
+            if let Err(e) = warden::heal(home, &layout, &new_sha, &prev_sha, warden::REASON_NEVER_CONFIRMED, tools) {
+                return Backstop::HealFailed(e);
+            }
+            // The previous body — proven, and now the file on disk — reopens
+            // the app once this process has left.
+            let relaunch = warden::Job {
+                old_pid: std::process::id(),
+                app_path: layout.app_path.clone(),
+                exe_path: layout.exe_path.clone(),
+                new_sha,
+                prev_sha: prev_sha.clone(),
+                loomhome: home.root.clone(),
+                timeout_secs: job.as_ref().map(|j| j.timeout_secs).unwrap_or(90),
+                relaunch_only: true,
+                warden_pid: None,
+            };
+            let warden = threads::write_json_atomic(&home.warden_json(), &relaunch).and_then(|()| {
+                let exe = home.generation_exe(&prev_sha).to_string_lossy().into_owned();
+                let job_path = home.warden_json().to_string_lossy().into_owned();
+                run_detached(&[&exe, "--warden", &job_path], &home.root, &home.root)
+            });
+            Backstop::Healed { warden }
+        }
+    }
 }
 
 /// The app-independent core of the pre-main heal, parameterized on the repo the
@@ -1266,8 +1908,13 @@ fn preboot_heal_at(cwd: &Path) {
         cwd.to_path_buf()
     };
 
-    match (s.status.as_str(), s.armed_by.as_deref()) {
-        ("applied", _) => {
+    // The mirror never carries a warden: `warden_alive` is false here. The
+    // rows: `applied` → Arm; `booting`/`guard` → Leave (the Node pre-compile
+    // guard armed THIS live attempt and is watching it — never touch the boot
+    // the guard armed for confirmation, Finding 2); `booting`/premain-or-legacy
+    // → Heal; terminal → Leave.
+    match decide(&s.status, s.armed_by.as_deref(), false, Mode::Dev) {
+        Action::Arm => {
             // Guard-absent arm: first unconfirmed sighting and the Node guard did
             // NOT arm it (else it would already be `booting`/`guard`). Let it try
             // to boot, recording that WE (pre-main) armed it so a
@@ -1276,12 +1923,8 @@ fn preboot_heal_at(cwd: &Path) {
             s.armed_by = Some("premain".into());
             let _ = write_sentinel(&mp, &s);
         }
-        ("booting", Some("guard")) => {
-            // The Node pre-compile guard armed THIS live attempt this session and
-            // is watching it. NEVER touch it — this is the boot the guard armed
-            // for confirmation. No reset, no rewrite (Finding 2).
-        }
-        ("booting", _) => {
+        Action::Leave => {}
+        Action::Heal => {
             // Guard-absent backstop: we armed it last time (armedBy=="premain",
             // or a legacy mirror with no armedBy) and it never confirmed a
             // healthy boot. Roll the source back to the last-good sha and mark
@@ -1305,7 +1948,6 @@ fn preboot_heal_at(cwd: &Path) {
                 );
             }
         }
-        _ => { /* healed / ok / rollback-failed / unknown → no-op */ }
     }
 }
 
@@ -1314,18 +1956,75 @@ pub fn kernel_boot_check(
     app: tauri::AppHandle,
     source_repo: Option<String>,
 ) -> Result<BootCheckOut, LoomError> {
-    let sp = sentinel_path(&app)?;
-    decide_boot_at(&sp, source_repo.as_deref())
+    boot_check_app(&app, source_repo.as_deref(), true)
+}
+
+/// `surface_recovery`: whether to report (and thereby consume) the warden's
+/// recovery record. The shell's command does; the Rust-side setup check
+/// (`boot_recover`) does not — the record is for the owner, and it is
+/// surfaced exactly once.
+fn boot_check_app(
+    app: &tauri::AppHandle,
+    source_repo: Option<&str>,
+    surface_recovery: bool,
+) -> Result<BootCheckOut, LoomError> {
+    let sp = sentinel_path(app)?;
+    let home = Home::from_app(app)?;
+    boot_check_in(&sp, mode(), source_repo, Some(&home), surface_recovery)
+}
+
+/// `decide_boot_in` plus, Phase 23, the warden's recovery record.
+///
+/// The record is the ONE-SHOT carrier, and it says which of two things
+/// happened. A heal that worked becomes `healedGeneration` — "LOOM tried to
+/// become X and couldn't; it came home to Y". A heal that FAILED becomes
+/// `rollbackFailed`, the shell's honest "couldn't come home" (round-3 review,
+/// Finding 3): before this it became nothing at all, because
+/// `decide_boot_in` short-circuits on the terminal `rollback-failed` sentinel
+/// and reports `rollback_failed: false`. It is never reported as a healed
+/// generation — the owner must not be told LOOM came home to a body it could
+/// not reach — and, because `take_recovery` deletes the record as it reads
+/// it, the notice fires exactly once while the sentinel keeps the durable
+/// verdict on disk.
+fn boot_check_in(
+    sp: &Path,
+    mode: Mode,
+    source_repo_override: Option<&str>,
+    home: Option<&Home>,
+    surface_recovery: bool,
+) -> Result<BootCheckOut, LoomError> {
+    let mut out = decide_boot_in(sp, mode, source_repo_override, home)?;
+    if surface_recovery {
+        match home.and_then(warden::take_recovery) {
+            None => {}
+            Some(r) if r.reason == warden::REASON_ROLLBACK_FAILED => out.rollback_failed = true,
+            Some(r) => out.healed_generation = Some(HealedGeneration::from(r)),
+        }
+    }
+    Ok(out)
+}
+
+/// Dev-mode entry for the tests: no loomhome, the override/cwd fallback.
+#[cfg(test)]
+fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootCheckOut, LoomError> {
+    decide_boot_in(sp, Mode::Dev, source_repo_override, None)
 }
 
 /// The app-independent core of the boot decision. Testable without an
-/// AppHandle. `source_repo_override` is a last-resort fallback ONLY used when a
-/// legacy sentinel carries no `source_root` of its own.
-fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootCheckOut, LoomError> {
+/// AppHandle. `source_repo_override` (dev) / `home.source()` (packaged) is a
+/// last-resort fallback ONLY used when a legacy sentinel carries no
+/// `source_root` of its own.
+fn decide_boot_in(
+    sp: &Path,
+    mode: Mode,
+    source_repo_override: Option<&str>,
+    home: Option<&Home>,
+) -> Result<BootCheckOut, LoomError> {
     let Some(s) = read_sentinel(sp) else {
         return Ok(BootCheckOut {
             rolled_back_to: None,
             rollback_failed: false,
+            healed_generation: None,
         });
     };
     if !is_unconfirmed(&s.status) {
@@ -1337,6 +2036,19 @@ fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootC
         return Ok(BootCheckOut {
             rolled_back_to: None,
             rollback_failed: false,
+            healed_generation: None,
+        });
+    }
+    if s.armed_by.as_deref() == Some("reweave") {
+        // Phase 23: a sentinel armed by the reweave is a BODY's birth, not a
+        // source edit's. The warden (or the pre-main backstop) owns it; the
+        // genome it was woven from must not be rolled back, and the sentinel
+        // the warden is watching must not be removed. `kernel_boot_ok`
+        // resolves it to `ok`.
+        return Ok(BootCheckOut {
+            rolled_back_to: None,
+            rollback_failed: false,
+            healed_generation: None,
         });
     }
 
@@ -1347,7 +2059,7 @@ fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootC
     let root: PathBuf = if !s.source_root.trim().is_empty() {
         PathBuf::from(&s.source_root)
     } else {
-        resolve_source_repo(source_repo_override)?
+        resolve_source_repo_at(mode, source_repo_override, home)?
     };
 
     match rollback_to(&root, &s.prev_sha) {
@@ -1357,6 +2069,7 @@ fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootC
             Ok(BootCheckOut {
                 rolled_back_to: Some(s.prev_sha),
                 rollback_failed: false,
+            healed_generation: None,
             })
         }
         Err(_) => {
@@ -1374,6 +2087,7 @@ fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootC
             Ok(BootCheckOut {
                 rolled_back_to: None,
                 rollback_failed: true,
+            healed_generation: None,
             })
         }
     }
@@ -1383,7 +2097,7 @@ fn decide_boot_at(sp: &Path, source_repo_override: Option<&str>) -> Result<BootC
 /// Option so a sentinel/repo hiccup can't block boot — the guarantee is "undo a
 /// broken edit if we safely can", not "refuse to start".
 pub fn boot_recover(app: &tauri::AppHandle) -> Option<String> {
-    match kernel_boot_check(app.clone(), None) {
+    match boot_check_app(app, None, false) {
         Ok(b) => {
             if b.rollback_failed {
                 eprintln!(
@@ -1483,7 +2197,7 @@ mod tests {
         assert!(!is_editable("src/components/chrome/recovery/Notice.tsx"));
         // a normal kernel file remains editable (the whitelist still works)
         assert!(is_editable("src/lib/orb/moods.ts"));
-        assert!(is_editable("src/components/WatchPanel.tsx"));
+        assert!(is_editable("src/components/Shuttle.tsx"));
 
         // ── Phase 22 (Marrow): the RUST safety machinery is EXPLICITLY refused ──
         // Every safety file: the Rust core (constructs the app / runs before
@@ -1521,7 +2235,7 @@ mod tests {
         // whitelist genuinely works (not blanket-denied).
         assert!(is_editable("src-tauri/src/fleet.rs"));
         assert!(is_editable("src-tauri/src/organs.rs"));
-        assert!(is_editable("src-tauri/src/market.rs"));
+        assert!(is_editable("src-tauri/src/voice.rs"));
 
         // But a non-.rs src-tauri file, or a src-tauri file OUTSIDE src/, is NOT
         // editable — the Rust whitelist is exactly `src-tauri/src/**/*.rs`.
@@ -1529,6 +2243,105 @@ mod tests {
         assert!(!is_editable("src-tauri/build.rs")); // src-tauri/ but not src-tauri/src/
         assert!(!is_editable("src-tauri/src/config.json")); // under src/ but not .rs
         assert!(!is_editable("src-tauri/Cargo.toml")); // manifest (also basename-denied)
+
+        // ── Phase 23 (Rebirth): the loomhome / build / bundle surface is
+        // EXPLICITLY protected, not merely outside the whitelist. Any file that
+        // constructs the app, declares a dependency, or names the paths the
+        // reweave reads and writes — refused in every casing.
+        let rebirth_safety_files = [
+            "src-tauri/src/platform.rs", // the swap — replaces the running body's file
+            "src-tauri/src/generations.rs", // the ledger — which bodies survive
+            "src-tauri/src/loomhome.rs", // identity + every loomhome path
+            "src-tauri/src/threads.rs",  // tool discovery + threading (spawns tools)
+            "src-tauri/src/reweave.rs",  // the build job — swaps the body, spawns the warden
+            "src-tauri/src/warden.rs",   // the birth guard — heals a body that never confirmed
+            "src-tauri/build.rs",        // bakes LOOM_GENOME_SHA into the binary
+            "src-tauri/tauri.conf.json", // bundle resources, beforeBuildCommand
+            "src-tauri/capabilities/default.json",
+            "src-tauri/capabilities/nested/extra.json",
+            "src-tauri/genome/genome.bundle", // the bundled genome
+            "src-tauri/genome/genome.json",
+            "scripts/genome-bundle.mjs", // writes the bundle at build time
+            "package.json",      // dependency declaration
+            "package-lock.json", // dependency lock
+            "vite.config.ts",    // constructs the frontend build
+        ];
+        // A symlink inside the repo, spelled as an editable path, must not be
+        // writable through to a protected file. The tree holds no symlinks —
+        // this proves the wall rather than the absence.
+        {
+            let (_d, root) = init_repo();
+            std::fs::create_dir_all(root.join("src/lib")).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(
+                root.join("src-tauri/src/kernel.rs"),
+                root.join("src/lib/innocent.ts"),
+            )
+            .unwrap();
+            std::fs::create_dir_all(root.join("src-tauri/src")).unwrap();
+            std::fs::write(root.join("src-tauri/src/kernel.rs"), "// the walls\n").unwrap();
+            let canon = root.join("src/lib/innocent.ts").canonicalize().unwrap();
+            assert!(
+                assert_lands_editable(&root, &canon, "src/lib/innocent.ts").is_err(),
+                "a link that lands on the safety core must be refused"
+            );
+            // The ordinary case still passes.
+            std::fs::write(root.join("src/lib/real.ts"), "export {}\n").unwrap();
+            let canon = root.join("src/lib/real.ts").canonicalize().unwrap();
+            assert!(assert_lands_editable(&root, &canon, "src/lib/real.ts").is_ok());
+        }
+
+        // Phase 23 sweep: the protected TS orchestration prefixes and
+        // `.cargo/config.toml` at any depth.
+        for f in [
+            "src/lib/organs/bodyGate.ts",
+            "src/lib/organs/bodyGate.test.ts",
+            "src/components/chrome/BodyRequest.tsx",
+            "src/components/chrome/ConsentCard.tsx",
+            "src/lib/organs/api.ts",
+            "src/lib/organs/api.test.ts",
+            "src/lib/organs/budgets.ts",
+            "src/lib/loom/validate.ts",
+            "src/components/chrome/Reweave.tsx",
+            "src/components/chrome/Reweave.test.tsx",
+            "src/organs/seeds/settings.ts",
+            "src/lib/loom/reweave.ts",
+            "src/lib/loom/reweave.test.ts",
+            "src/components/chrome/Threading.tsx",
+            "src/components/chrome/Threading.test.tsx",
+            "src/lib/loom/threading.ts",
+            "src/lib/loom/threading.test.ts",
+            "src/lib/loom/generations.ts",
+            "src/lib/loom/generations.test.ts",
+            ".cargo/config.toml",
+            "src-tauri/.cargo/config.toml",
+            "deep/er/.cargo/config.toml",
+        ] {
+            assert!(!is_editable(f), "rebirth TS/config file must be protected: {f}");
+            assert!(!is_editable(&f.to_uppercase()), "uppercase-collision must be protected: {f}");
+        }
+        for f in rebirth_safety_files {
+            assert!(!is_editable(f), "rebirth safety file must be protected: {f}");
+            assert!(!is_editable(&f.to_lowercase()), "case-collision must be protected: {f}");
+            assert!(!is_editable(&f.to_uppercase()), "uppercase-collision must be protected: {f}");
+        }
+        // Every one of them is NAMED in a protected set (explicit, enumerable —
+        // the `kernel_editable` meta lists it for the model), not just
+        // implicitly outside the whitelist.
+        for f in ["src-tauri/src/platform.rs", "src-tauri/src/generations.rs", "src-tauri/src/loomhome.rs", "src-tauri/src/threads.rs", "src-tauri/src/reweave.rs", "src-tauri/src/warden.rs", "src-tauri/build.rs", "src-tauri/tauri.conf.json"] {
+            assert!(PROTECTED_RUST.contains(&f), "{f} must be in PROTECTED_RUST");
+        }
+        for f in ["package.json", "package-lock.json", "vite.config.ts", "scripts/genome-bundle.mjs"] {
+            assert!(PROTECTED.contains(&f), "{f} must be in PROTECTED");
+        }
+        assert!(
+            PROTECTED_PREFIXES.contains(&"src-tauri/capabilities/"),
+            "capabilities/ must be a protected prefix"
+        );
+        assert!(
+            PROTECTED_PREFIXES.contains(&"src-tauri/genome/"),
+            "genome/ must be a protected prefix"
+        );
     }
 
     #[test]
@@ -1774,15 +2587,16 @@ mod tests {
     // ── validator toolchain resolver (Finding 8) ────────────────────────────────
 
     #[test]
-    fn npx_resolver_returns_absolute_path_or_skips() {
-        // Skip-guard like the existing ignored live tests: if npx is absent this
+    fn node_resolver_returns_absolute_path_or_skips() {
+        // Skip-guard like the existing ignored live tests: if node is absent this
         // asserts nothing (can't prove a resolver that has nothing to resolve).
-        match npx_path() {
+        // No loomhome → the PATH walk is the only source.
+        match node_path(None) {
             Some(p) => {
-                assert!(p.is_absolute(), "resolved npx must be absolute: {}", p.display());
-                assert!(p.exists(), "resolved npx must exist: {}", p.display());
+                assert!(p.is_absolute(), "resolved node must be absolute: {}", p.display());
+                assert!(p.exists(), "resolved node must exist: {}", p.display());
             }
-            None => eprintln!("SKIP npx_resolver_returns_absolute_path_or_skips: npx not on PATH"),
+            None => eprintln!("SKIP node_resolver_returns_absolute_path_or_skips: node not on PATH"),
         }
     }
 
@@ -1791,7 +2605,7 @@ mod tests {
         // Same skip-guard as npx: cargo is resolved once to an absolute path via
         // the shared PATH-walk. If cargo is absent (unlikely in a Rust test run,
         // but honest) this asserts nothing.
-        match cargo_path() {
+        match cargo_path(None) {
             Some(p) => {
                 assert!(p.is_absolute(), "resolved cargo must be absolute: {}", p.display());
                 assert!(p.exists(), "resolved cargo must exist: {}", p.display());
@@ -2011,6 +2825,36 @@ mod tests {
         read_sentinel(&mirror_path(root)).and_then(|s| s.armed_by)
     }
 
+    /// Round-1 review, Finding 4. The sentinel is the one file every healer
+    /// reads: a torn write reads as `None`, and a boot that reads `None`
+    /// proceeds unguarded, permanently. It is written the way every other
+    /// loomhome JSON is — a staging file, then a rename — so a reader sees
+    /// the whole old sentinel or the whole new one. Pinned by the one
+    /// observable difference: the rename needs the directory, not the file.
+    #[test]
+    fn sentinel_is_written_by_rename() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let sp = d.path().join("kernel-boot.json");
+        let sentinel = |status: &str| Sentinel {
+            prev_sha: "aaa111".into(),
+            applied_sha: "bbb222".into(),
+            status: status.into(),
+            source_root: d.path().to_string_lossy().into_owned(),
+            armed_by: Some("reweave".into()),
+        };
+        write_sentinel_at(&sp, &sentinel("applied")).unwrap();
+        fs::set_permissions(&sp, fs::Permissions::from_mode(0o444)).unwrap();
+
+        write_sentinel_at(&sp, &sentinel("booting")).unwrap();
+        assert_eq!(read_sentinel(&sp).unwrap().status, "booting");
+        let names: Vec<String> = fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["kernel-boot.json".to_string()], "no staging file remains");
+    }
+
     #[test]
     fn preboot_heal_applied_arms_booting_premain_no_reset() {
         // round-1 review, Finding 2: `applied` → arm `booting`/`premain` (the
@@ -2151,6 +2995,48 @@ mod tests {
     }
 
     #[test]
+    fn packaged_apply_does_not_arm_the_sentinel() {
+        // Phase 23 (Rebirth): in PACKAGED mode a source apply moves the genome
+        // only — nothing boots until a reweave — so NO sentinel is written:
+        // not the mirror at the source root, not the app_data `pending`, even
+        // for a TS edit. The commit still lands.
+        assert!(!apply_arms_sentinel(Mode::Packaged));
+        assert!(apply_arms_sentinel(Mode::Dev), "dev behaviour is unchanged");
+
+        let (_d, root) = init_repo();
+        let prev = head_sha(&root).unwrap();
+        let app_sentinel = root.join("app-data-kernel-boot.json");
+        let edits = vec![KernelEdit {
+            path: "src/hello.ts".into(),
+            search: "n = 1".into(),
+            replace: "n = 5".into(),
+        }];
+        let id = propose_inner(&root, &edits).unwrap().worktree_id;
+        set_flags(&id, true, true);
+        let out = apply_at(Mode::Packaged, &app_sentinel, &id, "packaged edit").unwrap();
+        assert_eq!(out.prev_sha, prev);
+        assert_eq!(head_sha(&root).unwrap(), out.sha, "the commit landed");
+        assert!(fs::read_to_string(root.join("src/hello.ts")).unwrap().contains("n = 5"));
+        assert!(!mirror_path(&root).exists(), "packaged: no mirror at the source root");
+        assert!(!app_sentinel.exists(), "packaged: no app_data sentinel, even for a TS edit");
+        assert!(with_registry(|reg| reg.get(&id).is_none()), "the proposal is forgotten");
+
+        // DEV, same edit shape: the mirror AND (TS edit) the app_data sentinel
+        // are written — the behaviour Phase 22 established.
+        let (_d2, root2) = init_repo();
+        let app_sentinel2 = root2.join("app-data-kernel-boot.json");
+        let id2 = propose_inner(&root2, &edits).unwrap().worktree_id;
+        set_flags(&id2, true, true);
+        let out2 = apply_at(Mode::Dev, &app_sentinel2, &id2, "dev edit").unwrap();
+        let m = read_sentinel(&mirror_path(&root2)).expect("dev: the mirror is written");
+        assert_eq!(m.status, "applied");
+        assert_eq!(m.prev_sha, out2.prev_sha);
+        assert_eq!(m.applied_sha, out2.sha);
+        let a = read_sentinel(&app_sentinel2).expect("dev: TS edit arms the app_data sentinel");
+        assert_eq!(a.status, "pending");
+    }
+
+    #[test]
     fn apply_aborts_when_mirror_write_fails_live_tree_unchanged() {
         // round-1 review, Finding 1: a forced mirror-write failure must abort the
         // apply with the LIVE TREE UNCHANGED (no live write, no commit). We
@@ -2282,56 +3168,262 @@ mod tests {
 
     // ── SKIP-GUARDED real-tsc integration test ─────────────────────────────────
     //
-    // Proves the validation wall genuinely catches breakage: a passing TS
-    // fixture yields code 0; a type-error fixture yields non-zero. Guarded to
-    // skip if npx/tsc is unavailable (like the existing ignored live tests).
+    // Proves the validation wall genuinely catches breakage THROUGH THE EXACT
+    // INVOCATION validate_ts uses: `node <wt>/node_modules/typescript/bin/tsc
+    // --noEmit`, with `<wt>/node_modules` a symlink to a real install (the
+    // Phase 23 shape — no npx, no network). A passing TS fixture yields code 0;
+    // a type-error fixture yields non-zero. Skips if node or an installed
+    // typescript is unavailable (like the existing ignored live tests).
+    #[cfg(unix)]
     #[test]
     fn real_tsc_catches_type_errors() {
-        // Resolve a REAL tsc: prefer the project's installed compiler
-        // (node_modules/.bin/tsc, walking up from CARGO_MANIFEST_DIR), else fall
-        // back to `npx tsc`. Skip if neither yields a usable compiler — this
-        // test proves the wall WHEN tsc is present (like the ignored live tests).
+        let Some(node) = node_path(None) else {
+            eprintln!("SKIP real_tsc_catches_type_errors: node unavailable");
+            return;
+        };
+        let Some(nm) = local_node_modules() else {
+            eprintln!("SKIP real_tsc_catches_type_errors: no node_modules/typescript installed");
+            return;
+        };
         let dir = tempfile::tempdir().unwrap();
-        let wt = dir.path();
+        let wt = dir.path().canonicalize().unwrap();
         fs::write(
             wt.join("tsconfig.json"),
             r#"{"compilerOptions":{"strict":true,"noEmit":true,"skipLibCheck":true}}"#,
         )
         .unwrap();
         fs::write(wt.join("ok.ts"), "export const n: number = 1;\n").unwrap();
+        link_node_modules(&nm, &wt).unwrap();
 
-        let tsc_bin = local_tsc();
+        let (tsc_argv, _) = ts_argv(&node, &wt, &[]);
         let run_tsc = |wt: &Path| -> Result<ExecOut, LoomError> {
-            match &tsc_bin {
-                Some(bin) => run_checked(
-                    &[bin.to_str().unwrap(), "--noEmit"],
-                    wt,
-                    wt,
-                    TSC_TIMEOUT,
-                ),
-                None => run_checked(&["npx", "tsc", "--noEmit"], wt, wt, TSC_TIMEOUT),
-            }
+            let argv: Vec<&str> = tsc_argv.iter().map(String::as_str).collect();
+            run_checked(&argv, wt, wt, TSC_TIMEOUT)
         };
 
-        let ok = match run_tsc(wt) {
+        let ok = match run_tsc(&wt) {
             Ok(o) => o,
-            Err(_) => {
-                eprintln!("SKIP real_tsc_catches_type_errors: tsc unavailable");
+            Err(e) => {
+                eprintln!("SKIP real_tsc_catches_type_errors: tsc unavailable: {e:?}");
                 return;
             }
         };
-        if ok.code != 0 {
-            eprintln!(
-                "SKIP real_tsc_catches_type_errors: no usable tsc (npx shim?): {}",
-                ok.stdout
-            );
-            return;
-        }
+        assert_eq!(ok.code, 0, "clean fixture must pass tsc: {}\n{}", ok.stdout, ok.stderr);
 
         // Type-error fixture → tsc must fail. This is the load-bearing assertion.
         fs::write(wt.join("bad.ts"), "export const s: number = \"nope\";\n").unwrap();
-        let bad = run_tsc(wt).unwrap();
+        let bad = run_tsc(&wt).unwrap();
         assert_ne!(bad.code, 0, "type error must fail tsc: {}\n{}", bad.stdout, bad.stderr);
+    }
+
+    // ── Phase 23: validation in packaged mode ──────────────────────────────────
+
+    #[test]
+    fn packaged_source_root_is_loomhome_source() {
+        use crate::loomhome::{Home, Mode};
+        // A loomhome whose source/ is a real git work dir.
+        let hd = tempfile::tempdir().unwrap();
+        let home = Home::at(hd.path().canonicalize().unwrap());
+        let src = home.source();
+        fs::create_dir_all(&src).unwrap();
+        run(&src, &["init", "-q"]);
+        // The dev-only override names a DIFFERENT valid repo — packaged mode
+        // must ignore it and answer loomhome/source.
+        let (_d, other) = init_repo();
+        let got =
+            resolve_source_repo_at(Mode::Packaged, Some(other.to_str().unwrap()), Some(&home))
+                .unwrap();
+        assert_eq!(got, src.canonicalize().unwrap());
+        // Packaged with no loomhome cannot answer — typed error, never the cwd.
+        assert!(resolve_source_repo_at(Mode::Packaged, None, None).is_err());
+        // Dev: the override still wins, as before.
+        let dev = resolve_source_repo_at(Mode::Dev, Some(other.to_str().unwrap()), Some(&home))
+            .unwrap();
+        assert_eq!(dev, other);
+    }
+
+    #[test]
+    fn worktree_parent_follows_mode() {
+        use crate::loomhome::{Home, Mode};
+        let hd = tempfile::tempdir().unwrap();
+        let home = Home::at(hd.path().to_path_buf());
+        assert_eq!(worktree_parent(Mode::Packaged, &home), home.worktrees());
+        assert_eq!(worktree_parent(Mode::Dev, &home), std::env::temp_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_gets_node_modules_symlink() {
+        let (_d, root) = init_repo();
+        // A fake install in the source repo (gitignored in the real tree).
+        fs::create_dir_all(root.join("node_modules/marker")).unwrap();
+        let edits = vec![KernelEdit {
+            path: "src/hello.ts".into(),
+            search: "\"hi\"".into(),
+            replace: "\"hello\"".into(),
+        }];
+        let out = propose_inner(&root, &edits).unwrap();
+        let wt = with_registry(|r| r.get(&out.worktree_id).map(|p| p.worktree.clone())).unwrap();
+        let link = wt.join("node_modules");
+        let meta = fs::symlink_metadata(&link).expect("node_modules must exist in the worktree");
+        assert!(meta.file_type().is_symlink(), "node_modules must be a symlink");
+        assert_eq!(fs::read_link(&link).unwrap(), root.join("node_modules"));
+        assert!(link.join("marker").is_dir(), "symlink must resolve to the source install");
+        // The symlink is untracked, so the diff is only the edit.
+        assert!(!out.diff.contains("node_modules"));
+        // Discard removes the worktree and the link — and NEVER the target.
+        kernel_discard(out.worktree_id).unwrap();
+        assert!(!wt.exists(), "worktree must be gone");
+        assert!(root.join("node_modules/marker").is_dir(), "source node_modules must survive");
+    }
+
+    #[test]
+    fn ts_validation_argv_uses_node_not_npx() {
+        let node = PathBuf::from("/opt/tools/bin/node");
+        let wt = PathBuf::from("/loomhome/worktrees/loom-kernel-1");
+        let tests = vec!["src/a.ts".to_string(), "src/a.test.ts".to_string()];
+        let (tsc, vitest) = ts_argv(&node, &wt, &tests);
+        assert_eq!(
+            tsc,
+            vec![
+                "/opt/tools/bin/node",
+                "/loomhome/worktrees/loom-kernel-1/node_modules/typescript/bin/tsc",
+                "--noEmit",
+            ]
+        );
+        assert_eq!(
+            vitest,
+            vec![
+                "/opt/tools/bin/node",
+                "/loomhome/worktrees/loom-kernel-1/node_modules/vitest/vitest.mjs",
+                "run",
+                "src/a.ts",
+                "src/a.test.ts",
+            ]
+        );
+        for a in tsc.iter().chain(vitest.iter()) {
+            assert!(!a.contains("npx"), "npx must never appear in validation argv: {a}");
+        }
+        // And the spawn carries the recorded node's own directory at the head
+        // of PATH, so nothing tsc or vitest reaches for by name resolves
+        // against the PATH a Dock-launched app inherits.
+        let env = node_env(&node);
+        let path = &env.iter().find(|(k, _)| k == "PATH").expect("PATH is passed to node").1;
+        assert_eq!(
+            std::env::split_paths(path).next().unwrap(),
+            PathBuf::from("/opt/tools/bin"),
+            "the recorded node's directory leads PATH: {path}"
+        );
+    }
+
+    /// ROUND-4 review, Finding 1. Validation's cargo used to be spawned with
+    /// `CARGO_TARGET_DIR` and `CARGO_NET_OFFLINE` and nothing else, while
+    /// `exec::run_checked_env` never clears the environment — so a
+    /// Dock-launched app handed `cargo check` launchd's PATH, which holds
+    /// neither rustup nor homebrew, and cargo died with
+    /// `could not execute process 'rustc -vV': No such file or directory`.
+    /// Because that is a non-zero EXIT rather than a spawn error,
+    /// `validate_rust` reported it as the OWNER'S EDIT failing to compile:
+    /// the bounded repair loop then burned its rounds on an error no edit
+    /// can fix, and no core edit was ever approved or woven.
+    ///
+    /// Every cargo spawn is composed in one place now, and this is it.
+    #[test]
+    fn validation_cargo_spawn_leads_path_with_the_recorded_toolchain() {
+        use crate::loomhome::Home;
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        let bin = d.path().join("toolchain");
+        let brew = d.path().join("brew");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&brew).unwrap();
+        std::fs::create_dir_all(&home.root).unwrap();
+        // The table threading wrote — the only place a packaged LOOM learns
+        // where its toolchain lives.
+        let tools_json: Vec<serde_json::Value> = [("cargo", &bin), ("rustc", &bin), ("cmake", &brew)]
+            .iter()
+            .map(|(name, dir)| {
+                let p = dir.join(name);
+                std::fs::write(&p, "#!/bin/sh\n").unwrap();
+                serde_json::json!({
+                    "name": name, "path": p.to_string_lossy(), "version": "x",
+                    "requiredFor": "core", "install": "rustup",
+                })
+            })
+            .collect();
+        std::fs::write(
+            home.root.join("threads.json"),
+            serde_json::to_string(&serde_json::json!({
+                "threaded": true, "tools": tools_json,
+                "steps": {
+                    "seed": true, "deps": true, "vendor": true, "warm": true, "register": true,
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let tools = home_tools(&home);
+        let run = cargo_run(&tools, Some(&home.target())).unwrap();
+        assert_eq!(
+            run.argv(&["check"]),
+            vec![
+                bin.join("cargo").to_string_lossy().to_string(),
+                "check".to_string(),
+                "--offline".to_string(),
+            ]
+        );
+        let envs = run.envs();
+        let get = |k: &str| -> String {
+            envs.iter()
+                .find(|(n, _)| *n == k)
+                .unwrap_or_else(|| panic!("{k} is passed to cargo"))
+                .1
+                .to_string()
+        };
+        // The recorded toolchain LEADS PATH: cargo resolves rustc by name,
+        // and native build scripts resolve cmake by name.
+        let path = get("PATH");
+        let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        assert_eq!(entries[0], bin, "the recorded cargo's directory leads PATH: {path}");
+        assert!(entries.contains(&brew), "and cmake's is on it: {path}");
+        assert_eq!(get("CMAKE"), brew.join("cmake").to_string_lossy());
+        assert_eq!(get("CARGO_TARGET_DIR"), home.target().to_string_lossy());
+        assert_eq!(get("CARGO_NET_OFFLINE"), "true");
+
+        // Dev passes no target dir: the worktree keeps its own.
+        let dev = cargo_run(&tools, None).unwrap();
+        assert!(
+            dev.envs().iter().all(|(k, _)| *k != "CARGO_TARGET_DIR"),
+            "dev keeps the worktree's own target"
+        );
+        assert!(dev.envs().iter().any(|(k, _)| *k == "PATH"), "but never without its toolchain");
+    }
+
+    #[test]
+    fn rust_validation_argv_has_offline_and_target_env() {
+        use crate::loomhome::{Home, Mode};
+        let tools = |name: &str| {
+            (name == "cargo").then(|| PathBuf::from("/opt/tools/bin/cargo"))
+        };
+        let run = cargo_run(&tools, None).unwrap();
+        assert_eq!(run.argv(&["check"]), vec!["/opt/tools/bin/cargo", "check", "--offline"]);
+        assert_eq!(
+            run.argv(&["test", "--no-run"]),
+            vec!["/opt/tools/bin/cargo", "test", "--no-run", "--offline"]
+        );
+        let hd = tempfile::tempdir().unwrap();
+        let home = Home::at(hd.path().to_path_buf());
+        // Packaged validation shares loomhome's warm target; dev's worktree
+        // keeps its own.
+        assert_eq!(validate_target_dir(Mode::Packaged, &home), Some(home.target()));
+        assert_eq!(validate_target_dir(Mode::Dev, &home), None);
+        let packaged =
+            cargo_run(&tools, validate_target_dir(Mode::Packaged, &home).as_deref()).unwrap();
+        let envs = packaged.envs();
+        assert!(envs.contains(&("CARGO_TARGET_DIR", home.target().to_str().unwrap())));
+        assert!(envs.contains(&("CARGO_NET_OFFLINE", "true")));
+        assert!(run.envs().iter().all(|(k, _)| *k != "CARGO_TARGET_DIR"));
     }
 
     // ── SKIP-GUARDED real-cargo integration test (#[ignore]) ────────────────────
@@ -2349,14 +3441,19 @@ mod tests {
     #[test]
     #[ignore = "invokes real cargo/rustc — slow; run manually with --ignored"]
     fn real_cargo_catches_type_errors() {
-        let cargo = match cargo_path() {
-            Some(c) => c,
-            None => {
+        // Composed the way `validate_rust` composes it — argv AND env from
+        // `cargo_run` — so this proves the real spawn, not a hand-built one.
+        let tools = |name: &str| crate::threads::locate_now(name).or_else(|| which(name));
+        let spawn = match cargo_run(&tools, None) {
+            Ok(s) => s,
+            Err(_) => {
                 eprintln!("SKIP real_cargo_catches_type_errors: cargo not on PATH");
                 return;
             }
         };
-        let cargo = cargo.to_str().unwrap();
+        let check_argv = spawn.argv(&["check"]);
+        let argv: Vec<&str> = check_argv.iter().map(String::as_str).collect();
+        let envs = spawn.envs();
 
         // Build a minimal standalone crate laid out like the worktree the
         // validator sees: an allowed_root with a `src-tauri/` holding Cargo.toml
@@ -2373,11 +3470,12 @@ mod tests {
         .unwrap();
 
         let run_check = |wt_root: &Path| -> Result<ExecOut, LoomError> {
-            run_checked(
-                &[cargo, "check"],
+            run_checked_env(
+                &argv,
                 &wt_root.join("src-tauri"),
                 wt_root,
                 CARGO_CHECK_TIMEOUT,
+                &envs,
             )
         };
 
@@ -2408,17 +3506,530 @@ mod tests {
         );
     }
 
-    /// Walk up from the crate dir to find `node_modules/.bin/tsc`.
-    fn local_tsc() -> Option<PathBuf> {
+    /// The nearest installed `node_modules` (one holding `typescript/bin/tsc`)
+    /// walking up from the crate dir — the dev install a validation worktree
+    /// symlinks to.
+    #[cfg(unix)]
+    fn local_node_modules() -> Option<PathBuf> {
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         loop {
-            let c = dir.join("node_modules/.bin/tsc");
-            if c.exists() {
-                return Some(c);
+            let c = dir.join("node_modules");
+            if c.join("typescript/bin/tsc").exists() {
+                return c.canonicalize().ok();
             }
             if !dir.pop() {
                 return None;
             }
+        }
+    }
+
+    // ── Phase 23 (Rebirth): the warden's sentinel rows + the packaged backstop ──
+
+    #[test]
+    fn decide_table() {
+        use Action::*;
+        let statuses = ["pending", "applied", "booting", "ok", "healed", "rollback-failed", "garbage"];
+        let arms = [Some("guard"), Some("premain"), Some("reweave"), None];
+        for status in statuses {
+            for armed in arms {
+                for alive in [true, false] {
+                    for mode in [Mode::Dev, Mode::Packaged] {
+                        let got = decide(status, armed, alive, mode);
+                        let want = match (status, armed, alive, mode) {
+                            // A reweave-armed `applied` is the first sighting of
+                            // a new body: arm it, in either mode.
+                            ("applied", Some("reweave"), _, _) => Arm,
+                            // Dev: any other `applied` is armed by pre-main
+                            // (guard-absent arm, Phase 22).
+                            ("applied", _, _, Mode::Dev) => Arm,
+                            // Packaged: a source-only apply boots nothing until
+                            // a reweave — pre-main leaves it to boot_check.
+                            ("applied", _, _, Mode::Packaged) => Leave,
+                            // The guard owns its live attempt, always.
+                            ("booting", Some("guard"), _, _) => Leave,
+                            // THE OWNERSHIP RULE: a live warden owns the birth.
+                            ("booting", Some("reweave"), true, _) => Leave,
+                            // No warden alive, packaged: pre-main is the backstop.
+                            ("booting", Some("reweave"), false, Mode::Packaged) => Heal,
+                            // Dev never swapped a body — nothing to heal.
+                            ("booting", Some("reweave"), false, Mode::Dev) => Leave,
+                            // Dev, premain/legacy: the Phase 22 source backstop.
+                            ("booting", _, _, Mode::Dev) => Heal,
+                            // Packaged, not reweave-armed: not pre-main's.
+                            ("booting", _, _, Mode::Packaged) => Leave,
+                            // pending / ok / healed / rollback-failed / unknown.
+                            _ => Leave,
+                        };
+                        assert_eq!(got, want, "status={status} armedBy={armed:?} alive={alive} mode={mode:?}");
+                    }
+                }
+            }
+        }
+        // The two rows the spec names outright.
+        assert_eq!(decide("booting", Some("reweave"), true, Mode::Packaged), Leave);
+        assert_eq!(decide("booting", Some("reweave"), false, Mode::Packaged), Heal);
+    }
+
+    #[test]
+    fn packaged_home_matches_tauri_identifier() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], APP_IDENTIFIER, "the pre-main home must follow tauri.conf.json");
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("Library/Application Support").join(APP_IDENTIFIER).join("loom");
+        assert!(packaged_home_under(d.path()).is_none(), "no loomhome yet → no home");
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(packaged_home_under(d.path()).unwrap().root, root);
+    }
+
+    fn app_sentinel(home: &Home, status: &str, armed_by: Option<&str>) {
+        write_sentinel_at(
+            &home.sentinel_json(),
+            &Sentinel {
+                prev_sha: "aaa111".into(),
+                applied_sha: "bbb222".into(),
+                status: status.into(),
+                source_root: home.source().to_string_lossy().into_owned(),
+                armed_by: armed_by.map(str::to_string),
+            },
+        )
+        .unwrap();
+    }
+
+    fn app_sentinel_status(home: &Home) -> Option<String> {
+        read_sentinel(&home.sentinel_json()).map(|s| s.status)
+    }
+
+    #[test]
+    fn boot_ok_confirms_ledger() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let sp = home.sentinel_json();
+        // No ledger, no sentinel: a plain boot confirms nothing and writes nothing.
+        boot_ok_at(&sp, Some(&home)).unwrap();
+        assert!(!home.ledger_json().exists(), "boot_ok must not invent a ledger");
+        assert!(!sp.exists());
+        // A ledger left unconfirmed by the swap, a sentinel armed by reweave.
+        crate::generations::write(
+            &home,
+            &crate::generations::Ledger {
+                current: Some("bbb222".into()),
+                previous: Some("aaa111".into()),
+                kept: vec!["aaa111".into(), "bbb222".into()],
+                keep: 3,
+                confirmed: false,
+            },
+        )
+        .unwrap();
+        app_sentinel(&home, "booting", Some("reweave"));
+        boot_ok_at(&sp, Some(&home)).unwrap();
+        let ledger = crate::generations::read(&home);
+        assert!(ledger.confirmed, "a good boot confirms the running generation");
+        assert_eq!(ledger.current.as_deref(), Some("bbb222"), "nothing else moves");
+        assert_eq!(ledger.kept.len(), 2);
+        assert_eq!(app_sentinel_status(&home).as_deref(), Some("ok"));
+        // Dev-style call with no home: still marks the sentinel, touches no ledger.
+        app_sentinel(&home, "pending", None);
+        boot_ok_at(&sp, None).unwrap();
+        assert_eq!(app_sentinel_status(&home).as_deref(), Some("ok"));
+    }
+
+    /// Round-3 review, Finding 2. `boot_ok_at` read the sentinel and wrote
+    /// `ok` unconditionally — the one consumer of the state machine that did
+    /// not guard with `is_unconfirmed`. The `HealedNextLaunch` ending exists
+    /// precisely because a USABLE generation can miss the deadline: the
+    /// warden heals, deliberately leaves the running process alone, and that
+    /// process beacons late. `healed` then became `ok`, erasing the only
+    /// durable statement that the birth ended badly, and the ledger was
+    /// stamped `confirmed: true` on a `current` the beaconing process is not
+    /// even running. The same call erased `rollback-failed`. A terminal state
+    /// is somebody else's verdict.
+    #[test]
+    fn boot_ok_does_not_overwrite_a_terminal_sentinel() {
+        for status in ["healed", "ok", "rollback-failed"] {
+            let d = tempfile::tempdir().unwrap();
+            let home = Home::at(d.path().join("loom"));
+            fs::create_dir_all(&home.root).unwrap();
+            let sp = home.sentinel_json();
+            // The disk the late beacon finds: the warden healed to aaa111 and
+            // left the bbb222 window running; its ledger is unconfirmed
+            // because the generation it names never confirmed.
+            crate::generations::write(
+                &home,
+                &crate::generations::Ledger {
+                    current: Some("aaa111".into()),
+                    previous: Some("bbb222".into()),
+                    kept: vec!["aaa111".into(), "bbb222".into()],
+                    keep: 3,
+                    confirmed: false,
+                },
+            )
+            .unwrap();
+            app_sentinel(&home, status, Some("reweave"));
+            boot_ok_at(&sp, Some(&home)).unwrap();
+            assert_eq!(
+                app_sentinel_status(&home).as_deref(),
+                Some(status),
+                "`{status}` is terminal — a late beacon must not rewrite it"
+            );
+            assert!(
+                !crate::generations::read(&home).confirmed,
+                "`{status}`: a generation the beaconing process is not running is not confirmed"
+            );
+        }
+    }
+
+    #[test]
+    fn boot_check_surfaces_healed_generation_once() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let sp = home.sentinel_json();
+        // The warden left a sentinel `healed` and a recovery record.
+        app_sentinel(&home, "healed", Some("reweave"));
+        crate::threads::write_json_atomic(
+            &home.recovery_json(),
+            &crate::warden::Recovery {
+                failed_sha: "bbb222".into(),
+                prev_sha: "aaa111".into(),
+                reason: "crashed".into(),
+                log_tail: vec!["Compiling loom".into()],
+            },
+        )
+        .unwrap();
+        // The Rust-side setup check does NOT consume the record (the shell has
+        // not asked yet).
+        let quiet = boot_check_in(&sp, Mode::Packaged, None, Some(&home), false).unwrap();
+        assert!(quiet.healed_generation.is_none());
+        assert!(home.recovery_json().exists());
+        // The shell's check surfaces it, camelCase, without the log tail — and
+        // clears it.
+        let out = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        let hg = out.healed_generation.clone().expect("the healed generation");
+        assert_eq!(hg.failed_sha, "bbb222");
+        assert_eq!(hg.prev_sha, "aaa111");
+        assert_eq!(hg.reason, "crashed");
+        assert!(out.rolled_back_to.is_none() && !out.rollback_failed, "healed is terminal: no source rollback");
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["healedGeneration"]["failedSha"], "bbb222");
+        assert_eq!(v["healedGeneration"]["prevSha"], "aaa111");
+        assert!(v["healedGeneration"].get("logTail").is_none());
+        assert!(!home.recovery_json().exists(), "surfaced exactly once");
+        let again = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        assert!(again.healed_generation.is_none());
+        assert!(serde_json::to_value(&again).unwrap()["healedGeneration"].is_null());
+    }
+
+    /// Round-3 review, Finding 3. A body heal that FAILED reaches the shell
+    /// as `rollbackFailed`, never as `healedGeneration` — the owner is never
+    /// told LOOM came home to a generation it could not reach. The record is
+    /// the one-shot carrier, so the notice can fire exactly once.
+    #[test]
+    fn boot_check_surfaces_a_failed_body_heal_once() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let sp = home.sentinel_json();
+        // What the warden (or the backstop) leaves when the copy back fails.
+        app_sentinel(&home, "rollback-failed", Some("reweave"));
+        crate::threads::write_json_atomic(
+            &home.recovery_json(),
+            &crate::warden::Recovery {
+                failed_sha: "bbb222".into(),
+                prev_sha: "aaa111".into(),
+                reason: crate::warden::REASON_ROLLBACK_FAILED.into(),
+                log_tail: vec!["Compiling loom".into()],
+            },
+        )
+        .unwrap();
+        // The Rust-side setup check does not consume it.
+        let quiet = boot_check_in(&sp, Mode::Packaged, None, Some(&home), false).unwrap();
+        assert!(!quiet.rollback_failed && quiet.healed_generation.is_none());
+        assert!(home.recovery_json().exists());
+
+        let out = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        assert!(out.rollback_failed, "the failure reaches the shell");
+        assert!(
+            out.healed_generation.is_none(),
+            "a body that could not come home is never reported as one that did"
+        );
+        assert!(out.rolled_back_to.is_none());
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["rollbackFailed"], true);
+        assert!(v["healedGeneration"].is_null());
+        assert_eq!(
+            app_sentinel_status(&home).as_deref(),
+            Some("rollback-failed"),
+            "the durable verdict stays on disk"
+        );
+        // Exactly once: the record is consumed, so the notice cannot repeat.
+        let again = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        assert!(!again.rollback_failed && again.healed_generation.is_none());
+    }
+
+    #[test]
+    fn boot_check_leaves_reweave_armed_sentinel_alone() {
+        // The new body's setup runs boot_check while its sentinel is
+        // `booting`/`reweave` — the warden owns that birth. A source rollback
+        // here would undo the genome the body was woven from and delete the
+        // sentinel the warden is watching.
+        let (_dir, root) = init_repo();
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let sp = home.sentinel_json();
+        let head = head_sha(&root).unwrap();
+        write_sentinel_at(
+            &sp,
+            &Sentinel {
+                prev_sha: "0".repeat(40),
+                applied_sha: head.clone(),
+                status: "booting".into(),
+                source_root: root.to_string_lossy().into_owned(),
+                armed_by: Some("reweave".into()),
+            },
+        )
+        .unwrap();
+        let out = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        assert!(out.rolled_back_to.is_none() && !out.rollback_failed);
+        assert_eq!(app_sentinel_status(&home).as_deref(), Some("booting"), "untouched");
+        assert_eq!(head_sha(&root).unwrap(), head, "the genome is untouched");
+    }
+
+    /// A fake `.app` + shelved previous body (an executable script, so the
+    /// backstop can actually spawn it as the warden) + a fake codesign.
+    struct PackagedFx {
+        _dir: tempfile::TempDir,
+        home: Home,
+        layout: crate::platform::AppLayout,
+        codesign: PathBuf,
+    }
+
+    impl PackagedFx {
+        fn tools(&self) -> impl Fn(&str) -> Option<PathBuf> + '_ {
+            move |n: &str| (n == "codesign").then(|| self.codesign.clone())
+        }
+        fn exe(&self) -> String {
+            fs::read_to_string(&self.layout.exe_path).unwrap()
+        }
+    }
+
+    fn packaged_fx() -> PackagedFx {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let home = Home::at(root.join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let app_path = root.join("LOOM.app");
+        let exe_path = app_path.join("Contents/MacOS/loom");
+        fs::create_dir_all(exe_path.parent().unwrap()).unwrap();
+        fs::write(&exe_path, "new body").unwrap();
+        let prev = home.generation_exe("aaa111");
+        fs::create_dir_all(prev.parent().unwrap()).unwrap();
+        fs::write(&prev, "#!/bin/sh\n# old body\nexit 0\n").unwrap();
+        fs::set_permissions(&prev, fs::Permissions::from_mode(0o755)).unwrap();
+        let codesign = root.join("bin/codesign");
+        fs::create_dir_all(codesign.parent().unwrap()).unwrap();
+        fs::write(&codesign, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&codesign, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::generations::write(
+            &home,
+            &crate::generations::Ledger {
+                current: Some("bbb222".into()),
+                previous: Some("aaa111".into()),
+                kept: vec!["aaa111".into(), "bbb222".into()],
+                keep: 3,
+                confirmed: false,
+            },
+        )
+        .unwrap();
+        PackagedFx { _dir: dir, home, layout: crate::platform::AppLayout { app_path, exe_path }, codesign }
+    }
+
+    fn warden_file(home: &Home, warden_pid: Option<u32>) {
+        warden_file_for(home, "bbb222", warden_pid)
+    }
+
+    fn warden_file_for(home: &Home, new_sha: &str, warden_pid: Option<u32>) {
+        crate::threads::write_json_atomic(
+            &home.warden_json(),
+            &crate::warden::Job {
+                old_pid: 1,
+                app_path: PathBuf::from("/x/LOOM.app"),
+                exe_path: PathBuf::from("/x/LOOM.app/Contents/MacOS/loom"),
+                new_sha: new_sha.into(),
+                prev_sha: "aaa111".into(),
+                loomhome: home.root.clone(),
+                timeout_secs: 90,
+                relaunch_only: false,
+                warden_pid,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn preboot_packaged_arms_a_reweave_applied_and_keeps_the_owner() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "applied", Some("reweave"));
+        let alive = |_: u32| false;
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Armed
+        ));
+        let s = read_sentinel(&fx.home.sentinel_json()).unwrap();
+        assert_eq!(s.status, "booting");
+        assert_eq!(s.armed_by.as_deref(), Some("reweave"), "the warden still owns it");
+        assert_eq!(fx.exe(), "new body");
+        // A source-only apply (not reweave-armed) is not pre-main's business
+        // in packaged mode.
+        app_sentinel(&fx.home, "applied", None);
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Left
+        ));
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("applied"));
+    }
+
+    #[test]
+    fn preboot_packaged_leaves_a_booting_owned_by_a_live_warden() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave"));
+        warden_file(&fx.home, Some(777));
+        let alive = |pid: u32| pid == 777;
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Left
+        ));
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("booting"));
+        assert_eq!(fx.exe(), "new body");
+        assert!(!fx.home.recovery_json().exists());
+    }
+
+    /// Round-1 review, Finding 5. `warden.json` is never invalidated, so a
+    /// job left by an earlier birth whose pid the system has since handed to
+    /// an unrelated process would disarm the backstop forever: a crash loop
+    /// with no heal. A job is only a live guard if it guards THIS birth —
+    /// its `newSha` is the sentinel's `applied_sha`.
+    #[test]
+    fn preboot_packaged_treats_a_warden_from_another_birth_as_gone() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave")); // applied_sha bbb222
+        // A leftover job for an older birth, whose pid is alive again.
+        warden_file_for(&fx.home, "ccc333", Some(777));
+        let alive = |pid: u32| pid == 777;
+        let out = preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools());
+        assert!(matches!(out, Backstop::Healed { .. }), "got {out:?}");
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("healed"));
+        // The job that DOES name this birth still owns it.
+        let fx2 = packaged_fx();
+        app_sentinel(&fx2.home, "booting", Some("reweave"));
+        warden_file_for(&fx2.home, "bbb222", Some(777));
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx2.home, Some(&fx2.layout), &alive, &fx2.tools()),
+            Backstop::Left
+        ));
+    }
+
+    #[test]
+    fn preboot_packaged_heals_a_booting_with_no_warden_and_relaunches_through_the_previous_body() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave"));
+        // The warden recorded its pid, then died.
+        warden_file(&fx.home, Some(777));
+        let alive = |_: u32| false;
+        let out = preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools());
+        let Backstop::Healed { warden } = out else { panic!("expected Healed, got {out:?}") };
+        assert!(warden.is_ok(), "the previous body was spawned as the warden: {warden:?}");
+        // Same heal as the warden's: body back, sentinel healed, ledger home, record.
+        assert_eq!(fx.exe(), "#!/bin/sh\n# old body\nexit 0\n");
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("healed"));
+        let ledger = crate::generations::read(&fx.home);
+        assert_eq!(ledger.current.as_deref(), Some("aaa111"));
+        assert_eq!(ledger.previous.as_deref(), Some("bbb222"));
+        let rec = crate::warden::read_recovery(&fx.home).unwrap();
+        assert_eq!((rec.failed_sha.as_str(), rec.prev_sha.as_str(), rec.reason.as_str()), ("bbb222", "aaa111", "never confirmed"));
+        // The warden's job is relaunch-only and waits for THIS process.
+        let job: crate::warden::Job =
+            serde_json::from_str(&fs::read_to_string(fx.home.warden_json()).unwrap()).unwrap();
+        assert!(job.relaunch_only);
+        assert_eq!(job.old_pid, std::process::id());
+        assert_eq!(job.app_path, fx.layout.app_path);
+        assert_eq!(job.exe_path, fx.layout.exe_path);
+        assert_eq!((job.new_sha.as_str(), job.prev_sha.as_str()), ("bbb222", "aaa111"));
+        // Without a warden.json at all (the warden never started), the same.
+        let fx2 = packaged_fx();
+        app_sentinel(&fx2.home, "booting", Some("reweave"));
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx2.home, Some(&fx2.layout), &alive, &fx2.tools()),
+            Backstop::Healed { .. }
+        ));
+        assert_eq!(app_sentinel_status(&fx2.home).as_deref(), Some("healed"));
+    }
+
+    /// Round-2 review, Finding 8. A pid is not an identity — the system
+    /// recycles it. A warden that died leaving `wardenPid: 777` behind is
+    /// indistinguishable from a live one once 777 belongs to something else,
+    /// and the backstop would then Leave a body that never confirmed,
+    /// unguarded, on every boot after. The warden clears its pid as it
+    /// leaves, so the job it leaves behind names no guard however alive the
+    /// machine says that number is.
+    #[test]
+    fn preboot_packaged_heals_when_the_warden_released_its_pid() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave"));
+        warden_file(&fx.home, Some(777));
+        // Every pid on this machine reads as alive — the recycling case.
+        let alive = |_: u32| true;
+        assert!(
+            matches!(
+                preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+                Backstop::Left
+            ),
+            "a stamped pid that is alive is still a guard"
+        );
+
+        // The warden leaves.
+        crate::warden::release_pid(&fx.home.warden_json());
+        let out = preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools());
+        assert!(matches!(out, Backstop::Healed { .. }), "got {out:?}");
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("healed"));
+    }
+
+    #[test]
+    fn preboot_packaged_heal_failure_marks_rollback_failed_and_does_not_loop() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave"));
+        fs::remove_file(fx.home.generation_exe("aaa111")).unwrap();
+        let alive = |_: u32| false;
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::HealFailed(_)
+        ));
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("rollback-failed"));
+        assert_eq!(fx.exe(), "new body");
+        // A second start is a no-op.
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Left
+        ));
+    }
+
+    #[test]
+    fn preboot_packaged_ignores_absent_or_terminal_sentinels() {
+        let fx = packaged_fx();
+        let alive = |_: u32| false;
+        assert!(matches!(
+            preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+            Backstop::Left
+        ));
+        for status in ["ok", "healed", "rollback-failed", "pending"] {
+            app_sentinel(&fx.home, status, Some("reweave"));
+            assert!(matches!(
+                preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+                Backstop::Left
+            ), "{status}");
+            assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some(status));
         }
     }
 }

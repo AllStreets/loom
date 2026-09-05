@@ -11,12 +11,13 @@ import { mountInitiative } from "./runtime";
 import { saveUsage, emptyLedger } from "./observe";
 import { setSetting } from "../voice/settings";
 
-// A ledger with 6 BTC-USD floor opens earns the price-alert archetype (gate ≥4).
-// Use the real product key TerminalDeck dispatches, not a lowercase stand-in.
+// Three mornings running + one installed organ earns the morning-brief
+// archetype (gate ≥3 mornings, ≥1 organ).
 function seedEarnedLedger() {
   const l = emptyLedger(Date.now());
-  l.floorOpens = { "BTC-USD": 6 };
+  l.morningActivity = 3;
   saveUsage(l);
+  mockOrgans = [{ id: "notes", manifest: JSON.stringify({ id: "notes", name: "Notes" }), granted: null }];
 }
 
 function collectProposals(): { proposals: unknown[]; stop: () => void } {
@@ -48,7 +49,7 @@ describe("mountInitiative", () => {
     stop();
     unmount();
     expect(proposals).toHaveLength(1);
-    expect((proposals[0] as { id: string }).id).toBe("price-alert:BTC-USD");
+    expect((proposals[0] as { id: string }).id).toBe("morning-brief");
   });
 
   it("emits nothing when the setting is off", async () => {
@@ -63,7 +64,7 @@ describe("mountInitiative", () => {
   });
 
   it("emits nothing when nothing is earned (silence is the common case)", async () => {
-    saveUsage(emptyLedger(Date.now())); // empty — no floor opens
+    saveUsage(emptyLedger(Date.now())); // empty — no mornings
     const { proposals, stop } = collectProposals();
     const unmount = mountInitiative();
     await vi.runOnlyPendingTimersAsync();
@@ -81,7 +82,7 @@ describe("mountInitiative", () => {
 
     // An activity event fires while the card is still open — debounced eval must
     // not stack a second proposal.
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
+    window.dispatchEvent(new CustomEvent("loom-utterance", { detail: { text: "hello" } }));
     await vi.runOnlyPendingTimersAsync();
     stop();
     unmount();
@@ -99,7 +100,7 @@ describe("mountInitiative", () => {
     // The guard clears; a fresh activity event should be able to re-emit since
     // the store still has lastProposalTs 0 (rate-limit not tripped).
     window.dispatchEvent(new CustomEvent("loom-proposal-closed"));
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
+    window.dispatchEvent(new CustomEvent("loom-utterance", { detail: { text: "hello" } }));
     await vi.runOnlyPendingTimersAsync();
     stop();
     unmount();
@@ -114,7 +115,7 @@ describe("mountInitiative", () => {
     const countAtUnmount = proposals.length;
     unmount();
 
-    window.dispatchEvent(new CustomEvent("loom-floor-open", { detail: { product: "BTC-USD" } }));
+    window.dispatchEvent(new CustomEvent("loom-utterance", { detail: { text: "hello" } }));
     await vi.runOnlyPendingTimersAsync();
     stop();
     expect(proposals.length).toBe(countAtUnmount);

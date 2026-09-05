@@ -28,11 +28,6 @@ async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
   return args !== undefined ? invoke<T>(cmd, args) : invoke<T>(cmd);
 }
 
-// ── Cloud builder types ────────────────────────────────────────────────────────
-
-export type Brain = "local" | "cloud";
-export type BuilderChatResult = { text: string; brain: Brain };
-
 // ── Voice types ────────────────────────────────────────────────────────────────
 
 export type VoicePresence = { id: string; label: string; present: boolean };
@@ -117,7 +112,16 @@ export type KernelValidation = {
   output: string;
 };
 export type KernelApplied = { sha: string; prevSha: string };
-export type KernelBootCheck = { rolledBackTo: string | null; rollbackFailed: boolean };
+/**
+ * `healedGeneration` (Phase 23): set when the warden (or the pre-main backstop)
+ * put the previous body back because a woven generation never confirmed its
+ * boot — the recovery record from `loomhome/recovery.json`, surfaced once.
+ */
+export type KernelBootCheck = {
+  rolledBackTo: string | null;
+  rollbackFailed: boolean;
+  healedGeneration?: { failedSha: string; prevSha: string; reason: string } | null;
+};
 
 /** Meta for the UI/prompt: resolved source-repo root + the protected carve-out. */
 export const kernelEditable = (sourceRepo?: string) =>
@@ -167,6 +171,44 @@ export const kernelBootOk = () => safeInvoke<void>("kernel_boot_ok");
 export const kernelBootCheck = (sourceRepo?: string) =>
   safeInvoke<KernelBootCheck>("kernel_boot_check", { sourceRepo: sourceRepo ?? null });
 
+// ── Identity (Phase 23 — Rebirth) ──────────────────────────────────────────────
+
+/**
+ * Who this binary is: `dev` (tauri dev owns the binary; source is the cwd) or
+ * `packaged` (a built app; source is `loomhome/source`). `genomeSha` is the
+ * sha the binary was woven from (`unknown` outside a repo); `genomeHead` is
+ * the genome's HEAD right now; `generation` is the ledger's current sha, null
+ * before the first reweave.
+ */
+export type Identity = {
+  mode: "dev" | "packaged";
+  genomeSha: string;
+  /**
+   * The genome's HEAD — `git rev-parse HEAD` of the repo a weave would build
+   * from. `null` when there is no source yet, or git cannot answer.
+   *
+   * This, not `genomeSha`, is what "is there anything new to weave?" asks
+   * about. `genomeSha` is the sha the RUNNING BINARY was compiled from: it
+   * cannot move while the process lives, and threading (and every successful
+   * weave) makes `generation` equal to it — so a gate comparing those two was
+   * always answering "nothing new" after the first weave. A self-edit moves
+   * `genomeHead` and nothing else, which is exactly the question.
+   */
+  genomeHead: string | null;
+  generation: string | null;
+  threaded: boolean;
+  loomhome: string;
+  /** Bytes on disk under loomhome (vendor + warm target) — a bounded walk, honest not exact. */
+  loomhomeBytes: number;
+  /** Whether this body can actually be swapped: packaged, on a supported
+   *  platform, inside a bundle LOOM can find. The consent line reads this
+   *  before it promises "LOOM will close and return". */
+  canSwap: boolean;
+};
+
+/** Read by the Settings organ and the Shuttle ("which generation is this"). */
+export const kernelIdentity = () => safeInvoke<Identity>("kernel_identity");
+
 // ── Voice wrappers ─────────────────────────────────────────────────────────────
 
 export const voiceStatus = () => safeInvoke<VoiceStatus>("voice_status");
@@ -176,145 +218,137 @@ export const sttTranscribe = (samples: number[]) =>
 export const ttsSpeak = (text: string, voiceId: string) =>
   safeInvoke<number[]>("tts_speak", { text, voiceId });
 
-// ── Cloud builder wrappers ─────────────────────────────────────────────────────
-
-export const cloudChat = (system: string, messages: Msg[], maxTokens?: number) =>
-  safeInvoke<string>("cloud_chat", { system, messages, maxTokens: maxTokens ?? null });
-
-export const cloudKeySet = (key: string) =>
-  safeInvoke<void>("cloud_key_set", { key });
-
-export const cloudKeyPresent = () =>
-  safeInvoke<boolean>("cloud_key_present");
-
-export const cloudKeyClear = () =>
-  safeInvoke<void>("cloud_key_clear");
-
-// ── Market engine (market.rs) ──────────────────────────────────────────────────
+// ── builderChat — the single builder-role seam ─────────────────────────────────
 //
-// Typed keyless sources: Yahoo chart (browser UA — the 429 fix), Coinbase
-// Exchange, Frankfurter. Hosts hardcoded in Rust; inputs validated there.
-// All shapes are serialized camelCase by market.rs.
+// This is the ONLY entry point for builder-role model calls. There is one
+// brain: the local fleet. Companion/rewriter roles call fleetChat directly.
 
-/** Yahoo intraday chart, normalized. */
-export type MarketChart = {
-  symbol: string;
-  name: string | null;
-  price: number;
-  prevClose: number;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  volume: number | null;
-  /** Intraday closes with epoch-second timestamps — same length, nulls dropped. */
-  closes: number[];
-  timestamps: number[];
-};
+export async function builderChat(messages: Msg[], opts?: ChatOpts): Promise<string> {
+  return fleetChat("builder", messages, opts);
+}
 
-/** Coinbase spot ticker merged with 24h stats. */
-export type MarketCrypto = {
-  product: string;
-  price: number;
-  bid: number | null;
-  ask: number | null;
-  open24h: number | null;
-  high24h: number | null;
-  low24h: number | null;
-  volume24h: number | null;
-  changePct24h: number | null;
-  time: string | null;
-};
-
-export type BookLevel = { price: number; size: number };
-
-/** Coinbase level-2 order book, truncated per side. */
-export type MarketBook = { product: string; bids: BookLevel[]; asks: BookLevel[] };
-
-/** One Coinbase trade (side is the maker side, raw). */
-export type MarketTrade = {
-  tradeId: number;
-  time: string;
-  price: number;
-  size: number;
-  side: string;
-};
-
-/** Frankfurter daily FX rates. */
-export type MarketFx = { base: string; date: string; rates: Record<string, number> };
-
-export const marketChart = (symbol: string) =>
-  safeInvoke<MarketChart>("market_chart", { symbol });
-
-export const marketCrypto = (product: string) =>
-  safeInvoke<MarketCrypto>("market_crypto", { product });
-
-export const marketBook = (product: string, depth: number) =>
-  safeInvoke<MarketBook>("market_book", { product, depth });
-
-export const marketTrades = (product: string) =>
-  safeInvoke<MarketTrade[]>("market_trades", { product });
-
-export const marketFx = (base: string, symbols: string[]) =>
-  safeInvoke<MarketFx>("market_fx", { base, symbols });
+// ── Generations (Phase 23 — Rebirth) ───────────────────────────────────────────
 
 /**
- * Legacy batch chart fetch (market.rs, folded in from quotes.rs — command name
- * unchanged). Returns the raw JSON array string:
- *   `[{"symbol":"SPY","body":<raw JSON or null>},...]`
- * Rejects with ShellUnavailableError in the browser (safeInvoke contract).
+ * One woven body on the shelf: the ledger's row plus the genome's memory of
+ * the commit it came from (`commitSubject` is `"unknown"` when the genome or
+ * the commit is missing). `isCurrent` is the ledger's running body;
+ * `isPrevious` is the row the ledger's `previous` names — which after a heal
+ * is the generation that FAILED to be born, so it is not by itself the way
+ * home (see `previousGeneration` in `lib/loom/generations.ts`).
  */
-export const quoteFetch = (symbols: string[]) =>
-  safeInvoke<string>("quote_fetch", { symbols });
+export type Generation = {
+  sha: string;
+  wovenAt: string;
+  sizeBytes: number;
+  reason: string;
+  commitSubject: string;
+  isCurrent: boolean;
+  isPrevious: boolean;
+  /**
+   * This generation was woven, swapped in, and did not boot — a healer put the
+   * previous body back and stamped its `meta.json` (round-4 review, findings 3
+   * and 4). `isPrevious` alone cannot say this: the warden's heal writes
+   * `{ current: prev, previous: <the failed sha> }`, so after a heal the
+   * ledger's PREVIOUS is exactly the body that would not start.
+   */
+  failedToBoot: boolean;
+  /** Why, in the healer's words — `"crashed"`, `"never confirmed"`. */
+  failedReason: string | null;
+};
 
-// ── builderChat — the single cloud-override seam ────────────────────────────────
-//
-// This is the ONLY entry point for builder-role model calls.
-// - When model.cloudBuilder == "anthropic" AND a key is present → tries cloud first,
-//   falls back to fleetChat on any cloud error (emits brain "local").
-// - Otherwise → fleetChat (brain "local").
-// Companion/rewriter roles NEVER flow through here (they call fleetChat directly).
-//
-// The `system` and `messages` arguments mirror what fleet_chat receives:
-// - system is passed as the first system-role message when using cloud
-// - For cloud: system is extracted from messages[0] if role="system", else passed as ""
+/** Every kept generation, newest first. Read by Settings → LOOM and the Shuttle. */
+export const generationsList = () => safeInvoke<Generation[]>("generations_list");
+// ── Threading (Phase 23 — Rebirth) ─────────────────────────────────────────────
 
-export async function builderChat(
-  messages: Msg[],
-  opts?: ChatOpts,
-): Promise<BuilderChatResult> {
-  const cloudSetting = getSetting("model.cloudBuilder");
+/** One tool from the threads table: where it is, which version answered, and
+ *  the exact install line if it is missing. `version` is `"present"` for a
+ *  tool with no `--version` (codesign). */
+export type Tool = {
+  name: string;
+  path: string | null;
+  version: string | null;
+  requiredFor: string;
+  install: string;
+};
 
-  if (cloudSetting === "anthropic") {
-    // Extract system message if present as first message
-    let systemMsg = "";
-    let chatMessages = messages;
-    if (messages.length > 0 && messages[0].role === "system") {
-      systemMsg = messages[0].content;
-      chatMessages = messages.slice(1);
-    }
+export type ThreadSteps = {
+  seed: boolean;
+  deps: boolean;
+  vendor: boolean;
+  warm: boolean;
+  register: boolean;
+};
 
-    // Check if key is configured — avoid a round-trip if not
-    let keyPresent = false;
-    try {
-      keyPresent = await cloudKeyPresent();
-    } catch {
-      // cloud not available — fall through to local
-    }
+/**
+ * What the threading card reads. `missing` = not found now; `drifted` = a
+ * recorded tool whose path is gone or whose version changed; `needsNetwork`
+ * = deps or vendor have not completed (the only steps that touch the net).
+ *
+ * `drifted` also carries entries that name no tool — today one: `"sherpa
+ * cache"`, the voice engine's prebuilt archive, recorded at threading and
+ * gone since. It arrived over HTTP and cannot arrive again offline, so
+ * `reweave_start` refuses on it rather than letting the core stage discover
+ * it half an hour in. The Settings tool table renders those rows too.
+ */
+export type ThreadStatus = {
+  threaded: boolean;
+  tools: Tool[];
+  missing: string[];
+  drifted: string[];
+  steps: ThreadSteps;
+  needsNetwork: boolean;
+  /** Where threading found the voice engine's prebuilt archive; `null` if
+   *  it never recorded one. Present in `drifted` when it has since gone. */
+  sherpaCache: string | null;
+};
 
-    if (keyPresent) {
-      try {
-        // max_tokens fixed at cloud.rs DEFAULT_MAX_TOKENS
-        const text = await cloudChat(systemMsg, chatMessages, undefined);
-        return { text, brain: "cloud" };
-      } catch {
-        // Cloud error → fall back to local; caller will log "cloud unavailable"
-        const text = await fleetChat("builder", messages, opts);
-        return { text, brain: "local" };
-      }
-    }
-  }
+/** Discover the machine's tools now and compare with `threads.json`. */
+export const threadStatus = () => safeInvoke<ThreadStatus>("thread_status");
 
-  // Default: local fleet
-  const text = await fleetChat("builder", messages, opts);
-  return { text, brain: "local" };
-}
+// ── Reweave (Phase 23 — Rebirth) ───────────────────────────────────────────────
+
+/**
+ * The build job's state as Rust persists it to `reweave.json` and emits it on
+ * `loom-reweave`. `tail` is the last ≤ 400 lines of the current tool; `outcome`
+ * is the calm sentence for `done`/`failed`/`cancelled`; `cancellable` goes
+ * false at the point of return (swap). Same shape in dev and packaged mode.
+ */
+export type ReweaveState = {
+  stage: "idle" | "assets" | "core" | "stage" | "swap" | "relaunch" | "done" | "failed" | "cancelled";
+  targetSha: string | null;
+  startedAt: string | null;
+  elapsedMs: number;
+  tail: string[];
+  outcome: string | null;
+  cancellable: boolean;
+  mode: "dev" | "packaged";
+};
+
+/** Start the job. `force` weaves even when the genome matches the body. */
+export const reweaveStart = (force = false) => safeInvoke<void>("reweave_start", { force });
+/** Kill the job tree — refused past the point of return. */
+export const reweaveCancel = () => safeInvoke<void>("reweave_cancel");
+/** The persisted state, for the initial paint before events arrive. */
+export const reweaveState = () => safeInvoke<ReweaveState>("reweave_state");
+/** Return to a kept generation: the same job with the build stages skipped. */
+export const generationsReturn = (sha: string) => safeInvoke<void>("generations_return", { sha });
+/** One `loom-thread` progress event. `step` walks seed · deps · vendor · warm ·
+ *  register · stamp and ends in `done` or `failed`; `tail` is the last few
+ *  lines of the running tool (cargo's "Compiling x/y") when there are any. */
+export type ThreadStep = "seed" | "deps" | "vendor" | "warm" | "register" | "stamp" | "done" | "failed";
+export type ThreadEvent = {
+  step: ThreadStep;
+  detail: string;
+  tail: string[];
+};
+export const THREAD_EVENT = "loom-thread";
+
+/** Start the one-time ceremony as a background job. Resolves as soon as the
+ *  job is spawned; progress arrives as `loom-thread` events. Rejects with
+ *  `parse` when threading or reweave is already in flight. */
+export const threadLoom = () => safeInvoke<void>("thread_loom");
+
+/** Stop a running ceremony. The interrupted step stays unmarked, so the
+ *  next `threadLoom` resumes from it. */
+export const threadCancel = () => safeInvoke<void>("thread_cancel");

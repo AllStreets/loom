@@ -368,6 +368,70 @@ describe("Tapestry — cleanup", () => {
   });
 });
 
+describe("Tapestry — generation strand (each woven body a knot in the cloth)", () => {
+  const generations = [
+    { sha: "a0cee82ffff", wovenAt: 2000, isCurrent: true },
+    { sha: "b1def930000", wovenAt: 1000, isCurrent: false },
+  ];
+
+  it("renders a generation knot per woven body with data-kind and data-current", async () => {
+    render(<Tapestry generations={generations} />);
+    const current = await screen.findByTestId("tapestry-generation-a0cee82ffff");
+    const previous = screen.getByTestId("tapestry-generation-b1def930000");
+    expect(current.getAttribute("data-kind")).toBe("generation");
+    expect(previous.getAttribute("data-kind")).toBe("generation");
+    expect(current.getAttribute("data-current")).toBe("true");
+    expect(previous.getAttribute("data-current")).toBe("false");
+    expect(document.querySelectorAll('[data-kind="generation"][data-current="true"]')).toHaveLength(1);
+  });
+
+  it("the knot is a woven crossing of curved paths — no straight lines, tokens only", async () => {
+    render(<Tapestry generations={generations} />);
+    const current = await screen.findByTestId("tapestry-generation-a0cee82ffff");
+    expect(current.querySelectorAll("line")).toHaveLength(0);
+    const paths = current.querySelectorAll("path");
+    expect(paths.length).toBeGreaterThanOrEqual(2);
+    for (const p of Array.from(paths)) {
+      expect(p.getAttribute("d")).toMatch(/ [CQ] /);
+      expect(p.getAttribute("stroke")).toMatch(/^var\(--/);
+    }
+    const currentStrokes = new Set(Array.from(paths).map((p) => p.getAttribute("stroke")));
+    expect(currentStrokes).toEqual(new Set(["var(--accent)"]));
+    const previous = screen.getByTestId("tapestry-generation-b1def930000");
+    const prevStrokes = new Set(
+      Array.from(previous.querySelectorAll("path")).map((p) => p.getAttribute("stroke"))
+    );
+    expect(prevStrokes).toEqual(new Set(["var(--t3)"]));
+  });
+
+  it("the current knot is luminous — the previous is not", async () => {
+    render(<Tapestry generations={generations} />);
+    const current = await screen.findByTestId("tapestry-generation-a0cee82ffff");
+    const previous = screen.getByTestId("tapestry-generation-b1def930000");
+    expect(current.style.filter).toContain("var(--accent)");
+    expect(previous.style.filter).toBe("");
+  });
+
+  it("the luminous knot breathes by default; reduced motion keeps it still", async () => {
+    const first = render(<Tapestry generations={generations} />);
+    const current = await screen.findByTestId("tapestry-generation-a0cee82ffff");
+    expect(current.classList.contains("loom-knot-luminous")).toBe(true);
+    first.unmount();
+
+    _prefersReducedMotion = true;
+    render(<Tapestry generations={generations} />);
+    const still = await screen.findByTestId("tapestry-generation-a0cee82ffff");
+    expect(still.classList.contains("loom-knot-luminous")).toBe(false);
+    expect(document.querySelector(".loom-knot-luminous")).toBeNull();
+  });
+
+  it("without generations the strand is simply absent", async () => {
+    render(<Tapestry />);
+    await screen.findByTestId("tapestry-thread-organ-water-tracker");
+    expect(document.querySelectorAll('[data-kind="generation"]')).toHaveLength(0);
+  });
+});
+
 describe("Tapestry — data honesty in the browser (no shell)", () => {
   it("falls back to empty timeline/organs when the shell is unavailable", async () => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;

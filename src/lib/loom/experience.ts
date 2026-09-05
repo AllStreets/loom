@@ -13,8 +13,7 @@ export type BuildRecord = {
   tests?: string;
   failedTests?: string[];
   errors?: string[];
-  /** Which brain built this organ: "local" = local fleet, "cloud" = claude-opus-4-8 */
-  brain?: "local" | "cloud";
+  /** Legacy (pre-Rebirth) records may carry a `brain` field; it is ignored on read. */
   /** Set when the build originated from an unprompted LOOM proposal (Phase 20). */
   proposalSource?: "initiative";
 };

@@ -2,7 +2,7 @@
  * Shuttle.test.tsx — the Cmd+K palette.
  *
  * - Cmd+K / Ctrl+K toggles the glass overlay; listener registered at window
- *   CAPTURE phase so it wins over deck iframes when the shell has focus
+ *   CAPTURE phase so it wins when the shell has focus
  * - input auto-focused, focus trapped (Tab stays put), Esc closes,
  *   click-outside closes
  * - fuzzy-filtered grouped list, arrow keys move selection, Enter executes
@@ -185,23 +185,23 @@ describe("Shuttle — grouped list + fuzzy filter", () => {
   it("shows mono-uppercase group headers for populated groups", async () => {
     render(<Shuttle />);
     await openPalette();
-    expect(screen.getByTestId("shuttle-group-decks")).toHaveTextContent(/decks/i);
-    expect(screen.getByTestId("shuttle-group-watch")).toBeInTheDocument();
-    expect(screen.getByTestId("shuttle-group-build")).toBeInTheDocument();
+    expect(screen.getByTestId("shuttle-group-build")).toHaveTextContent(/build/i);
+    expect(screen.queryByTestId("shuttle-group-decks")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("shuttle-group-watch")).not.toBeInTheDocument();
     expect(screen.getByTestId("shuttle-group-system")).toBeInTheDocument();
     // organs group appears once the organ list loads
     expect(await screen.findByTestId("shuttle-group-organs")).toBeInTheDocument();
     expect(await screen.findByText("open water tracker")).toBeInTheDocument();
   });
 
-  it("typing filters the list (failsafe → show ember, briefings gone)", async () => {
+  it("typing filters the list (what can → help stays, build template gone)", async () => {
     render(<Shuttle />);
     await openPalette();
     await act(async () => {
-      fireEvent.change(paletteInput(), { target: { value: "failsafe" } });
+      fireEvent.change(paletteInput(), { target: { value: "what can" } });
     });
-    expect(screen.getByText("show ember")).toBeInTheDocument();
-    expect(screen.queryByText("brief me")).not.toBeInTheDocument();
+    expect(screen.getByText("what can you do")).toBeInTheDocument();
+    expect(screen.queryByText("build me a …")).not.toBeInTheDocument();
   });
 
   it("no match shows the free-text hint row", async () => {
@@ -220,21 +220,31 @@ describe("Shuttle — execution routes through the voice seam", () => {
     window.addEventListener("loom-utterance", spy);
     render(<Shuttle />);
     await openPalette();
+    await screen.findByText("open water tracker"); // organs group loaded
+    await act(async () => {
+      // the top entry is the build TEMPLATE (pre-fills, never dispatches);
+      // step down to the first utterance entry
+      fireEvent.keyDown(paletteInput(), { key: "ArrowDown" });
+    });
     await act(async () => {
       fireEvent.keyDown(paletteInput(), { key: "Enter" });
     });
     expect(spy).toHaveBeenCalledTimes(1);
     const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail).toEqual({ text: "show the globe", spoken: false });
+    expect(detail).toEqual({ text: "open water tracker", spoken: false });
     expect(screen.queryByTestId("shuttle-palette")).not.toBeInTheDocument();
     window.removeEventListener("loom-utterance", spy);
   });
 
-  it("ArrowDown moves selection; Enter executes the second entry", async () => {
+  it("ArrowDown moves selection twice; Enter executes the third entry", async () => {
     const spy = vi.fn();
     window.addEventListener("loom-utterance", spy);
     render(<Shuttle />);
     await openPalette();
+    await screen.findByText("open water tracker");
+    await act(async () => {
+      fireEvent.keyDown(paletteInput(), { key: "ArrowDown" });
+    });
     await act(async () => {
       fireEvent.keyDown(paletteInput(), { key: "ArrowDown" });
     });
@@ -242,7 +252,7 @@ describe("Shuttle — execution routes through the voice seam", () => {
       fireEvent.keyDown(paletteInput(), { key: "Enter" });
     });
     const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail.text).toBe("hide the globe");
+    expect(detail.text).toBe("open settings");
     window.removeEventListener("loom-utterance", spy);
   });
 
@@ -250,11 +260,11 @@ describe("Shuttle — execution routes through the voice seam", () => {
     render(<Shuttle />);
     await openPalette();
     await act(async () => {
-      fireEvent.change(paletteInput(), { target: { value: "failsafe" } });
+      fireEvent.change(paletteInput(), { target: { value: "what can" } });
       fireEvent.keyDown(paletteInput(), { key: "ArrowUp" });
     });
     // only one match — selection stays valid (smoke: no crash, entry selected)
-    const row = screen.getByText("show ember").closest("[data-selected]");
+    const row = screen.getByText("what can you do").closest("[data-selected]");
     expect(row).toHaveAttribute("data-selected", "true");
   });
 
@@ -264,10 +274,10 @@ describe("Shuttle — execution routes through the voice seam", () => {
     render(<Shuttle />);
     await openPalette();
     await act(async () => {
-      fireEvent.click(screen.getByText("brief me"));
+      fireEvent.click(screen.getByText("what can you do"));
     });
     const detail = (spy.mock.calls[0][0] as CustomEvent).detail;
-    expect(detail).toEqual({ text: "brief me", spoken: false });
+    expect(detail).toEqual({ text: "what can you do", spoken: false });
     expect(screen.queryByTestId("shuttle-palette")).not.toBeInTheDocument();
     window.removeEventListener("loom-utterance", spy);
   });
@@ -302,14 +312,19 @@ describe("Shuttle — execution routes through the voice seam", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     await openPalette();
     // whitespace query → treated as empty → full list, top entry selected;
-    // Enter executes the selection (never the whitespace as free text)
+    // Enter executes the selection (never the whitespace as free text). The
+    // top entry is the build template, so step to the first utterance first.
+    await screen.findByText("open water tracker");
     await act(async () => {
       fireEvent.change(paletteInput(), { target: { value: "   " } });
+      fireEvent.keyDown(paletteInput(), { key: "ArrowDown" });
+    });
+    await act(async () => {
       fireEvent.keyDown(paletteInput(), { key: "Enter" });
     });
     expect(spy).toHaveBeenCalledTimes(2);
     const detail = (spy.mock.calls[1][0] as CustomEvent).detail;
-    expect(detail.text).toBe("show the globe");
+    expect(detail.text).toBe("open water tracker");
     window.removeEventListener("loom-utterance", spy);
   });
 

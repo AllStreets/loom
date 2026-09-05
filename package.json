@@ -15,7 +15,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "selftest": "SELFTEST=1 vitest run src/selftest",
-    "check": "vitest run && (cd src-tauri && cargo test)"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.check.json",
+    "check": "npm run typecheck && vitest run && (cd src-tauri && cargo test)"
   },
   "dependencies": {
     "@react-three/fiber": "^9.7.0",
@@ -32,6 +33,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.4",
+    "@types/node": "^20.19.43",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@types/three": "^0.185.4",
