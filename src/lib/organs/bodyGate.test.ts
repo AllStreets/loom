@@ -13,16 +13,22 @@ import {
   pendingBodyRequests,
   requestBody,
   type BodyRequest,
+  type BodyRequestEvent,
 } from "./bodyGate";
 
-/** A fake chrome that claims every request and answers however the test says. */
+/**
+ * A fake chrome that claims every request and answers however the test says.
+ * It learns WHAT was asked the way the real card does — from the claim, not
+ * from the event, which carries an id and nothing else.
+ */
 function mountChrome(answer: (req: BodyRequest) => void) {
   const seen: BodyRequest[] = [];
   const onRequest = (ev: Event) => {
-    const req = (ev as CustomEvent<BodyRequest>).detail;
-    seen.push(req);
-    claimBodyRequest(req.id);
-    answer(req);
+    const { id } = (ev as CustomEvent<BodyRequestEvent>).detail;
+    const claimed = claimBodyRequest(id);
+    if (!claimed) return;
+    seen.push(claimed);
+    answer(claimed);
   };
   window.addEventListener(BODY_REQUEST_EVENT, onRequest);
   return { seen, unmount: () => window.removeEventListener(BODY_REQUEST_EVENT, onRequest) };
@@ -33,7 +39,7 @@ afterEach(() => {
 });
 
 describe("requestBody", () => {
-  it("dispatches the request with kind, sha and the organ that asked", async () => {
+  it("the claim carries kind, sha and the organ that asked", async () => {
     const chrome = mountChrome((req) => answerBodyRequest(req.id, { ok: true }));
     await requestBody("return", "settings", "c".repeat(40));
     expect(chrome.seen).toHaveLength(1);
@@ -43,6 +49,46 @@ describe("requestBody", () => {
       sha: "c".repeat(40),
     });
     expect(typeof chrome.seen[0].id).toBe("string");
+    chrome.unmount();
+  });
+
+  /**
+   * Round-2 finding 1. The detail used to be the whole request, and chrome read
+   * it again when the owner clicked — so an organ could hold the object and
+   * change `kind` between the sentence and the act.
+   */
+  it("the event carries an opaque id and nothing else", async () => {
+    const details: unknown[] = [];
+    const spy = (ev: Event) => details.push((ev as CustomEvent).detail);
+    window.addEventListener(BODY_REQUEST_EVENT, spy);
+    const chrome = mountChrome((req) => answerBodyRequest(req.id, { ok: true }));
+    await requestBody("return", "settings", "c".repeat(40));
+    expect(details).toHaveLength(1);
+    expect(Object.keys(details[0] as object)).toEqual(["id"]);
+    chrome.unmount();
+    window.removeEventListener(BODY_REQUEST_EVENT, spy);
+  });
+
+  it("the claimed record is frozen, and mutating it changes nothing behind it", async () => {
+    let first: BodyRequest | null = null;
+    const chrome = mountChrome((req) => {
+      first = req;
+      answerBodyRequest(req.id, { ok: true });
+    });
+    await requestBody("thread", "notes");
+    expect(Object.isFrozen(first)).toBe(true);
+    chrome.unmount();
+  });
+
+  it("an id nobody issued cannot be claimed, and a claimed id cannot be claimed twice", async () => {
+    expect(claimBodyRequest("body-999-forged")).toBeNull();
+    let claimedTwice: BodyRequest | null | undefined;
+    const chrome = mountChrome((req) => {
+      claimedTwice = claimBodyRequest(req.id);
+      answerBodyRequest(req.id, { ok: true });
+    });
+    await requestBody("reweave", "notes");
+    expect(claimedTwice).toBeNull();
     chrome.unmount();
   });
 
