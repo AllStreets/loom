@@ -5,7 +5,7 @@
  * - warp (vertical, structural): recent timeline commits — the machine's own
  *   git history. Newest brightest, newest furthest right (weaving advances).
  * - weft (horizontal, colored): organs (alive = accent, deleted = faint scar),
- *   decks used, build experiences (clean pass = smooth thread, repaired
+ *   build experiences (clean pass = smooth thread, repaired
  *   build = visible knots — honesty in cloth), and generations — each woven
  *   body of LOOM itself, tied as a knot on the warp of the commit it was
  *   woven from; the current one luminous.
@@ -101,9 +101,8 @@ export interface WeaveModel {
 // ── Caps ──────────────────────────────────────────────────────────────────────
 
 // PERF CAP (honest): the band renders at most WARP_CAP + WEFT_CAP = 64 threads
-// total. A long life is summarized, not fully drawn — organs, scars and decks
-// always win weft slots first (organs, then generations, then scars); oldest
-// builds fall off the cloth first.
+// total. A long life is summarized, not fully drawn — organs, generations and
+// scars win weft slots in that order; oldest builds fall off the cloth first.
 export const WARP_CAP = 24;
 export const WEFT_CAP = 40;
 

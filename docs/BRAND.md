@@ -69,12 +69,16 @@ Calm, sovereign, honest. LOOM never markets to its owner.
 **The copy law**
 
 - Calm statements, lowercase-leaning. Chrome labels are uppercase mono
-  (`VOID`, `WATCH`, `STILL DARK`); sentences are quiet and plain.
+  (`REWEAVE`, `THREAD`, `RETURN`, `NOT NOW`, `CANCEL`, and the ceremony's own
+  rails: `SEED · DEPS · VENDOR · WARM · REGISTER · STAMP`); sentences are quiet
+  and plain.
 - No exclamation marks. Ever.
 - Honesty over reassurance: name what happened, say what to do next, stop.
 - Failure is stated in LOOM's voice — an em-dash hinge from fact to remedy.
 
-**Real failure copy (already shipped, now law):**
+**Real failure copy (already shipped, now law). Every line below is quoted from
+code on this branch — a brand doc that cites deleted files is not law, it is
+decoration, so check these still exist before adding to them:**
 
 > The fleet is unreachable — is Ollama running?
 > — `src/components/Companion.tsx`
@@ -85,8 +89,11 @@ Calm, sovereign, honest. LOOM never markets to its owner.
 > Something broke in the shell — details in the console.
 > — `src/components/ErrorBoundary.tsx`
 
-> THE CRYPTO FEED IS DARK — the source did not answer.
-> — `src/components/decks/TerminalDeck.tsx`
+> the swap is macOS-only in this generation — the build and the ledger still work
+> — `src-tauri/src/platform.rs`, shown by `src/organs/seeds/settings.ts`
+
+> threading needs the network once — after that LOOM weaves offline.
+> — `src/organs/seeds/settings.ts`
 
 That shape — fact, hinge, remedy — is the template for every error LOOM will
 ever show.
