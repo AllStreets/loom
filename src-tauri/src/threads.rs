@@ -995,16 +995,20 @@ fn ceremony_steps(
         // The long step, and the one that compiles the native deps: cmake has
         // to be findable or `whisper-rs-sys` fails minutes in, after the
         // owner's single network trip has already been spent.
-        let spawn = cargo_with_path(tools)?;
-        let target = home.target().to_string_lossy().into_owned();
-        let mut envs: Vec<(&str, &str)> =
-            vec![("CARGO_TARGET_DIR", &target), ("CARGO_NET_OFFLINE", "true")];
-        envs.extend(spawn.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        // Composed by the ONE builder of cargo spawns, not assembled here.
+        // Three rounds of review found this same PATH bug in three separate
+        // hand-rolled spawns; a second assembly path is how there comes to be
+        // a fourth. `cargo_run` hands back argv and env together so neither
+        // can be had without the other.
+        let run = crate::kernel::cargo_run(tools, Some(&home.target()))?;
+        let argv = run.argv(&["build", "--release"]);
+        let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let envs = run.envs();
         let (out, tail) = run_step(
             slot,
             "warm",
             "compiling the core",
-            &[&spawn.cargo, "build", "--release", "--offline"],
+            &argv_ref,
             &core,
             &root,
             CORE_TIMEOUT,
