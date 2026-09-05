@@ -61,16 +61,38 @@ pub struct Home {
     pub root: PathBuf,
 }
 
+/// The env var that points a packaged LOOM at a REHEARSAL home instead of the
+/// owner's real one.
+///
+/// The first end-to-end ceremony could not use the real launch path at all,
+/// because a packaged body always resolved its home to `app_data_dir()` — so
+/// rehearsing the swap on a real machine meant risking the owner's organs,
+/// their voice models and their timeline. A dry run of a thing that replaces
+/// the application ought not to be the dangerous option.
+///
+/// Absent in every ordinary launch, so the default is unchanged. It is a plain
+/// path with no interpretation: LOOM will use exactly what it is given.
+pub const REHEARSAL_HOME: &str = "LOOM_REHEARSAL_HOME";
+
+fn rehearsal_root() -> Option<PathBuf> {
+    let raw = std::env::var(REHEARSAL_HOME).ok()?;
+    let raw = raw.trim();
+    (!raw.is_empty()).then(|| PathBuf::from(raw))
+}
+
 impl Home {
     /// `<app_data_dir>/loom`, created if missing. Same directory the Phase 21
     /// sentinel already lives in.
     pub fn from_app(app: &tauri::AppHandle) -> Result<Home, LoomError> {
         use tauri::Manager;
-        let root = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| LoomError::Git(e.to_string()))?
-            .join("loom");
+        let root = match rehearsal_root() {
+            Some(root) => root,
+            None => app
+                .path()
+                .app_data_dir()
+                .map_err(|e| LoomError::Git(e.to_string()))?
+                .join("loom"),
+        };
         std::fs::create_dir_all(&root).map_err(|e| LoomError::Git(e.to_string()))?;
         Ok(Home { root })
     }
@@ -782,6 +804,38 @@ mod tests {
             "landed on {landed}, which is neither the asked-for sha nor this body's"
         );
         assert_ne!(landed, second, "it must never invent a third commit");
+    }
+
+    /// A rehearsal must not be the dangerous option.
+    ///
+    /// The first end-to-end ceremony could not use the real launch path, because
+    /// a packaged body always resolved its home to the owner's real one — so a
+    /// dry run of the thing that REPLACES THE APPLICATION risked their organs,
+    /// their voice models and their timeline. The override is absent in every
+    /// ordinary launch, so nothing changes by default.
+    #[test]
+    fn a_rehearsal_home_is_taken_exactly_as_given_and_absent_by_default() {
+        // Nothing set: no override, so `from_app` keeps app_data_dir.
+        std::env::remove_var(REHEARSAL_HOME);
+        assert_eq!(rehearsal_root(), None);
+
+        // Empty or blank is not an override either — an unset-looking value
+        // must not silently point LOOM at the current directory.
+        for blank in ["", "   ", "\t"] {
+            std::env::set_var(REHEARSAL_HOME, blank);
+            assert_eq!(rehearsal_root(), None, "blank must not override: {blank:?}");
+        }
+
+        // A real path is taken verbatim, and a Home built at it puts every
+        // loomhome path underneath — nothing escapes to the real one.
+        let d = tempfile::tempdir().unwrap();
+        std::env::set_var(REHEARSAL_HOME, d.path());
+        assert_eq!(rehearsal_root().as_deref(), Some(d.path()));
+        let home = Home::at(rehearsal_root().unwrap());
+        for p in [home.source(), home.generations_dir(), home.ledger_json(), home.sentinel_json()] {
+            assert!(p.starts_with(d.path()), "{} escaped the rehearsal home", p.display());
+        }
+        std::env::remove_var(REHEARSAL_HOME);
     }
 
     #[test]

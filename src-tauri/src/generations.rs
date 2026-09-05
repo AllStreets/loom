@@ -283,6 +283,14 @@ pub(crate) fn now_rfc3339() -> String {
 /// short; the size `meta.json` recorded at `record` can. A body with no meta
 /// — the one the swap's `EnsureCurrentKept` shelves — is judged on its
 /// presence, because there is nothing to compare it against.
+/// NOT a comparison against the live executable, and it must never become one.
+/// The body on the shelf and the body in the bundle legitimately DIVERGE: the
+/// swap and the heal both ad-hoc re-sign the bundle afterwards, which rewrites
+/// the Mach-O, so the live file is a few bytes different from the copy it came
+/// from every single time (observed end to end: 15,019,536 shelved against
+/// 14,950,336 live after a heal and re-sign). A byte or size check between the
+/// two would re-shelve on every swap, and would read a healthy shelf as short.
+/// What is checked here is the shelf entry against ITS OWN recorded size.
 pub fn shelved_whole(home: &Home, sha: &str) -> bool {
     let Ok(md) = std::fs::metadata(home.generation_exe(sha)) else { return false };
     if !md.is_file() {
