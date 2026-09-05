@@ -710,7 +710,9 @@ pub struct BootCheckOut {
 pub struct HealedGeneration {
     pub failed_sha: String,
     pub prev_sha: String,
-    /// `"crashed"` | `"never confirmed"`.
+    /// Why the birth ended: `"crashed"`, or one of the two "never confirmed"
+    /// readings. Never `REASON_ROLLBACK_FAILED` — a heal that failed is
+    /// reported as `rollbackFailed`, not as a generation LOOM came home to.
     pub reason: String,
 }
 
@@ -1883,7 +1885,19 @@ fn boot_check_app(
     boot_check_in(&sp, mode(), source_repo, Some(&home), surface_recovery)
 }
 
-/// `decide_boot_in` plus, Phase 23, the healed-generation record.
+/// `decide_boot_in` plus, Phase 23, the warden's recovery record.
+///
+/// The record is the ONE-SHOT carrier, and it says which of two things
+/// happened. A heal that worked becomes `healedGeneration` — "LOOM tried to
+/// become X and couldn't; it came home to Y". A heal that FAILED becomes
+/// `rollbackFailed`, the shell's honest "couldn't come home" (round-3 review,
+/// Finding 3): before this it became nothing at all, because
+/// `decide_boot_in` short-circuits on the terminal `rollback-failed` sentinel
+/// and reports `rollback_failed: false`. It is never reported as a healed
+/// generation — the owner must not be told LOOM came home to a body it could
+/// not reach — and, because `take_recovery` deletes the record as it reads
+/// it, the notice fires exactly once while the sentinel keeps the durable
+/// verdict on disk.
 fn boot_check_in(
     sp: &Path,
     mode: Mode,
@@ -1893,7 +1907,11 @@ fn boot_check_in(
 ) -> Result<BootCheckOut, LoomError> {
     let mut out = decide_boot_in(sp, mode, source_repo_override, home)?;
     if surface_recovery {
-        out.healed_generation = home.and_then(warden::take_recovery).map(HealedGeneration::from);
+        match home.and_then(warden::take_recovery) {
+            None => {}
+            Some(r) if r.reason == warden::REASON_ROLLBACK_FAILED => out.rollback_failed = true,
+            Some(r) => out.healed_generation = Some(HealedGeneration::from(r)),
+        }
     }
     Ok(out)
 }
@@ -3515,6 +3533,53 @@ mod tests {
         let again = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
         assert!(again.healed_generation.is_none());
         assert!(serde_json::to_value(&again).unwrap()["healedGeneration"].is_null());
+    }
+
+    /// Round-3 review, Finding 3. A body heal that FAILED reaches the shell
+    /// as `rollbackFailed`, never as `healedGeneration` — the owner is never
+    /// told LOOM came home to a generation it could not reach. The record is
+    /// the one-shot carrier, so the notice can fire exactly once.
+    #[test]
+    fn boot_check_surfaces_a_failed_body_heal_once() {
+        let d = tempfile::tempdir().unwrap();
+        let home = Home::at(d.path().join("loom"));
+        fs::create_dir_all(&home.root).unwrap();
+        let sp = home.sentinel_json();
+        // What the warden (or the backstop) leaves when the copy back fails.
+        app_sentinel(&home, "rollback-failed", Some("reweave"));
+        crate::threads::write_json_atomic(
+            &home.recovery_json(),
+            &crate::warden::Recovery {
+                failed_sha: "bbb222".into(),
+                prev_sha: "aaa111".into(),
+                reason: crate::warden::REASON_ROLLBACK_FAILED.into(),
+                log_tail: vec!["Compiling loom".into()],
+            },
+        )
+        .unwrap();
+        // The Rust-side setup check does not consume it.
+        let quiet = boot_check_in(&sp, Mode::Packaged, None, Some(&home), false).unwrap();
+        assert!(!quiet.rollback_failed && quiet.healed_generation.is_none());
+        assert!(home.recovery_json().exists());
+
+        let out = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        assert!(out.rollback_failed, "the failure reaches the shell");
+        assert!(
+            out.healed_generation.is_none(),
+            "a body that could not come home is never reported as one that did"
+        );
+        assert!(out.rolled_back_to.is_none());
+        let v = serde_json::to_value(&out).unwrap();
+        assert_eq!(v["rollbackFailed"], true);
+        assert!(v["healedGeneration"].is_null());
+        assert_eq!(
+            app_sentinel_status(&home).as_deref(),
+            Some("rollback-failed"),
+            "the durable verdict stays on disk"
+        );
+        // Exactly once: the record is consumed, so the notice cannot repeat.
+        let again = boot_check_in(&sp, Mode::Packaged, None, Some(&home), true).unwrap();
+        assert!(!again.rollback_failed && again.healed_generation.is_none());
     }
 
     #[test]

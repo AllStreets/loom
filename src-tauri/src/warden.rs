@@ -92,7 +92,9 @@ pub struct Job {
 pub struct Recovery {
     pub failed_sha: String,
     pub prev_sha: String,
-    /// `"crashed"` | `"never confirmed"`.
+    /// One of the `REASON_*` constants below. `REASON_ROLLBACK_FAILED` is the
+    /// one that did NOT come home, and the shell reads it as `rollbackFailed`
+    /// rather than as a healed generation.
     pub reason: String,
     /// The last ≤ 40 lines of `reweave.json`'s tail — what the weave said
     /// before the body failed. Empty when there is no record.
@@ -115,6 +117,11 @@ pub const REASON_NEVER_CONFIRMED: &str = "never confirmed";
 /// the record carries must not claim LOOM already came home.
 pub const REASON_NEVER_CONFIRMED_ALIVE: &str =
     "never confirmed — still running when the clock ran out";
+/// The heal itself failed: the previous body could not be put back, so LOOM
+/// did NOT come home (round-3 review, Finding 3). A record carrying this
+/// reason is never reported as a healed generation — `boot_check_in` turns it
+/// into `rollbackFailed`, the shell's honest "couldn't come home" path.
+pub const REASON_ROLLBACK_FAILED: &str = "the rollback failed";
 
 /// How many consecutive empty samples make a death (round-1 review, Finding
 /// 2). One is a hiccup; three in a row, half a second apart, is a body that
@@ -440,7 +447,27 @@ pub fn heal_plan(home: &Home, layout: &AppLayout, new_sha: &str, prev_sha: &str)
 /// The heal, shared with the pre-main backstop: previous body back over the
 /// executable, re-signed, sentinel `healed`, ledger `current: prev`, and the
 /// recovery record. On failure the sentinel is marked `rollback-failed` so
-/// no healer loops on it.
+/// no healer loops on it — AND the record is written anyway, naming the
+/// failure (round-3 review, Finding 3).
+///
+/// The record was written only on success, and `decide_boot_in`
+/// short-circuits on a terminal status and reports `rollback_failed: false`.
+/// So a failed body heal printed to stderr, booted the broken body on, and
+/// said nothing, while the shell's ready "couldn't come home" path could
+/// never fire. The spec's state table says of `rollback-failed`: "terminal;
+/// the notice says so."
+///
+/// Of the two remedies the review offered, the record is the one taken. The
+/// alternative — reporting `rollback_failed: true` whenever the sentinel
+/// reads `rollback-failed` — would fire on EVERY boot after, because the
+/// sentinel is terminal and durable by design (Finding 2 is about keeping it
+/// that way): making it fire once would mean consuming or flagging the very
+/// statement it is there to preserve. The record is already the one-shot
+/// carrier — `take_recovery` deletes it as it is surfaced — it carries the
+/// shas and the log tail, and it covers the backstop's heal as well as the
+/// warden's. `boot_check_in` routes a record with this reason to
+/// `rollbackFailed`, never to `healedGeneration`, so nothing tells the owner
+/// LOOM came home to a generation it could not reach.
 pub fn heal(
     home: &Home,
     layout: &AppLayout,
@@ -449,17 +476,21 @@ pub fn heal(
     reason: &str,
     tools: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> Result<(), LoomError> {
+    let record = |reason: &str| Recovery {
+        failed_sha: new_sha.to_string(),
+        prev_sha: prev_sha.to_string(),
+        reason: reason.to_string(),
+        log_tail: log_tail(home),
+    };
     let plan = heal_plan(home, layout, new_sha, prev_sha);
-    let done = platform::execute(&plan, home, tools).and_then(|()| {
-        let record = Recovery {
-            failed_sha: new_sha.to_string(),
-            prev_sha: prev_sha.to_string(),
-            reason: reason.to_string(),
-            log_tail: log_tail(home),
-        };
-        threads::write_json_atomic(&home.recovery_json(), &record)
-    });
-    if done.is_err() {
+    // The heal itself. Only THIS failing means LOOM did not come home — a
+    // heal whose last step wrote the terminal `healed` has come home, and
+    // `rollback-failed` must never be written over that (the same rule
+    // Finding 2 states: a terminal state is somebody else's verdict).
+    if let Err(e) = platform::execute(&plan, home, tools) {
+        // Terminal first, so nothing loops on this birth whatever happens
+        // next; then the record, so the owner is told. Both best-effort: the
+        // error the caller gets is the heal's own.
         let _ = kernel::write_sentinel_at(
             &home.sentinel_json(),
             &Sentinel {
@@ -470,8 +501,10 @@ pub fn heal(
                 armed_by: Some("reweave".into()),
             },
         );
+        let _ = threads::write_json_atomic(&home.recovery_json(), &record(REASON_ROLLBACK_FAILED));
+        return Err(e);
     }
-    done
+    threads::write_json_atomic(&home.recovery_json(), &record(reason))
 }
 
 /// The last ≤ 40 lines of `reweave.json`'s tail; empty when absent or torn.
@@ -1167,8 +1200,16 @@ mod tests {
         }
     }
 
+    /// Round-3 review, Finding 3. A `rollback-failed` written here used to be
+    /// the end of it: `heal` wrote `recovery.json` only on SUCCESS, and
+    /// `decide_boot_in` short-circuits on a terminal status and reports
+    /// `rollback_failed: false`. So a failed body heal printed to stderr,
+    /// booted the broken body on, and told the owner nothing — while the
+    /// shell's "couldn't come home" path sat ready and unreachable. The spec's
+    /// state table says "terminal; the notice says so." The record is the
+    /// carrier that says so, and it is consumed exactly once.
     #[test]
-    fn warden_heal_failure_marks_rollback_failed() {
+    fn warden_heal_failure_marks_rollback_failed_and_says_so() {
         let fx = fixture();
         std::fs::remove_file(fx.home.generation_exe("aaa111")).unwrap();
         let mut w = FakeWorld::new();
@@ -1176,8 +1217,18 @@ mod tests {
         assert!(matches!(watch(&fx.job, &mut w, &fx.home), Verdict::HealFailed(_)));
         assert_eq!(fx.exe(), "new body", "a failed copy leaves the file as it was");
         assert_eq!(sentinel_status(&fx.home).as_deref(), Some("rollback-failed"));
-        assert!(!fx.home.recovery_json().exists(), "no record claims a home it did not reach");
         assert_eq!(w.opens.len(), 1, "no second open of a body that did not heal");
+        let rec = read_recovery(&fx.home).expect("the owner is told the body could not come home");
+        assert_eq!(
+            rec.reason, REASON_ROLLBACK_FAILED,
+            "the record names the failure, and never claims a home it did not reach"
+        );
+        assert_eq!(rec.failed_sha, "bbb222");
+        assert_eq!(rec.prev_sha, "aaa111");
+        assert!(!rec.log_tail.is_empty(), "what the weave said before the body failed");
+        // Once — the same one-shot the healed record uses.
+        assert!(take_recovery(&fx.home).is_some());
+        assert!(take_recovery(&fx.home).is_none());
     }
 
     #[test]
