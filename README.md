@@ -11,7 +11,6 @@
 <img alt="vessel" src="https://img.shields.io/badge/vessel-Tauri_v2-22D3EE?style=for-the-badge&labelColor=060b18"/>
 <img alt="runs" src="https://img.shields.io/badge/runs-100%25_offline-22D3EE?style=for-the-badge&labelColor=060b18"/>
 <img alt="self-building" src="https://img.shields.io/badge/it-builds_itself-7DD3FC?style=for-the-badge&labelColor=060b18"/>
-<img alt="selftest" src="https://img.shields.io/badge/real--model_selftest-10%2F10-4ADE80?style=for-the-badge&labelColor=060b18"/>
 <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-4ADE80?style=for-the-badge&labelColor=060b18"/></a>
 
 <br/>
@@ -72,7 +71,33 @@ missing library, in dev as well. Both are fixed and verified; the app builds,
 bundles, and runs. **The lesson is written into the house rhythm: build it and
 launch it before calling it shipped.**
 
-What CI proves: tool discovery and drift, the ceremony's steps and resumption, the swap plan as a pure enumerable list, the warden's decision table against a faked world, the ledger never pruning a live body, the sentinel's ownership rule, `--offline` on every cargo argv and `npx` on none, the protected set by enumeration. What only the owner can prove, and did in dev: a real reweave of a real body. Honest residuals: threading needs the network once; ad-hoc re-signing may make macOS ask for the microphone again; a generation that boots and paints is confirmed even if it misbehaves later — boot health is the wall, and Generations is the way back; loomhome is several gigabytes (vendor + warm build) and Settings shows the number; the swap is macOS-only in this generation.
+What CI proves, against fakes: tool discovery and drift, the ceremony's steps and
+resumption, the swap plan as a pure enumerable list, the warden's decision table
+against a faked world, the ledger never pruning a live body, the sentinel's
+ownership rule, the protected set by enumeration, and that no validation argv
+reaches for `npx`. Every cargo argv the code composes carries `--offline`; the
+one deliberate exception is threading's `cargo vendor`, which is one of the two
+steps allowed to touch the network.
+
+**What has actually been run, and what has not.** From a clean clone on a machine
+with no prior LOOM build: `npm ci`, the full test suite, `cargo test` with a cold
+crate registry, `npm run tauri build`, and launching the resulting app — all
+green. Everything downstream of that is unit-tested and **has not been executed
+end to end by anyone.** Threading has never run against real git, npm and cargo;
+no binary has ever been swapped into a bundle; the warden has never been spawned
+as a process; no generation has ever been shelved, returned to, or healed. The
+packaged body builds and launches; the swap, the warden and the generations
+ledger are proven against mocks. Doing it for real is one ceremony: build, launch,
+thread with the network on, unplug, ask for a core change, approve, reweave, and
+watch LOOM come back as its next generation.
+
+Honest residuals: threading needs the network once, and the speech archive it
+fetches lands in a macOS cache LOOM does not own — if the system purges it,
+offline reweaving stops until the network returns; ad-hoc re-signing may make
+macOS ask for the microphone again; a generation that boots and paints is
+confirmed even if it misbehaves later — boot health is the wall, and Generations
+is the way back; loomhome is several gigabytes (vendor + warm build) and Settings
+shows the number; the swap is macOS-only in this generation.
 
 **Rebirth (Phase 23a).** The second excision. Four decks, the watch, the market engine, the cloud override, and every phrase, setting, power, and Rust command that served them are gone — migration-clean, tests green at every commit. One brain: the local fleet.
 
@@ -182,7 +207,7 @@ Built in phases, each a working, tested, reviewed milestone.
 | **16 · Identity** | the brand system (woven mark on every surface, BRAND.md) · the Tapestry (constellation removed; LOOM's history woven live behind the orb) · the Shuttle (⌘K palette + voice sharing one drift-proof command catalog, "what can you do") | **shipped** |
 | **17 · Depth** | the keyless market engine and Terminal depth | excised (23a) |
 | **18 · Excision** | AGORA removed entirely (spawn subsystem, deck, settings, voice — migration-clean) · the floor folds into the Terminal as the crypto detail overlay · four decks | **shipped** |
-| **19 · Vigor** | organs grow hands: six real powers (market · watch · timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
+| **19 · Vigor** | organs grow hands: real powers (after Rebirth: timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
 | **20 · Initiative** | LOOM proposes organs unprompted — a local usage observer + a deterministic rules engine that only fires on earned evidence · a calm consented proposal card (weave it / not now / never) whose "weave it" flows into the normal build pipeline · rate-limited, silenceable, tombstoned | **shipped** |
 | **21 · Selfhood** | LOOM edits its own TypeScript kernel behind five walls — isolated-worktree validation (real tsc + vitest) · owner diff-approval · commit to source + hot-reload · recovery boot that rolls back a bad edit · a self-protection invariant (it cannot edit its own safety machinery) | **shipped** |
 | **22 · Marrow** | LOOM edits its own Rust core (dev-mode) — same five walls, `cargo check` + `cargo test` validation · honest "restart to load" (no hot-reload) · the recovery gap closed by a pre-compile guard + pre-`main` rollback so a bad core edit self-heals · self-protection extended over the whole Rust safety core + Cargo manifests | **shipped** |

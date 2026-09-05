@@ -9,9 +9,10 @@
  *   src-tauri/genome/genome.json     { sha, createdAt }
  *
  * Both are Tauri bundle resources (tauri.conf.json → bundle.resources) and are
- * gitignored — they are build outputs, never committed. On first packaged
- * launch, `loomhome::seed_source` clones the bundle into loomhome/source and
- * checks out `sha`, so the genome and the body agree.
+ * gitignored — they are build outputs, never committed. Threading's seed step
+ * calls `loomhome::seed_source`, which clones the bundle into loomhome/source
+ * and checks out the sha recorded here, so the genome and the body agree. (It
+ * is the ceremony that does this, not a launch — `seed_source` has one caller.)
  *
  * Exits non-zero outside a git repository: a LOOM without its genome cannot
  * reweave, and the build must say so rather than ship a hollow body.
