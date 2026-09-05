@@ -333,6 +333,18 @@ pub fn watch(job: &Job, world: &mut dyn World, home: &Home) -> Verdict {
 /// `None` (absent or torn) and an EMPTY stamp are no information, never a
 /// supersede: the source-edit apply flow writes a sentinel before the commit
 /// names its sha, and a warden must not walk away from a birth on that.
+///
+/// NOT BUILT, and it belongs in `reweave.rs`: the swap could also REFUSE to
+/// start while a live warden names an unconfirmed birth — read `warden.json`,
+/// and if its `newSha` is still the sentinel's `applied_sha` and its
+/// `wardenPid` is alive, tell the owner "a generation is still being judged;
+/// LOOM will be able to return in a moment" instead of overlapping two
+/// births. That would make overlap rare rather than survivable, and the two
+/// are complements: this check is what makes the overlap SAFE when it
+/// happens anyway — a warden SIGKILLed mid-watch leaves a stale pid (the
+/// residual `release_pid` documents), and no precondition can close a race
+/// whose two halves are separate processes. The stamp is the load-bearing
+/// half; the refusal would be the courtesy.
 pub fn superseded(sentinel: Option<&Sentinel>, new_sha: &str) -> bool {
     sentinel.is_some_and(|s| !s.applied_sha.is_empty() && s.applied_sha != new_sha)
 }
