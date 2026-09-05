@@ -3,6 +3,7 @@ import {
   handle,
   LINE_THREAD_CONSENT,
   LINE_THREADING,
+  LINE_NO_PREVIOUS,
   reweaveConsentLine,
   type CompanionDeps,
   type RebirthDeps,
@@ -168,6 +169,8 @@ function generation(over: Partial<Generation> = {}): Generation {
     commitSubject: "x",
     isCurrent: true,
     isPrevious: false,
+    failedToBoot: false,
+    failedReason: null,
     ...over,
   };
 }
@@ -187,7 +190,49 @@ function rebirth(over: Partial<RebirthDeps> = {}): RebirthDeps {
   };
 }
 
+describe("reweaveConsentLine — the weave that did not hold", () => {
+  /**
+   * Round-4 review, Finding 4. After a heal the genome's HEAD is still the sha
+   * that failed while the body is the previous one, so both gates go on
+   * offering "weave generation X" for the generation LOOM just came home from,
+   * saying nothing about it. Refusing outright would be wrong — the failure
+   * can be environmental, and `force` is not a road the companion offers — so
+   * the sentence carries the fact and the owner decides.
+   */
+  it("names the failure in the sentence, and still offers the weave", () => {
+    expect(reweaveConsentLine(SHA_A, "packaged", true, true)).toBe(
+      "weave generation 3f2a1c again — it didn't boot last time — LOOM will close and return",
+    );
+    expect(reweaveConsentLine(SHA_A, "dev", false, true)).toBe(
+      "weave generation 3f2a1c again — it didn't boot last time — in dev the body stays; restart tauri dev to become it",
+    );
+    // A weave that has never failed says nothing about failure.
+    expect(reweaveConsentLine(SHA_A, "packaged", true, false)).toBe(
+      "weave generation 3f2a1c — LOOM will close and return",
+    );
+  });
+});
+
 describe("handle — reweave", () => {
+  it("passes the failed-before verdict into the consent line", async () => {
+    const rb = rebirth({
+      readiness: vi.fn().mockResolvedValue({
+        ok: true,
+        body: SHA_B,
+        genomeHead: SHA_A,
+        mode: "packaged",
+        canSwap: true,
+        failedBefore: true,
+      }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "reweave_consent",
+      line: "weave generation 3f2a1c again — it didn't boot last time — LOOM will close and return",
+    });
+  });
+
   it("nothing new → speaks the nothing-new line, never a model call, never starts", async () => {
     const rb = rebirth({
       readiness: vi
@@ -375,6 +420,42 @@ describe("handle — identity", () => {
 });
 
 describe("handle — generation_return", () => {
+  /**
+   * Round-4 review, Finding 3. The warden's heal writes `{ current: prev,
+   * previous: <the failed sha> }`, so the row flagged PREVIOUS after a heal is
+   * the body that just refused to boot. Taking it meant closing LOOM, swapping
+   * in the body that failed, and trusting the warden to bring it home again.
+   */
+  it("after a heal, the way home is not the body that just failed", async () => {
+    const FAILED = "ccc333ccc333ccc333ccc333ccc333ccc333ccc3";
+    const rb = rebirth({
+      generations: vi.fn().mockResolvedValue([
+        generation({ sha: FAILED, isCurrent: false, isPrevious: true, failedToBoot: true, failedReason: "crashed" }),
+        generation({ sha: SHA_A, isCurrent: true }),
+        generation({ sha: SHA_B, isCurrent: false }),
+      ]),
+    });
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "generation_return_consent",
+      sha: SHA_B,
+      line: "return to generation 9b8c7d — LOOM will close and return",
+    });
+  });
+
+  it("a shelf whose only other body failed to boot has no way home", async () => {
+    const FAILED = "ccc333ccc333ccc333ccc333ccc333ccc333ccc3";
+    const rb = rebirth({
+      generations: vi.fn().mockResolvedValue([
+        generation({ sha: FAILED, isCurrent: false, isPrevious: true, failedToBoot: true }),
+        generation({ sha: SHA_A, isCurrent: true }),
+      ]),
+    });
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: LINE_NO_PREVIOUS });
+  });
+
   it("a previous generation → consent turn carrying its sha", async () => {
     const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rebirth() }));
     expect(turn).toEqual({

@@ -25,6 +25,7 @@
  */
 
 import { listen } from "@tauri-apps/api/event";
+import { listGenerations } from "./generations";
 import {
   kernelIdentity,
   reweaveStart,
@@ -108,7 +109,12 @@ export type StartDeps = {
 
 export type StartResult = { ok: true } | { ok: false; reason: string };
 
-export type ReadinessDeps = { identity: typeof kernelIdentity };
+export type ReadinessDeps = {
+  identity: typeof kernelIdentity;
+  /** The shelf, read only to answer "has this weave already failed once?".
+   *  A shelf that cannot be read is not a failure — see `reweaveReadiness`. */
+  generations?: typeof listGenerations;
+};
 
 export type Readiness =
   | {
@@ -126,6 +132,10 @@ export type Readiness =
        *  knows. The consent line must not promise a close-and-return that the
        *  platform will refuse. */
       canSwap: boolean;
+      /** This exact sha has been woven, swapped in, and did not boot: a
+       *  healer marked it on the shelf. The consent line says so; the gate
+       *  does NOT refuse — see `reweaveReadiness`. */
+      failedBefore: boolean;
     }
   | { ok: false; reason: string };
 
@@ -161,6 +171,20 @@ export type Readiness =
  * at, RETURN from Settings, is refused by `check_return` for the same reason,
  * because that one correctly compares against the running body. Both roads
  * out were closed.
+ *
+ * Round-4 review, Finding 4: the verdict also says whether the sha it would
+ * weave is one that has ALREADY failed to be born. After a heal the genome's
+ * HEAD is still the failed sha while the body is the previous one, so this
+ * gate — correctly — offers the weave again, and said nothing about it.
+ *
+ * It warns rather than refuses, deliberately. What the healer decided is that
+ * the body did not CONFIRM its boot, and that can be environmental: a machine
+ * under load, a launch that lost a race, a signature macOS would not take
+ * this once. A rebuild of the same commit is not certainly the same outcome,
+ * and the owner may be about to weave the very fix. Refusing would make the
+ * one escape a no-op commit — which is the trap Finding 4 names — while
+ * `force` is not a road the companion offers. So the fact goes in the
+ * sentence and the owner decides.
  */
 export async function reweaveReadiness(
   deps: ReadinessDeps = { identity: kernelIdentity },
@@ -180,6 +204,7 @@ export async function reweaveReadiness(
       genomeHead: id.genomeHead,
       mode: id.mode,
       canSwap: id.canSwap,
+      failedBefore: await failedBefore(deps.generations ?? listGenerations, id.genomeHead),
     };
   } catch (e) {
     return { ok: false, reason: reasonOf(e) };
@@ -203,6 +228,24 @@ export async function startReweave(
     return { ok: true };
   } catch (e) {
     return { ok: false, reason: reasonOf(e) };
+  }
+}
+
+/**
+ * Has `head` already been woven and refused to boot? An unreadable shelf (no
+ * body woven yet, outside the shell, a torn ledger) answers "no": this is a
+ * sentence the owner reads, never a wall, and LOOM does not warn about a
+ * failure it cannot show.
+ */
+async function failedBefore(
+  generations: typeof listGenerations,
+  head: string | null,
+): Promise<boolean> {
+  if (head === null) return false;
+  try {
+    return (await generations()).some((g) => g.sha === head && g.failedToBoot);
+  } catch {
+    return false;
   }
 }
 

@@ -502,6 +502,51 @@ describe("settings seed — LOOM page", () => {
   });
 
   /**
+   * Round-4 review, findings 3 and 4, at the shelf.
+   *
+   * The warden's heal writes `{ current: prev, previous: <the failed sha> }`,
+   * so after a heal the ledger's PREVIOUS is the body that would not boot.
+   * Badging it as the way home invites the owner to go back to it.
+   */
+  it("a generation that failed to be born is badged as such, and is not the PREVIOUS one", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () => threadedDev({ mode: "packaged", generation: SHA_A, genomeSha: SHA_A }),
+        generations: async () => [
+          { sha: SHA_B, wovenAt: new Date().toISOString(), sizeBytes: 42, reason: "reweave", commitSubject: "b", isCurrent: false, isPrevious: true, failedToBoot: true, failedReason: "crashed" },
+          { sha: SHA_A, wovenAt: new Date().toISOString(), sizeBytes: 41, reason: "reweave", commitSubject: "a", isCurrent: true, isPrevious: false, failedToBoot: false, failedReason: null },
+        ],
+      }),
+    );
+    await tick();
+    const failed = el.querySelector('[data-testid="loom-generation-' + SHA_B.slice(0, 7) + '"]') as HTMLElement;
+    expect(failed.textContent).toContain("DIDN'T BOOT");
+    expect(failed.textContent).not.toContain("PREVIOUS");
+    // It stays on the shelf with its RETURN: a deliberate, named choice is
+    // still the owner's to make — what is withdrawn is the invitation.
+    expect(failed.querySelector('[data-action^="self-return-"]')).not.toBeNull();
+  });
+
+  /** And the note above REWEAVE says so before the owner presses it. */
+  it("the reweave note says when the head is the weave that did not hold", async () => {
+    const { el } = await renderSettings(
+      selfMock({
+        identity: async () =>
+          threadedDev({ mode: "packaged", genomeSha: SHA_A, generation: SHA_A, genomeHead: SHA_B }),
+        generations: async () => [
+          { sha: SHA_B, wovenAt: new Date().toISOString(), sizeBytes: 42, reason: "reweave", commitSubject: "b", isCurrent: false, isPrevious: true, failedToBoot: true, failedReason: "crashed" },
+          { sha: SHA_A, wovenAt: new Date().toISOString(), sizeBytes: 41, reason: "reweave", commitSubject: "a", isCurrent: true, isPrevious: false, failedToBoot: false, failedReason: null },
+        ],
+      }),
+    );
+    await tick();
+    expect(el.querySelector('[data-action="self-reweave"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="loom-reweave-note"]')!.textContent).toContain(
+      "didn't boot last time",
+    );
+  });
+
+  /**
    * Round-3 review, Finding 4. Threading shelves generation 0 under the sha
    * the binary baked — which is the literal string "unknown" for a body built
    * outside the genome. `generations_return` refuses that name before it can

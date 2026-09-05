@@ -9,7 +9,7 @@ import {
   type ThreadStatus,
 } from "../core";
 import { reweaveReadiness, type Readiness } from "../loom/reweave";
-import { listGenerations } from "../loom/generations";
+import { listGenerations, previousGeneration } from "../loom/generations";
 import { COMPANION_SYSTEM, windowMessages } from "./persona";
 import { buildCatalog, helpText } from "../shuttle/catalog";
 
@@ -104,13 +104,20 @@ export const missingToolLine = (tool: string, install: string) =>
  *
  * A `null` head (no source cloned, or git silent) is not named at all: LOOM
  * does not put a sha in the owner's sentence that it could not read.
+ *
+ * Round-4 review, Finding 4: `failedBefore` is the shelf's memory that this
+ * exact generation was woven, swapped in, and did not boot. LOOM will still
+ * weave it — the failure can be environmental and the fix may be what the
+ * owner just committed — but it does not offer it as if nothing had happened.
  */
 export const reweaveConsentLine = (
   genomeHead: string | null,
   mode: Identity["mode"],
   canSwap: boolean,
+  failedBefore = false,
 ) => {
-  const head = genomeHead ? `weave generation ${short(genomeHead)}` : "weave the genome's head";
+  const named = genomeHead ? `weave generation ${short(genomeHead)}` : "weave the genome's head";
+  const head = failedBefore ? `${named} again — it didn't boot last time` : named;
   if (mode === "dev") return `${head} — in dev the body stays; restart tauri dev to become it`;
   if (!canSwap) {
     return `${head} — the swap is macOS-only in this generation; the build and the ledger still work, the body stays`;
@@ -170,7 +177,12 @@ export async function handle(
       return {
         kind: "consent",
         consent: "reweave_consent",
-        line: reweaveConsentLine(ready.genomeHead, ready.mode, ready.canSwap),
+        line: reweaveConsentLine(
+          ready.genomeHead,
+          ready.mode,
+          ready.canSwap,
+          ready.failedBefore,
+        ),
       };
     }
 
@@ -193,7 +205,9 @@ export async function handle(
     }
 
     case "generation_return": {
-      const previous = (await body.generations()).find((g) => g.isPrevious);
+      // Not `find(g => g.isPrevious)`: after a heal the ledger's PREVIOUS is
+      // the body that just failed to boot (round-4 review, Finding 3).
+      const previous = previousGeneration(await body.generations());
       if (!previous) return { kind: "reply", text: LINE_NO_PREVIOUS };
       const id = await body.identity();
       return {

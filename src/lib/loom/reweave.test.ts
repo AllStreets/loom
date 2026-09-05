@@ -22,7 +22,7 @@ vi.mock("../core", () => ({
 const tauriEvent = vi.hoisted(() => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauriEvent.listen }));
 
-import { ShellUnavailableError, type Identity, type ReweaveState } from "../core";
+import { ShellUnavailableError, type Generation, type Identity, type ReweaveState } from "../core";
 import {
   REWEAVE_EVENT,
   STATIONS,
@@ -73,6 +73,19 @@ const state = (over: Partial<ReweaveState> = {}): ReweaveState => ({
   outcome: null,
   cancellable: false,
   mode: "packaged",
+  ...over,
+});
+
+const row = (over: Partial<Generation> = {}): Generation => ({
+  sha: BODY,
+  wovenAt: "2026-09-02T10:00:00Z",
+  sizeBytes: 1,
+  reason: "reweave",
+  commitSubject: "x",
+  isCurrent: false,
+  isPrevious: false,
+  failedToBoot: false,
+  failedReason: null,
   ...over,
 });
 
@@ -255,6 +268,8 @@ describe("reweaveReadiness — the dry run the companion asks before consent", (
       // macOS the swap is refused even when packaged
       mode: "packaged",
       canSwap: true,
+      // and whether this exact sha has already failed to be born
+      failedBefore: false,
     });
     expect(core.reweaveStart).not.toHaveBeenCalled();
   });
@@ -270,6 +285,36 @@ describe("reweaveReadiness — the dry run the companion asks before consent", (
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
     const id = vi.fn(async () => identity({ genomeSha: sha, genomeHead: sha, generation: sha }));
     expect((await reweaveReadiness({ identity: id }, true)).ok).toBe(true);
+  });
+
+  /**
+   * Round-4 review, Finding 4. After a heal the genome's HEAD is still the sha
+   * that failed while the body is the previous one, so the gate goes on
+   * offering "weave generation X" for the generation LOOM just came home from.
+   * The shelf remembers (`failedToBoot`, written by the healer into the
+   * generation's meta), and the verdict carries it so the consent line can say
+   * so. It is a WARNING, not a refusal: a boot failure can be environmental,
+   * and the owner may be about to weave the very fix.
+   */
+  it("says when the head is a generation that already failed to be born", async () => {
+    const id = vi.fn(async () => identity());
+    const generations = vi.fn(async () => [
+      row({ sha: MOVED_HEAD, failedToBoot: true, failedReason: "crashed" }),
+      row({ sha: BODY, isCurrent: true }),
+    ]);
+    const out = await reweaveReadiness({ identity: id, generations });
+    expect(out.ok).toBe(true);
+    expect(out.ok && out.failedBefore).toBe(true);
+  });
+
+  it("a shelf that cannot be read does not block the weave or invent a failure", async () => {
+    const id = vi.fn(async () => identity());
+    const generations = vi.fn(async () => {
+      throw new Error("no shell");
+    });
+    const out = await reweaveReadiness({ identity: id, generations });
+    expect(out.ok).toBe(true);
+    expect(out.ok && out.failedBefore).toBe(false);
   });
 
   it("uses kernelIdentity by default and turns a shell rejection into a calm reason", async () => {

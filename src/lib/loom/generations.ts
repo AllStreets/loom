@@ -29,6 +29,27 @@ export async function returnToGeneration(sha: string): Promise<void> {
   return generationsReturn(sha);
 }
 
+/**
+ * The generation "return to the previous generation" means: the newest body
+ * on the shelf that is neither the one running nor one that failed to be born.
+ *
+ * Round-4 review, Finding 3. This was `rows.find(g => g.isPrevious)`, and the
+ * warden's heal writes `{ current: prev, previous: <the failed sha> }` — so
+ * right after LOOM has come home, the row flagged PREVIOUS is the body that
+ * refused to boot. Taking it meant closing LOOM, swapping in that body, and
+ * trusting the warden to bring it home a second time.
+ *
+ * The ledger's `previous` is still preferred when it is a body that was born
+ * whole: it is the owner's mental "the one before this". When it is not, the
+ * shelf's next newest survivor is the honest answer, and when there is no
+ * survivor at all the answer is none — never the body that would not start.
+ * Rows arrive newest first (`generations::list`).
+ */
+export function previousGeneration(rows: Generation[]): Generation | null {
+  const home = rows.filter((g) => !g.isCurrent && !g.failedToBoot);
+  return home.find((g) => g.isPrevious) ?? home[0] ?? null;
+}
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
