@@ -266,13 +266,23 @@ pub fn watch(job: &Job, world: &mut dyn World, home: &Home) -> Verdict {
         Err(_) => REASON_NEVER_CONFIRMED.to_string(),
     };
 
-    // 5 · heal. One last look decides HOW. A body still running at the
+    // 5 · heal — unless a confirmation landed while we were looking. One last
+    // look also decides HOW to heal. A body still running at the
     // deadline is one the owner may be using — `kernel_boot_ok` is vetoed by
     // any ErrorBoundary caught during boot, so a perfectly usable generation
     // can reach this point unconfirmed (Finding 3). It is not killed and no
     // second window is opened over it; the executable on disk goes back, so
     // the NEXT launch is the body already proven.
     let seen = world.find_pids(&job.exe_path).unwrap_or_default();
+    // That sample is a `pgrep` with a 10 s ceiling, and a `kernel_boot_ok`
+    // can land inside it: the body has by then written the sentinel `ok` and
+    // the ledger `confirmed: true`. Healing over that would take back a
+    // generation that DID confirm and tell the owner it could not (round-2
+    // review, Finding 4). One last look at the sentinel — the same question
+    // the watch asked, asked once more at the last possible moment.
+    if world.read_sentinel().is_some_and(|s| s.status == "ok") {
+        return Verdict::Confirmed;
+    }
     let (take_it_down, reason) = ending(&reason, !seen.is_empty());
     if take_it_down {
         for pid in seen {
@@ -541,6 +551,15 @@ mod tests {
         /// How many leading `open` calls refuse.
         open_fails: u32,
         kills: Vec<u32>,
+        /// How many samples of the machine have been taken. `find_pids` takes
+        /// `&self`, so the count lives in a `Cell`.
+        samples: std::cell::Cell<u32>,
+        /// A `kernel_boot_ok` that lands in the LAST window (round-2 review,
+        /// Finding 4): from this sample onwards the sentinel reads `ok`,
+        /// whatever the tick rows say. Scripted by sample rather than by tick
+        /// because the window the review found is the final `pgrep` — the one
+        /// with a 10 s ceiling — taken after the watch has already given up.
+        ok_after_samples: Option<u32>,
     }
 
     impl FakeWorld {
@@ -555,6 +574,8 @@ mod tests {
                 opens: Vec::new(),
                 open_fails: 0,
                 kills: Vec::new(),
+                samples: std::cell::Cell::new(0),
+                ok_after_samples: None,
             }
         }
         fn latest<'a, T>(&self, rows: &'a [(u32, T)]) -> Option<&'a T> {
@@ -575,13 +596,15 @@ mod tests {
             }
         }
         fn find_pids(&self, _exe: &Path) -> Option<Vec<u32>> {
+            self.samples.set(self.samples.get() + 1);
             self.latest(&self.pids).cloned().flatten()
         }
         fn kill(&mut self, pid: u32) {
             self.kills.push(pid);
         }
         fn read_sentinel(&self) -> Option<Sentinel> {
-            let status = *self.latest(&self.sentinel)?;
+            let late = self.ok_after_samples.is_some_and(|n| self.samples.get() >= n);
+            let status = if late { "ok" } else { *self.latest(&self.sentinel)? };
             Some(Sentinel {
                 prev_sha: "aaa111".into(),
                 applied_sha: "bbb222".into(),
@@ -816,6 +839,34 @@ mod tests {
         let rec = read_recovery(&fx.home).unwrap();
         assert_eq!(rec.reason, REASON_NEVER_CONFIRMED_ALIVE);
         assert_eq!(rec.failed_sha, "bbb222");
+    }
+
+    /// Round-2 review, Finding 4. `watch` gave up, took one more look at the
+    /// machine — a `pgrep` with a 10 s ceiling — and healed unconditionally.
+    /// A `kernel_boot_ok` landing in that window has already written the
+    /// sentinel `ok` and `confirmed: true`; the heal overwrote both and the
+    /// record told the owner a generation that DID confirm could not. The
+    /// sentinel is re-read immediately before the heal, and a confirmation
+    /// stands.
+    #[test]
+    fn a_confirmation_that_lands_in_the_last_window_is_not_overwritten() {
+        // The window is the last sample: count how many this watch takes.
+        let probe = fixture();
+        let mut w = FakeWorld::new();
+        w.sentinel = vec![(0, "applied"), (2, "booting")];
+        watch(&probe.job, &mut w, &probe.home);
+        let last = w.samples.get();
+
+        let fx = fixture();
+        let mut w = FakeWorld::new();
+        w.sentinel = vec![(0, "applied"), (2, "booting")];
+        w.ok_after_samples = Some(last);
+        assert_eq!(watch(&fx.job, &mut w, &fx.home), Verdict::Confirmed);
+        assert_eq!(fx.exe(), "new body", "a generation that confirmed is not rolled back");
+        assert_eq!(sentinel_status(&fx.home).as_deref(), None, "the warden wrote no sentinel over the `ok`");
+        assert!(!fx.home.recovery_json().exists(), "no record claims a birth that did not fail");
+        assert!(w.kills.is_empty(), "nothing of a confirmed body is killed");
+        assert_eq!(w.opens.len(), 1, "no second window over the one that confirmed");
     }
 
     /// The kill and the second window are reserved for the path where the
