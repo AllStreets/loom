@@ -2085,4 +2085,468 @@ fi"#;
         assert!(last.1.contains("brew install node"), "{:?}", last.1);
         assert!(st.log().is_empty(), "nothing spawned");
     }
+
+    // ── SKIP-GUARDED real-tool ceremony (#[ignore]) ──────────────────────────
+    //
+    // Everything above this line drives shell-script fakes: it proves the
+    // ceremony's ORDER, ARGV and ENV, and nothing about whether real tools
+    // accept them. This section drives the REAL git, node, npm and cargo the
+    // tool table finds, over a real `git bundle`, and asserts the ceremony's
+    // effects ON DISK.
+    //
+    // The genome under test is a throwaway fixture, NOT the LOOM repo: a real
+    // ceremony over LOOM's own tree is `npm ci` plus a cold release build of
+    // whisper/sherpa — tens of minutes and gigabytes. The fixture is the same
+    // SHAPE (a `package.json` with a dependency and a `build` script; a
+    // `src-tauri/` crate with one crates.io dependency, whose binary is named
+    // `loom`) so all six steps do real work in seconds.
+    //
+    // Network: `cargo vendor` reaches crates.io unless `cfg-if 1.0.0` is
+    // already in the owner's cargo registry cache. That is exactly the spec's
+    // stated residual — "threading needs the network once" — and it is why
+    // these tests are `#[ignore]`d and never run in CI.
+
+    /// The tools the real ceremony needs present before it can prove anything.
+    #[cfg(unix)]
+    const REAL_TOOLS: &[&str] = &["git", "node", "npm", "cargo", "rustc"];
+
+    /// `Some(closure)` when every tool in `REAL_TOOLS` is on this machine;
+    /// `None` (after printing why) when one is missing — the house pattern
+    /// from `kernel::real_cargo_catches_type_errors`.
+    #[cfg(unix)]
+    fn real_tools(test: &str) -> Option<impl Fn(&str) -> Option<PathBuf>> {
+        for name in REAL_TOOLS {
+            match locate_now(name) {
+                Some(p) => eprintln!("  {name}: {}", p.display()),
+                None => {
+                    eprintln!("SKIP {test}: {name} is not on this machine");
+                    return None;
+                }
+            }
+        }
+        Some(|name: &str| locate_now(name))
+    }
+
+    /// `package.json`: one `file:` dependency (so `npm ci` really has
+    /// something to install, with no registry) and a `build` script that
+    /// writes `dist/`, standing in for tsc + vite.
+    #[cfg(unix)]
+    const FIXTURE_PACKAGE_JSON: &str = r#"{
+  "name": "loom-thread-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node -e \"const f=require('fs');f.mkdirSync('dist',{recursive:true});f.writeFileSync('dist/index.html','threaded')\""
+  },
+  "dependencies": { "loom-fixture-dep": "file:dep" }
+}
+"#;
+
+    /// The lockfile `npm ci` refuses to run without. Committed verbatim (it
+    /// is what `npm install --package-lock-only` writes for the manifest
+    /// above) so building the fixture needs no npm of its own.
+    #[cfg(unix)]
+    const FIXTURE_PACKAGE_LOCK: &str = r#"{
+  "name": "loom-thread-fixture",
+  "version": "0.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "loom-thread-fixture",
+      "version": "0.0.0",
+      "dependencies": { "loom-fixture-dep": "file:dep" }
+    },
+    "dep": { "name": "loom-fixture-dep", "version": "1.0.0" },
+    "node_modules/loom-fixture-dep": { "resolved": "dep", "link": true }
+  }
+}
+"#;
+
+    /// The crate: one pinned crates.io dependency, so `cargo vendor` has a
+    /// crate to vendor and the offline build has one to resolve from
+    /// `vendor/`. The binary is named `loom` because `reweave`'s stage step
+    /// looks for `target/release/loom` by that name.
+    #[cfg(unix)]
+    const FIXTURE_CARGO_TOML: &str = r#"[package]
+name = "loom_thread_fixture"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "loom"
+path = "src/main.rs"
+
+[dependencies]
+cfg-if = "=1.0.0"
+
+[workspace]
+"#;
+
+    #[cfg(unix)]
+    const FIXTURE_MAIN_RS: &str = r#"fn main() {
+    cfg_if::cfg_if! { if #[cfg(unix)] { println!("threaded"); } else { println!("threaded"); } }
+}
+"#;
+
+    /// A throwaway genome, bundled, plus the loomhome the ceremony threads.
+    #[cfg(unix)]
+    struct RealGenome {
+        _dir: tempfile::TempDir,
+        home: Home,
+        /// `<dir>/genome/genome.bundle`, with `genome.json` beside it.
+        bundle: PathBuf,
+        /// The sha the bundle records — what seed must check `source/` out at.
+        sha: String,
+        slot: &'static Slot,
+        _token: crate::exec::JobToken,
+    }
+
+    #[cfg(unix)]
+    fn write_file(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    /// A fixed-argv git, run for its exit code. Test setup only — the
+    /// ceremony's own spawns all go through `exec`.
+    #[cfg(unix)]
+    fn git_ok(git: &Path, cwd: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new(git)
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Build the fixture genome, commit it, `git bundle create … --all`, and
+    /// write the `genome.json` the ceremony's seed step reads the sha from.
+    #[cfg(unix)]
+    fn real_genome() -> RealGenome {
+        let git = locate_now("git").expect("guarded by real_tools");
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let repo = base.join("genome-src");
+
+        write_file(&repo.join("package.json"), FIXTURE_PACKAGE_JSON);
+        write_file(&repo.join("package-lock.json"), FIXTURE_PACKAGE_LOCK);
+        write_file(&repo.join("dep/package.json"), "{ \"name\": \"loom-fixture-dep\", \"version\": \"1.0.0\", \"main\": \"index.js\" }\n");
+        write_file(&repo.join("dep/index.js"), "module.exports = 1;\n");
+        write_file(&repo.join("src-tauri/Cargo.toml"), FIXTURE_CARGO_TOML);
+        write_file(&repo.join("src-tauri/src/main.rs"), FIXTURE_MAIN_RS);
+        write_file(&repo.join(".gitignore"), "node_modules/\ndist/\ntarget/\n.cargo/config.toml\n");
+
+        git_ok(&git, &repo, &["init", "--quiet", "-b", "main"]);
+        git_ok(&git, &repo, &["add", "-A"]);
+        git_ok(
+            &git,
+            &repo,
+            &[
+                "-c",
+                "user.email=fixture@loom.test",
+                "-c",
+                "user.name=LOOM fixture",
+                "commit",
+                "--quiet",
+                "-m",
+                "the fixture genome",
+            ],
+        );
+        let sha = git_ok(&git, &repo, &["rev-parse", "HEAD"]);
+        assert_eq!(sha.len(), 40, "a real sha: {sha}");
+
+        let bundle = base.join("genome").join("genome.bundle");
+        std::fs::create_dir_all(bundle.parent().unwrap()).unwrap();
+        git_ok(&git, &repo, &["bundle", "create", bundle.to_str().unwrap(), "--all"]);
+        write_file(
+            &bundle.parent().unwrap().join("genome.json"),
+            &format!("{{ \"sha\": \"{sha}\" }}\n"),
+        );
+        assert_eq!(crate::loomhome::bundle_sha(&bundle).as_deref(), Some(sha.as_str()));
+
+        let root = base.join("loomhome");
+        std::fs::create_dir_all(&root).unwrap();
+        let home = Home::at(root);
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+        let token = slot.try_take().expect("the ceremony holds its slot, as thread_loom does");
+        RealGenome { _dir: dir, home, bundle, sha, slot, _token: token }
+    }
+
+    /// Run the ceremony over the fixture with the real tools, collecting
+    /// every progress event.
+    #[cfg(unix)]
+    fn run_real(
+        g: &RealGenome,
+        tools: &dyn Fn(&str) -> Option<PathBuf>,
+    ) -> (Result<(), LoomError>, Vec<(String, String, Vec<String>)>) {
+        let mut events: Vec<(String, String, Vec<String>)> = Vec::new();
+        // Generation 0 is the body that ran the ceremony. Here that is the
+        // one the ceremony itself just built — `register` reads the path at
+        // call time, after `warm`, so the shelved bytes are a real product.
+        let exe = g.home.target().join("release").join("loom");
+        let res = run_ceremony(
+            &g.home,
+            Mode::Packaged,
+            &g.home.source(),
+            g.slot,
+            tools,
+            &exe,
+            Some(&g.bundle),
+            &mut |s, d, t| {
+                eprintln!("    [{s}] {d}");
+                events.push((s.to_string(), d.to_string(), t.to_vec()));
+            },
+        );
+        (res, events)
+    }
+
+    /// The whole ceremony, against real git + npm + cargo, asserted by what
+    /// it leaves on disk — and then run a SECOND time to prove resumption
+    /// skips completed steps instead of redoing them.
+    ///
+    /// This is the test that closes the round-3 gap: "threading has never run
+    /// against real git, npm and cargo."
+    ///
+    /// Run it with:
+    ///   cd src-tauri && cargo test real_ceremony_threads_a_real_genome -- --ignored --nocapture
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "spawns real git/npm/cargo and may reach crates.io once — run manually with --ignored"]
+    fn real_ceremony_threads_a_real_genome_and_resumes() {
+        let Some(tools) = real_tools("real_ceremony_threads_a_real_genome_and_resumes") else {
+            return;
+        };
+        let g = real_genome();
+        let started = Instant::now();
+        let (res, events) = run_real(&g, &tools);
+        eprintln!("  first ceremony: {:?}", started.elapsed());
+        assert!(res.is_ok(), "the ceremony failed: {res:?}");
+        assert_eq!(
+            step_order(&events),
+            vec!["seed", "deps", "vendor", "warm", "register", "stamp", "done"]
+        );
+
+        let source = g.home.source();
+        let git = locate_now("git").unwrap();
+
+        // 1 · seed — a real clone of a real bundle, checked out at the sha
+        // the bundle itself records, on a local `main`.
+        assert!(source.join(".git").is_dir(), "source/ is a git work tree");
+        assert_eq!(git_ok(&git, &source, &["rev-parse", "HEAD"]), g.sha, "seed checked out the bundle's sha");
+        assert_eq!(git_ok(&git, &source, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+        assert!(source.join("src-tauri/src/main.rs").is_file(), "the genome's files came across");
+
+        // 2 · deps — a real `npm ci` really installed.
+        assert!(
+            source.join("node_modules").join("loom-fixture-dep").exists(),
+            "npm ci installed the dependency into source/node_modules"
+        );
+
+        // 3 · vendor — a real `cargo vendor` really populated vendor/, and
+        // the config that makes the checkout build offline was written.
+        let vendored = g.home.vendor().join("cfg-if-1.0.0").join("Cargo.toml");
+        assert!(vendored.is_file(), "cargo vendor populated {}", g.home.vendor().display());
+        let cfg = std::fs::read_to_string(source.join(".cargo").join("config.toml"))
+            .expect("the ceremony wrote source/.cargo/config.toml");
+        assert!(cfg.contains(&g.home.vendor().display().to_string()), "the config names the vendor dir: {cfg}");
+        assert!(cfg.contains("replace-with = \"vendored\""), "{cfg}");
+        assert!(cfg.contains("offline = true"), "{cfg}");
+
+        // 4 · warm — real assets, and a real offline release build. That the
+        // build SUCCEEDED with `--offline` is the proof that steps 3 and 4
+        // fit together: cargo resolved cfg-if from vendor/, not the network.
+        assert!(source.join("dist").join("index.html").is_file(), "npm run build wrote dist/");
+        let built = g.home.target().join("release").join("loom");
+        assert!(built.is_file(), "cargo build --release --offline produced {}", built.display());
+        let built_bytes = std::fs::read(&built).unwrap();
+        assert!(built_bytes.len() > 1024, "a real executable, not a stub");
+
+        // 5 · register — generation 0 is that body, and the ledger says so.
+        //
+        // Found by running this test: `register` shelves under the sha baked
+        // into the BINARY (`genome_sha()`), while `seed` checks the source out
+        // at the sha the BUNDLE names. They agree in a healthy build; here
+        // they deliberately do not, and the divergence is visible below —
+        // `source/` HEAD is the fixture's sha, the ledger names the running
+        // binary's. Recorded, not fixed: which of the two `register` should
+        // follow is a design call, not a test's to make.
+        let shelved = g.home.generation_exe(crate::loomhome::genome_sha());
+        assert!(shelved.is_file(), "generation 0 shelved at {}", shelved.display());
+        assert!(
+            std::fs::read(&shelved).unwrap() == built_bytes,
+            "the shelved body IS the built body — register copies, it does not re-sign"
+        );
+        let ledger = crate::generations::read(&g.home);
+        assert_eq!(ledger.current.as_deref(), Some(crate::loomhome::genome_sha()));
+        assert_eq!(ledger.previous, None);
+        assert!(ledger.confirmed);
+        assert!(g.home.generation_meta(crate::loomhome::genome_sha()).is_file(), "meta.json written");
+
+        // 6 · stamp — threaded, only now.
+        let t = read(&g.home).expect("threads.json");
+        assert!(t.threaded, "threaded");
+        assert_eq!(t.threaded_sha.as_deref(), Some(crate::loomhome::genome_sha()));
+        assert!(t.threaded_at.is_some());
+        assert!(t.steps.seed && t.steps.deps && t.steps.vendor && t.steps.warm && t.steps.register);
+
+        // ── Resumption, for real ────────────────────────────────────────────
+        //
+        // Delete the assets the warm step produced. A second ceremony that
+        // re-ran warm would put them back; a resuming one must not — and must
+        // say so, per step, rather than silently redoing minutes of work.
+        std::fs::remove_dir_all(source.join("dist")).unwrap();
+        let built_before = std::fs::metadata(&built).unwrap().modified().unwrap();
+        let node_modules_before = std::fs::metadata(source.join("node_modules")).unwrap().modified().unwrap();
+
+        let again = Instant::now();
+        let (res2, events2) = run_real(&g, &tools);
+        let resume_took = again.elapsed();
+        eprintln!("  second ceremony (resumed): {resume_took:?}");
+        assert!(res2.is_ok(), "the resumed ceremony failed: {res2:?}");
+        assert_eq!(
+            step_order(&events2),
+            vec!["seed", "deps", "vendor", "warm", "register", "stamp", "done"],
+            "every step still reports; the completed ones report as already done"
+        );
+
+        let said = |step: &str| -> String {
+            events2.iter().find(|(s, _, _)| s == step).map(|(_, d, _)| d.clone()).unwrap_or_default()
+        };
+        assert_eq!(said("seed"), "already seeded");
+        assert_eq!(said("deps"), "dependencies already installed");
+        assert_eq!(said("vendor"), "crates already vendored");
+        assert_eq!(said("warm"), "the build is already warm");
+        assert_eq!(said("register"), "generation 0 already shelved");
+
+        assert!(
+            !source.join("dist").exists(),
+            "the warm step was SKIPPED, not redone — dist/ did not come back"
+        );
+        assert_eq!(
+            std::fs::metadata(&built).unwrap().modified().unwrap(),
+            built_before,
+            "the release binary was not rebuilt"
+        );
+        assert_eq!(
+            std::fs::metadata(source.join("node_modules")).unwrap().modified().unwrap(),
+            node_modules_before,
+            "npm ci did not run again"
+        );
+        assert!(read(&g.home).unwrap().threaded, "still threaded after the resumed run");
+    }
+
+    /// The reweave's build stages — `assets` and `core` — against the same
+    /// real toolchain and the same fixture, on the loomhome a real ceremony
+    /// just threaded. Dev mode on purpose: stages 1–3 run, and the job stops
+    /// at `done` before `swap` and `relaunch`, which replace a running
+    /// application and must never be exercised by a test.
+    ///
+    /// Run it with:
+    ///   cd src-tauri && cargo test real_reweave_builds_and_shelves -- --ignored --nocapture
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "spawns real npm/cargo on a threaded fixture — run manually with --ignored"]
+    fn real_reweave_builds_and_shelves_a_real_binary() {
+        let Some(tools) = real_tools("real_reweave_builds_and_shelves_a_real_binary") else {
+            return;
+        };
+        let g = real_genome();
+        let (res, _) = run_real(&g, &tools);
+        assert!(res.is_ok(), "the fixture must thread before it can reweave: {res:?}");
+
+        let source = g.home.source();
+        let git = locate_now("git").unwrap();
+        // A new commit, so the reweave has a genome that differs from the
+        // body — and so the target sha is one the ledger has never seen.
+        std::fs::write(
+            source.join("src-tauri/src/main.rs"),
+            "fn main() {\n    cfg_if::cfg_if! { if #[cfg(unix)] { println!(\"rewoven\"); } else { println!(\"rewoven\"); } }\n}\n",
+        )
+        .unwrap();
+        git_ok(&git, &source, &["add", "-A"]);
+        git_ok(
+            &git,
+            &source,
+            &["-c", "user.email=fixture@loom.test", "-c", "user.name=LOOM fixture", "commit", "--quiet", "-m", "a core change"],
+        );
+        let new_sha = git_ok(&git, &source, &["rev-parse", "HEAD"]);
+        assert_ne!(new_sha, g.sha);
+
+        // The build stages want the slot free — the ceremony's tenancy is
+        // done, and `ExecRunner` takes the global JOB slot for itself.
+        let ctx = crate::reweave::Ctx {
+            home: &g.home,
+            mode: Mode::Dev,
+            os: std::env::consts::OS,
+            source: source.clone(),
+            layout: None,
+            tools: &tools,
+            old_pid: std::process::id(),
+        };
+        let mut runner = crate::reweave::ExecRunner;
+        let mut seen: Vec<String> = Vec::new();
+        let started = Instant::now();
+        let fin = crate::reweave::run_job(
+            &ctx,
+            crate::reweave::Kind::Weave,
+            &mut runner,
+            &mut |s| {
+                if seen.last() != Some(&s.stage) {
+                    eprintln!("    [{}] {}", s.stage, s.outcome.as_deref().unwrap_or(""));
+                    seen.push(s.stage.clone());
+                }
+            },
+        );
+        eprintln!("  reweave: {:?}", started.elapsed());
+        let fin = fin.expect("the reweave's build stages must succeed on real tools");
+        assert_eq!(fin, crate::reweave::Finish::Built, "dev stops after stage — no swap, no relaunch");
+        assert_eq!(seen, vec!["assets", "core", "stage", "done"]);
+
+        // assets · a real `npm run build` product.
+        assert!(source.join("dist").join("index.html").is_file(), "the assets stage rebuilt dist/");
+        // core · a real offline `cargo build --release` product.
+        let built = g.home.target().join("release").join("loom");
+        assert!(built.is_file(), "the core stage produced {}", built.display());
+        // stage · shelved under the NEW sha, byte-for-byte the thing built.
+        let shelved = g.home.generation_exe(&new_sha);
+        assert!(shelved.is_file(), "the new generation is shelved at {}", shelved.display());
+        assert!(g.home.generation_meta(&new_sha).is_file(), "meta.json for the new generation");
+        // Found by running this test: on macOS the stage step ad-hoc signs the
+        // SHELVED copy, so it is deliberately NOT byte-identical to
+        // `target/release/loom`. That the signature verifies is the stronger
+        // claim, and the one the swap depends on — an unsigned body will not
+        // launch. On other unixes the copy is a plain copy.
+        if std::env::consts::OS == "macos" {
+            let codesign = locate_now("codesign").expect("macOS has codesign");
+            let verify = std::process::Command::new(&codesign)
+                .args(["--verify", "--strict", shelved.to_str().unwrap()])
+                .output()
+                .unwrap();
+            assert!(
+                verify.status.success(),
+                "the stage step's ad-hoc signature must verify: {}",
+                String::from_utf8_lossy(&verify.stderr)
+            );
+            assert!(
+                std::fs::read(&shelved).unwrap().len() >= std::fs::read(&built).unwrap().len(),
+                "signing appends a load command; the shelved body is not smaller than the built one"
+            );
+        } else {
+            assert!(std::fs::read(&shelved).unwrap() == std::fs::read(&built).unwrap());
+        }
+        // And the running generation is untouched: no swap happened.
+        let ledger = crate::generations::read(&g.home);
+        assert_eq!(
+            ledger.current.as_deref(),
+            Some(crate::loomhome::genome_sha()),
+            "dev never swaps — the ledger still names the body that ran"
+        );
+    }
 }
