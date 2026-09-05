@@ -206,14 +206,34 @@ pub fn seed_source(home: &Home, bundle: &Path, sha: &str) -> Result<(), LoomErro
     if out.code != 0 {
         return Err(LoomError::Git(format!("seed: clone failed: {}", out.stderr)));
     }
+    // The sha the SOURCE lands on must be the one the BODY was built from
+    // whenever the bundle contains it, so the ledger's generation and the work
+    // tree name the same commit. The caller may have preferred the bundle's own
+    // sha (they disagree only in a broken build); if this binary's sha is in the
+    // clone, that is the truer answer, and if it is not, the caller's stands.
+    let baked = genome_sha();
+    let target = if baked != sha
+        && crate::exec::run_checked(
+            &[&git, "cat-file", "-e", &format!("{baked}^{{commit}}")],
+            &source,
+            &home.root,
+            SEED_TIMEOUT,
+        )
+        .map(|o| o.code == 0)
+        .unwrap_or(false)
+    {
+        baked
+    } else {
+        sha
+    };
     let out = crate::exec::run_checked(
-        &[&git, "checkout", "--quiet", "--detach", sha],
+        &[&git, "checkout", "--quiet", "--detach", target],
         &source,
         &home.root,
         SEED_TIMEOUT,
     )?;
     if out.code != 0 {
-        return Err(LoomError::Git(format!("seed: checkout {sha} failed: {}", out.stderr)));
+        return Err(LoomError::Git(format!("seed: checkout {target} failed: {}", out.stderr)));
     }
     let out = crate::exec::run_checked(
         &[&git, "checkout", "--quiet", "-B", "main"],
@@ -621,6 +641,49 @@ mod tests {
             other => panic!("expected NotFound, got {other:?}"),
         }
         assert!(!home.source().exists(), "nothing is created when the bundle is absent");
+    }
+
+    /// The ledger's generation and the work tree must name the same commit.
+    /// `seed` preferred the bundle's sha and `register` shelves the body under
+    /// the baked one, so when those disagreed the ledger named a commit
+    /// `source/` did not have. The seed lands on the body's own sha whenever
+    /// the bundle carries it.
+    #[test]
+    fn the_source_lands_on_the_body_s_own_sha_when_the_bundle_has_it() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str], cwd: &std::path::Path| {
+            let out = std::process::Command::new("git").args(args).current_dir(cwd).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        run(&["init", "-q", "-b", "main"], &repo);
+        run(&["config", "user.email", "t@t"], &repo);
+        run(&["config", "user.name", "t"], &repo);
+        std::fs::write(repo.join("a"), "one").unwrap();
+        run(&["add", "-A"], &repo);
+        run(&["commit", "-qm", "one"], &repo);
+        let first = run(&["rev-parse", "HEAD"], &repo);
+        std::fs::write(repo.join("a"), "two").unwrap();
+        run(&["commit", "-qam", "two"], &repo);
+        let second = run(&["rev-parse", "HEAD"], &repo);
+
+        let bundle = d.path().join("genome.bundle");
+        run(&["bundle", "create", bundle.to_str().unwrap(), "--all"], &repo);
+
+        // The caller asks for the older commit; the bundle holds both. The
+        // baked sha is whatever THIS test binary was built from, so the honest
+        // assertion is the rule itself: a sha the clone does not carry leaves
+        // the caller's choice standing.
+        let home = Home::at(d.path().join("home"));
+        seed_source(&home, &bundle, &first).unwrap();
+        let landed = run(&["rev-parse", "HEAD"], &home.source());
+        assert!(
+            landed == first || landed == genome_sha(),
+            "landed on {landed}, which is neither the asked-for sha nor this body's"
+        );
+        assert_ne!(landed, second, "it must never invent a third commit");
     }
 
     #[test]
