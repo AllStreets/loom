@@ -624,7 +624,13 @@ describe("settings seed — LOOM page", () => {
     const b = organJs.indexOf("PAGE: Voice");
     expect(a).toBeGreaterThan(0);
     expect(b).toBeGreaterThan(a);
-    const loomPage = organJs.slice(a, b);
+    // Comments first: an apostrophe in prose ("the ceremony's archive") reads as
+    // a string delimiter to the scanner below and swallows the code after it,
+    // operators and all. Strip them, then scan what is actually copy.
+    const loomPage = organJs
+      .slice(a, b)
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
     // Any "!" that is not a `!==`/`!=`/`!x` operator is copy. Strings hold no `!`.
     for (const m of loomPage.matchAll(/"([^"\\]|\\.)*"|'([^'\\]|\\.)*'/g)) expect(m[0]).not.toContain("!");
   });
