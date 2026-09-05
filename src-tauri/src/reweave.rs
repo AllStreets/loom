@@ -1465,6 +1465,7 @@ mod tests {
             kept: vec!["aaa111".into()],
             keep: 3,
             confirmed: true,
+            genesis: None,
         }).unwrap();
         fx.shelve("aaa111", "prev");
         fx.shelve(&fx.head.clone(), "next");
@@ -1515,6 +1516,7 @@ mod tests {
             kept: vec![running.clone()],
             keep: 3,
             confirmed: true,
+            genesis: None,
         })
         .unwrap();
         fx.shelve(&running, "prev");
@@ -1571,6 +1573,7 @@ mod tests {
             kept: vec![older.clone(), newer.clone()],
             keep: 3,
             confirmed: true,
+            genesis: None,
         }).unwrap();
         fx.shelve(&newer, "newer body");
         fx.shelve(&older, "older body");

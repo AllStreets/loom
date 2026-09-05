@@ -47,11 +47,27 @@ pub struct Ledger {
     pub keep: usize,
     /// Whether the current body has confirmed a good boot.
     pub confirmed: bool,
+    /// Generation ZERO: the body the owner installed, which LOOM did not weave.
+    ///
+    /// The end-to-end run wove three generations and watched `keep: 3` drop it —
+    /// leaving every road home a body LOOM had made itself. It is the one body
+    /// whose provenance is not LOOM's own self-edit loop, so it is the floor
+    /// under every heal and the last honest answer to "put it back the way it
+    /// came". Never pruned. Defaulted for ledgers written before this existed.
+    #[serde(default)]
+    pub genesis: Option<String>,
 }
 
 impl Default for Ledger {
     fn default() -> Self {
-        Ledger { current: None, previous: None, kept: Vec::new(), keep: 3, confirmed: true }
+        Ledger {
+            current: None,
+            previous: None,
+            kept: Vec::new(),
+            keep: 3,
+            confirmed: true,
+            genesis: None,
+        }
     }
 }
 
@@ -130,6 +146,7 @@ pub fn prune(ledger: &Ledger) -> (Ledger, Vec<String>) {
     let live = |s: &String| {
         ledger.current.as_deref() == Some(s.as_str())
             || ledger.previous.as_deref() == Some(s.as_str())
+            || ledger.genesis.as_deref() == Some(s.as_str())
     };
     let mut kept = Vec::with_capacity(n);
     let mut gone = Vec::new();
@@ -381,6 +398,7 @@ mod tests {
             kept: kept.iter().map(|s| s.to_string()).collect(),
             keep,
             confirmed: true,
+            genesis: None,
         }
     }
 
@@ -613,6 +631,40 @@ mod tests {
         // Nothing to prune → identical ledger, nothing gone.
         let small = ledger(Some("b"), None, &["a", "b"], 3);
         assert_eq!(prune(&small), (small.clone(), vec![]));
+    }
+
+    /// Generation zero survives everything.
+    ///
+    /// The end-to-end run wove three generations and watched `keep: 3` drop the
+    /// body the owner installed — leaving every road home a body LOOM had woven
+    /// itself. Genesis is the one body whose provenance is not the self-edit
+    /// loop; if every woven body is bad, it is the way back.
+    #[test]
+    fn prune_never_drops_the_body_the_owner_installed() {
+        let ledger = Ledger {
+            current: Some("ddd444".into()),
+            previous: Some("ccc333".into()),
+            kept: vec![
+                "aaa000".into(), // genesis, and the oldest by far
+                "bbb222".into(),
+                "ccc333".into(),
+                "ddd444".into(),
+            ],
+            keep: 2,
+            confirmed: true,
+            genesis: Some("aaa000".into()),
+        };
+        let (next, dropped) = prune(&ledger);
+        assert!(next.kept.contains(&"aaa000".to_string()), "genesis is never pruned");
+        assert!(!dropped.contains(&"aaa000".to_string()));
+        // And it is the ONLY old one kept — nothing else got a free pass.
+        assert_eq!(dropped, vec!["bbb222".to_string()]);
+
+        // A ledger with no genesis recorded (written before this existed)
+        // prunes exactly as it always did.
+        let old = Ledger { genesis: None, ..ledger };
+        let (_, dropped) = prune(&old);
+        assert_eq!(dropped, vec!["aaa000".to_string(), "bbb222".to_string()]);
     }
 
     #[test]

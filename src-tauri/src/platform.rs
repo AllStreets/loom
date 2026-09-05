@@ -140,6 +140,17 @@ pub enum Step {
     WriteSentinelHealed { failed: String, prev: String },
     /// Ledger `{ current, previous, confirmed: false }`.
     WriteLedger { current: String, previous: String },
+    /// Point the genome the app CARRIES at `sha`, without re-packing it.
+    ///
+    /// The bundle inside the bundle is packed `--all` at weave time, so it
+    /// already CONTAINS every ancestor — including the body a heal comes home
+    /// to. Only the manifest beside it, which says which commit to check out,
+    /// names the wrong one. The end-to-end run left an app whose carried genome
+    /// named the generation that had just panicked; a re-seed would then have
+    /// put the source back there while the body was two generations on.
+    /// Rewriting one small file is the whole correction — there is nothing to
+    /// re-pack, and a heal has no git and no runner to re-pack it with.
+    NameCarriedGenome { app_path: PathBuf, sha: String },
 }
 
 pub const UNSUPPORTED_SWAP: &str =
@@ -215,6 +226,16 @@ pub fn execute(
                 generations::keep(home, sha)?;
             }
             Step::CopyExe { from, to } => copy_atomic(from, to)?,
+            Step::NameCarriedGenome { app_path, sha } => {
+                let dir = app_path.join("Contents").join("Resources").join("genome");
+                if dir.join("genome.bundle").is_file() {
+                    let meta = serde_json::json!({
+                        "sha": sha,
+                        "createdAt": generations::now_rfc3339(),
+                    });
+                    crate::threads::write_json_atomic(&dir.join("genome.json"), &meta)?;
+                }
+            }
             Step::Codesign { path } => codesign(path, tools)?,
             Step::WriteSentinel { applied, prev } => {
                 write_sentinel(home, "applied", applied, prev)?
@@ -404,6 +425,7 @@ mod tests {
             kept: current.into_iter().chain(previous).map(str::to_string).collect(),
             keep: 3,
             confirmed: true,
+            genesis: None,
         }
     }
 
@@ -680,7 +702,14 @@ mod tests {
         // shelved anything.
         generations::write(
             &f.home,
-            &Ledger { current: Some("aaa111".into()), previous: None, kept: vec![], keep: 3, confirmed: true },
+            &Ledger {
+                current: Some("aaa111".into()),
+                previous: None,
+                kept: vec![],
+                keep: 3,
+                confirmed: true,
+                genesis: None,
+            },
         )
         .unwrap();
         let step = Step::EnsureCurrentKept { sha: "aaa111".into(), from: f.lay.exe_path.clone() };

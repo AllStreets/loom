@@ -451,6 +451,12 @@ fn confirm(job: &Job, world: &mut dyn World) -> Option<String> {
 pub fn heal_plan(home: &Home, layout: &AppLayout, new_sha: &str, prev_sha: &str) -> Vec<Step> {
     vec![
         Step::CopyExe { from: home.generation_exe(prev_sha), to: layout.exe_path.clone() },
+        // The carried genome comes home with the body. The weave re-stages it
+        // and so does a return; the heal did not, so an app that came home was
+        // left carrying a genome that named the generation which had just
+        // failed — and a re-seed follows the bundle's own sha, as it must.
+        // Before the re-sign, so the seal covers it.
+        Step::NameCarriedGenome { app_path: layout.app_path.clone(), sha: prev_sha.to_string() },
         Step::Codesign { path: layout.app_path.clone() },
         Step::WriteLedger { current: prev_sha.to_string(), previous: new_sha.to_string() },
         Step::WriteSentinelHealed { failed: new_sha.to_string(), prev: prev_sha.to_string() },
@@ -794,6 +800,7 @@ mod tests {
                 kept: vec!["aaa111".into(), "bbb222".into()],
                 keep: 3,
                 confirmed: false,
+                genesis: None,
             },
         )
         .unwrap();
@@ -1346,4 +1353,49 @@ mod tests {
         assert_eq!(dispatch(argv(&["loom", "--warden", &missing])), Some(1));
         assert_eq!(dispatch(argv(&["loom", "--warden"])), Some(2));
     }
+    /// The carried genome comes home with the body.
+    ///
+    /// Found by the end-to-end run: after a heal the app's bundle still named
+    /// the generation that had just panicked, so a re-seed would have put the
+    /// source back there while the body was two generations on. The weave and
+    /// the return both re-stage; the heal did not.
+    #[test]
+    fn the_heal_points_the_carried_genome_at_the_body_it_came_home_to() {
+        let fx = fixture();
+        let lay = AppLayout {
+            app_path: fx.job.app_path.clone(),
+            exe_path: fx.job.exe_path.clone(),
+        };
+        let carried = lay.app_path.join("Contents/Resources/genome");
+        std::fs::create_dir_all(&carried).unwrap();
+        std::fs::write(carried.join("genome.bundle"), "a genome").unwrap();
+        std::fs::write(
+            carried.join("genome.json"),
+            r#"{"sha":"bbb222","createdAt":"then"}"#,
+        )
+        .unwrap();
+
+        let plan = heal_plan(&fx.home, &lay, "bbb222", "aaa111");
+        // Before the seal, so the re-sign covers what it wrote.
+        let names = plan
+            .iter()
+            .position(|s| matches!(s, Step::NameCarriedGenome { .. }))
+            .expect("the heal names the carried genome");
+        let seals = plan
+            .iter()
+            .position(|s| matches!(s, Step::Codesign { .. }))
+            .expect("the heal re-signs");
+        assert!(names < seals, "the seal must cover the manifest it changed");
+
+        let tools = |name: &str| threads::tool_path(&fx.home, name);
+        crate::platform::execute(&plan, &fx.home, &tools).unwrap();
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(carried.join("genome.json")).unwrap())
+                .unwrap();
+        assert_eq!(meta["sha"], "aaa111", "it names the body that came home");
+        // The bundle itself is untouched — it already contains every ancestor,
+        // so there is nothing to re-pack and no git here to re-pack it with.
+        assert_eq!(std::fs::read_to_string(carried.join("genome.bundle")).unwrap(), "a genome");
+    }
+
 }

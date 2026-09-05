@@ -3678,6 +3678,7 @@ mod tests {
                 kept: vec!["aaa111".into(), "bbb222".into()],
                 keep: 3,
                 confirmed: false,
+                genesis: None,
             },
         )
         .unwrap();
@@ -3722,6 +3723,7 @@ mod tests {
                     kept: vec!["aaa111".into(), "bbb222".into()],
                     keep: 3,
                     confirmed: false,
+                    genesis: None,
                 },
             )
             .unwrap();
@@ -3900,6 +3902,7 @@ mod tests {
                 kept: vec!["aaa111".into(), "bbb222".into()],
                 keep: 3,
                 confirmed: false,
+                genesis: None,
             },
         )
         .unwrap();

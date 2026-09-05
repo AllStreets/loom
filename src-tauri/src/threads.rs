@@ -1060,6 +1060,10 @@ fn ceremony_steps(
         ledger.current = Some(sha.to_string());
         ledger.previous = None;
         ledger.confirmed = true;
+        // The body the owner installed, which LOOM did not weave. It is the
+        // floor under every heal — the last honest answer to "put it back the
+        // way it came" — so the shelf never prunes it away.
+        ledger.genesis = Some(sha.to_string());
         crate::generations::write(home, &ledger)?;
         t.steps.register = true;
         write(home, t)?;
@@ -2234,8 +2238,29 @@ path = "src/main.rs"
 
 [dependencies]
 cfg-if = "=1.0.0"
+# A stand-in for the real `tauri` dependency, so the fixture accepts the same
+# `--features tauri/custom-protocol` LOOM's own body build carries. Without it
+# the fixture would reject the flag and the test would prove the argv is never
+# passed — the opposite of what it is for. Vendored like everything else.
+tauri = { path = "../tauri-stub" }
 
 [workspace]
+"#;
+
+    /// The stub that makes `--features tauri/custom-protocol` meaningful in the
+    /// fixture. It only has to OWN the feature; LOOM's real build gets the real
+    /// crate, whose build script derives `cfg(dev)` from the feature's absence.
+    #[cfg(unix)]
+    const FIXTURE_TAURI_STUB_TOML: &str = r#"[package]
+name = "tauri"
+version = "0.0.0"
+edition = "2021"
+
+[features]
+custom-protocol = []
+
+[lib]
+path = "lib.rs"
 "#;
 
     #[cfg(unix)]
@@ -2295,6 +2320,8 @@ cfg-if = "=1.0.0"
         write_file(&repo.join("dep/package.json"), "{ \"name\": \"loom-fixture-dep\", \"version\": \"1.0.0\", \"main\": \"index.js\" }\n");
         write_file(&repo.join("dep/index.js"), "module.exports = 1;\n");
         write_file(&repo.join("src-tauri/Cargo.toml"), FIXTURE_CARGO_TOML);
+        write_file(&repo.join("tauri-stub/Cargo.toml"), FIXTURE_TAURI_STUB_TOML);
+        write_file(&repo.join("tauri-stub/lib.rs"), "// the feature is the point\n");
         write_file(&repo.join("src-tauri/src/main.rs"), FIXTURE_MAIN_RS);
         write_file(&repo.join(".gitignore"), "node_modules/\ndist/\ntarget/\n.cargo/config.toml\n");
 
