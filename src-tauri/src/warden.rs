@@ -19,7 +19,8 @@
 //! 5. not confirmed — the process vanished (`crashed`: `CRASH_SAMPLES`
 //!    consecutive empty samples, never one) or the clock ran out (`never
 //!    confirmed`) — → HEAL: copy the previous body back over the executable,
-//!    re-sign, sentinel `healed`, ledger `current: prev`, recovery record.
+//!    re-sign, ledger `current: prev`, the terminal sentinel `healed` last of
+//!    the four (round-2 review, Finding 2), recovery record.
 //!    Then one of two endings: a body no longer running is killed if any
 //!    straggler remains and the app is opened again; a body STILL RUNNING at
 //!    the deadline is left alone — no kill, no second window — because the
@@ -369,6 +370,32 @@ fn confirm(job: &Job, world: &mut dyn World) -> Option<String> {
     }
 }
 
+/// PURE: the ordered steps of a heal. Read by `platform.rs`'s ordering rule
+/// the other way round (round-2 review, Finding 2):
+///
+/// 1. `CopyExe` — here the copy is the RESTORATIVE act, not the destructive
+///    one, so it goes FIRST: the proven body is back on the executable before
+///    anything else can fail.
+/// 2. `Codesign` — Gatekeeper launches what is now on disk.
+/// 3. `WriteLedger` — `current: prev`. The ledger is a claim about which body
+///    is on disk, and the body on disk is already `prev`, so the claim is now
+///    true. Idempotent: a re-heal after an interruption writes it again to
+///    the same value.
+/// 4. `WriteSentinelHealed` — LAST, because `healed` is TERMINAL. It is the
+///    statement that this birth is over and no healer need look again;
+///    written before the ledger it asserts, an interruption between the two
+///    leaves the previous body on the executable, the ledger still calling
+///    the failed generation current, and nothing left to correct it — the
+///    same wedge the swap's early ledger made, mirrored.
+pub fn heal_plan(home: &Home, layout: &AppLayout, new_sha: &str, prev_sha: &str) -> Vec<Step> {
+    vec![
+        Step::CopyExe { from: home.generation_exe(prev_sha), to: layout.exe_path.clone() },
+        Step::Codesign { path: layout.app_path.clone() },
+        Step::WriteLedger { current: prev_sha.to_string(), previous: new_sha.to_string() },
+        Step::WriteSentinelHealed { failed: new_sha.to_string(), prev: prev_sha.to_string() },
+    ]
+}
+
 /// The heal, shared with the pre-main backstop: previous body back over the
 /// executable, re-signed, sentinel `healed`, ledger `current: prev`, and the
 /// recovery record. On failure the sentinel is marked `rollback-failed` so
@@ -381,12 +408,7 @@ pub fn heal(
     reason: &str,
     tools: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> Result<(), LoomError> {
-    let plan = [
-        Step::CopyExe { from: home.generation_exe(prev_sha), to: layout.exe_path.clone() },
-        Step::Codesign { path: layout.app_path.clone() },
-        Step::WriteSentinelHealed { failed: new_sha.to_string(), prev: prev_sha.to_string() },
-        Step::WriteLedger { current: prev_sha.to_string(), previous: new_sha.to_string() },
-    ];
+    let plan = heal_plan(home, layout, new_sha, prev_sha);
     let done = platform::execute(&plan, home, tools).and_then(|()| {
         let record = Recovery {
             failed_sha: new_sha.to_string(),
@@ -893,6 +915,48 @@ mod tests {
         w.pids = vec![(0, Some(vec![4242])), (3, Some(vec![]))];
         assert!(matches!(watch(&fx.job, &mut w, &fx.home), Verdict::Healed { .. }));
         assert!(read_recovery(&fx.home).unwrap().log_tail.is_empty());
+    }
+
+    /// Round-2 review, Findings 2 and 3. The heal is a plan too, and the
+    /// process running it can die between any two steps. Judged by the same
+    /// rule the swap is judged by (`platform::survivable`): after every
+    /// prefix a healer can still act, and the ledger names the body actually
+    /// on the executable — or lags it while a healer is armed, never leads
+    /// it. `healed` is TERMINAL, so a prefix that has written it has no
+    /// healer left and the ledger must already be true.
+    #[test]
+    fn heal_interrupted_after_each_step_leaves_a_way_home() {
+        let layout = |fx: &Fx| AppLayout {
+            app_path: fx.job.app_path.clone(),
+            exe_path: fx.job.exe_path.clone(),
+        };
+        let steps = {
+            let fx = fixture();
+            heal_plan(&fx.home, &layout(&fx), "bbb222", "aaa111").len()
+        };
+        for k in 0..=steps {
+            let fx = fixture();
+            // The disk as the warden finds it: the new body on the
+            // executable, the sentinel `booting` and armed by the reweave.
+            kernel::write_sentinel_at(
+                &fx.home.sentinel_json(),
+                &Sentinel {
+                    prev_sha: "aaa111".into(),
+                    applied_sha: "bbb222".into(),
+                    status: "booting".into(),
+                    source_root: fx.home.source().to_string_lossy().into_owned(),
+                    armed_by: Some("reweave".into()),
+                },
+            )
+            .unwrap();
+            let plan = heal_plan(&fx.home, &layout(&fx), "bbb222", "aaa111");
+            let tools = |name: &str| threads::tool_path(&fx.home, name);
+            platform::execute(&plan[..k], &fx.home, &tools).unwrap();
+            let on_disk = if fx.exe() == "new body" { "bbb222" } else { "aaa111" };
+            if let Err(why) = platform::survivable(&fx.home, on_disk, "bbb222", "aaa111") {
+                panic!("killed after {k} of {steps} step(s) of the heal: {why}");
+            }
+        }
     }
 
     #[test]
