@@ -72,6 +72,43 @@ fn watched_paths(repo_root: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// The dylibs the TTS stack links against, by name. `sherpa-rs-sys` drops them
+/// in the CURRENT profile's target dir (`target/debug` or `target/release`),
+/// which is a path `tauri.conf.json` cannot name — it holds one static list,
+/// and a missing entry is a FATAL build error in `tauri-build`. So we copy them
+/// somewhere stable that the config can name, from wherever this profile put
+/// them, before `tauri_build::build()` reads that list.
+///
+/// Without this, `cargo test` on a clean checkout dies with "Library not
+/// found: target/release/…" — the config would only ever be right for the
+/// profile that happened to have been built last.
+const TTS_DYLIBS: &[&str] = &[
+    "libonnxruntime.1.17.1.dylib",
+    "libsherpa-onnx-c-api.dylib",
+    "libsherpa-onnx-cxx-api.dylib",
+];
+
+/// Stage the TTS dylibs into `src-tauri/libs/` (gitignored) from this build's
+/// own profile directory. Best effort: a name that is not there is left for
+/// `tauri-build` to complain about with its own clearer message.
+#[cfg(target_os = "macos")]
+fn stage_tts_dylibs(manifest_dir: &Path) {
+    // OUT_DIR is <target>/<profile>/build/<pkg>-<hash>/out — three parents up
+    // is the profile dir sherpa-rs-sys copied into.
+    let Ok(out) = std::env::var("OUT_DIR") else { return };
+    let Some(profile_dir) = Path::new(&out).ancestors().nth(3) else { return };
+    let libs = manifest_dir.join("libs");
+    if std::fs::create_dir_all(&libs).is_err() {
+        return;
+    }
+    for name in TTS_DYLIBS {
+        let from = profile_dir.join(name);
+        if from.is_file() {
+            let _ = std::fs::copy(&from, libs.join(name));
+        }
+    }
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.parent().map(Path::to_path_buf).unwrap_or(manifest_dir.clone());
@@ -87,6 +124,9 @@ fn main() {
     for rpath in ["@executable_path", "@executable_path/..", "@executable_path/../Frameworks"] {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{rpath}");
     }
+
+    #[cfg(target_os = "macos")]
+    stage_tts_dylibs(&manifest_dir);
 
     println!("cargo:rustc-env=LOOM_GENOME_SHA={}", genome_sha(&repo_root));
     for p in watched_paths(&repo_root) {

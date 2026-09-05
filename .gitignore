@@ -42,3 +42,7 @@ src-tauri/genome/*
 # The Cockpit is excised (Phase 23a). Nothing under public/ serves a deck,
 # and Vite copies public/ verbatim into the binary — scratch left here ships.
 public/decks/
+
+# Rebirth (Phase 23): build.rs stages the TTS dylibs here from whichever
+# profile is building, so tauri.conf can name one stable path. Build output.
+src-tauri/libs/
