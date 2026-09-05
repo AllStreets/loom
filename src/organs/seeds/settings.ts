@@ -563,7 +563,13 @@ const ORGAN_JS = `export default {
       // it, so the two are always equal in the steady state and the button
       // was hidden forever after the first weave. It is the genome's HEAD
       // that moves, and the same comparison reweaveReadiness makes.
-      var ahead = id.threaded && (id.genomeHead === null || id.genomeHead !== id.generation);
+      //
+      // Round-4 review, Finding 1: and what HEAD is compared AGAINST is the
+      // running body's baked sha, not the ledger's claim about disk. The swap
+      // writes the ledger before the new body has booted, so a swap that died
+      // at its last step left the ledger naming a body that is not running —
+      // and this hid REWEAVE while the core would have allowed the weave.
+      var ahead = id.threaded && (id.genomeHead === null || id.genomeHead !== id.genomeSha);
       if (ahead && !reweaveBtn.parentNode) reweaveWrap.insertBefore(reweaveBtn, reweaveNote);
       if (!ahead && reweaveBtn.parentNode) reweaveWrap.removeChild(reweaveBtn);
       reweaveBtn.style.display = "";

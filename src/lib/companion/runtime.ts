@@ -129,8 +129,25 @@ export const returnConsentLine = (sha: string, mode: Identity["mode"], canSwap: 
   }
   return `${head} — LOOM will close and return`;
 };
+/** What `build.rs` bakes into a body built outside the genome. */
+export const UNNAMED_SHA = "unknown";
+
+/**
+ * "which generation is this".
+ *
+ * Round-4 review, Finding 2: this read `id.generation` — the LEDGER's claim
+ * about which body is on disk. The ledger is allowed to lag the body (the
+ * swap writes it before the new body has ever booted, and the warden writes
+ * it back after a heal), so in the state a half-finished swap leaves behind
+ * it names the body that is NOT running, and a torn ledger reads `null` and
+ * called a real woven body "unwoven". `genomeSha` is compiled into the
+ * binary that is answering: it cannot be wrong about which body that is.
+ *
+ * The one body that genuinely cannot name itself is one built outside the
+ * genome, whose baked sha is the literal `"unknown"`.
+ */
 export const identityLine = (id: Identity) =>
-  `generation ${id.generation === null ? "unwoven" : short(id.generation)} · ${id.mode} · ${id.threaded ? "threaded" : "not threaded"}`;
+  `generation ${id.genomeSha === UNNAMED_SHA ? "unnamed" : short(id.genomeSha)} · ${id.mode} · ${id.threaded ? "threaded" : "not threaded"}`;
 
 export async function handle(
   utterance: string,

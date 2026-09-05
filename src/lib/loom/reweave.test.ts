@@ -42,6 +42,12 @@ import {
  * threading's register step makes them so, and every successful weave
  * re-establishes it. Only `genomeHead` moves when LOOM edits itself, so only
  * `genomeHead` can answer "is there anything new to weave?".
+ *
+ * Round-4 review, Finding 1: and the thing HEAD is compared AGAINST is
+ * `genomeSha`, the sha baked into the running body — the same value the
+ * core's `check_start` uses. The ledger's `current` is a claim about disk
+ * that is allowed to lag the body, and a gate reading it refuses weaves the
+ * core would have allowed.
  */
 const BODY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const MOVED_HEAD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -89,10 +95,10 @@ describe("startReweave", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("refuses when the genome's HEAD equals the running generation", async () => {
+  it("refuses when the genome's HEAD equals the running body", async () => {
     const start = vi.fn();
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () => identity({ genomeHead: sha, generation: sha }));
+    const id = vi.fn(async () => identity({ genomeSha: sha, genomeHead: sha, generation: sha }));
     const out = await startReweave({ start, identity: id });
     expect(out).toEqual({ ok: false, reason: REASON_NOTHING_NEW });
     expect(out.ok === false && out.reason).toBe(
@@ -101,7 +107,7 @@ describe("startReweave", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("starts when the genome is ahead of the running generation", async () => {
+  it("starts when the genome is ahead of the running body", async () => {
     const start = vi.fn(async () => undefined);
     const id = vi.fn(async () => identity());
     const out = await startReweave({ start, identity: id });
@@ -130,18 +136,38 @@ describe("startReweave", () => {
     expect(start).toHaveBeenCalledWith(false);
   });
 
-  /** And the other direction: a body whose BAKED sha differs from the ledger
-   *  (a lagging ledger, a returned generation) has still nothing to weave
-   *  while HEAD has not moved. The old gate offered a weave here. */
-  it("offers nothing when HEAD has not moved, though the baked sha differs", async () => {
+  /** And the other direction: HEAD back at the body's own baked sha has
+   *  nothing to weave, however far the ledger has wandered. */
+  it("offers nothing when HEAD is the running body, though the ledger says otherwise", async () => {
     const start = vi.fn();
-    const settled = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () =>
-      identity({ genomeSha: MOVED_HEAD, generation: settled, genomeHead: settled }),
-    );
+    const stale = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
+    const id = vi.fn(async () => identity({ genomeSha: BODY, generation: stale, genomeHead: BODY }));
     const out = await startReweave({ start, identity: id });
     expect(out).toEqual({ ok: false, reason: REASON_NOTHING_NEW });
     expect(start).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Round-4 review, Finding 1 — both roads out of a half-finished swap.
+   *
+   * `platform::swap_plan` writes the ledger BEFORE the new body has ever
+   * booted, deliberately: the ledger may lag the body, never lead it. A swap
+   * that dies at its last step therefore leaves `generation` naming the new
+   * sha while the OLD body is still the one running. The core's `check_start`
+   * compares HEAD with `running()` — the baked sha — and allows the weave.
+   * The shell compared HEAD with the ledger and said "nothing new to weave"
+   * about a body that does not match the genome at all; and the way out it
+   * offered instead — return to a kept generation — is refused by
+   * `check_return` for the very same reason. Both roads closed.
+   */
+  it("a swap that died after the ledger moved still has a weave to offer", async () => {
+    const start = vi.fn(async () => undefined);
+    const id = vi.fn(async () =>
+      identity({ genomeSha: BODY, generation: MOVED_HEAD, genomeHead: MOVED_HEAD }),
+    );
+    const out = await startReweave({ start, identity: id });
+    expect(out).toEqual({ ok: true });
+    expect(start).toHaveBeenCalledWith(false);
   });
 
   /** No source cloned yet, or git silent: the gate does not invent a refusal.
@@ -152,17 +178,17 @@ describe("startReweave", () => {
     expect(await startReweave({ start, identity: id })).toEqual({ ok: true });
   });
 
-  it("starts when no generation has been woven yet (generation null, threaded)", async () => {
+  it("starts when no generation has been woven yet (ledger empty, threaded)", async () => {
     const start = vi.fn(async () => undefined);
     const id = vi.fn(async () => identity({ generation: null }));
     const out = await startReweave({ start, identity: id });
     expect(out).toEqual({ ok: true });
   });
 
-  it("passes force through, even when head equals generation", async () => {
+  it("passes force through, even when head equals the running body", async () => {
     const start = vi.fn(async () => undefined);
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () => identity({ genomeHead: sha, generation: sha }));
+    const id = vi.fn(async () => identity({ genomeSha: sha, genomeHead: sha, generation: sha }));
     const out = await startReweave({ start, identity: id }, true);
     expect(out).toEqual({ ok: true });
     expect(start).toHaveBeenCalledWith(true);
@@ -209,17 +235,18 @@ describe("reweaveReadiness — the dry run the companion asks before consent", (
     expect(await reweaveReadiness({ identity: id })).toEqual({ ok: false, reason: REASON_UNTHREADED });
   });
 
-  it("head equals generation → nothing new", async () => {
+  it("head equals the running body → nothing new", async () => {
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () => identity({ genomeHead: sha, generation: sha }));
+    const id = vi.fn(async () => identity({ genomeSha: sha, genomeHead: sha, generation: sha }));
     expect(await reweaveReadiness({ identity: id })).toEqual({ ok: false, reason: REASON_NOTHING_NEW });
   });
 
-  it("head ahead → ok with generation, genomeHead and mode; nothing is started", async () => {
+  it("head ahead → ok with body, genomeHead and mode; nothing is started", async () => {
     const id = vi.fn(async () => identity());
     expect(await reweaveReadiness({ identity: id })).toEqual({
       ok: true,
-      generation: BODY,
+      // WHICH BODY IS RUNNING — the baked sha, never the ledger's claim.
+      body: BODY,
       // The verdict carries what will be WOVEN, so the consent line can name
       // it. The running body's baked sha is not in here at all — naming it was
       // round-3 Finding 2.
@@ -232,16 +259,16 @@ describe("reweaveReadiness — the dry run the companion asks before consent", (
     expect(core.reweaveStart).not.toHaveBeenCalled();
   });
 
-  it("no generation yet → ok with generation null", async () => {
+  it("no generation woven yet → ok, and the verdict still names the running body", async () => {
     const id = vi.fn(async () => identity({ generation: null }));
     const out = await reweaveReadiness({ identity: id });
     expect(out.ok).toBe(true);
-    expect(out.ok && out.generation).toBeNull();
+    expect(out.ok && out.body).toBe(BODY);
   });
 
   it("force skips the nothing-new check", async () => {
     const sha = "3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a1c3f2a";
-    const id = vi.fn(async () => identity({ genomeHead: sha, generation: sha }));
+    const id = vi.fn(async () => identity({ genomeSha: sha, genomeHead: sha, generation: sha }));
     expect((await reweaveReadiness({ identity: id }, true)).ok).toBe(true);
   });
 

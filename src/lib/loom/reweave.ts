@@ -113,9 +113,13 @@ export type ReadinessDeps = { identity: typeof kernelIdentity };
 export type Readiness =
   | {
       ok: true;
-      generation: string | null;
+      /** WHICH BODY IS RUNNING: the sha compiled into this binary. Not the
+       *  ledger's `current`, which is a claim about disk and is allowed to
+       *  lag. This is what the gate compares HEAD against, and it is what
+       *  the core's `check_start` compares against. */
+      body: string;
       /** What a weave would BUILD: the genome's HEAD. The consent line names
-       *  this — never `genomeSha`, which is the body already running. */
+       *  this — never `body`, which is what is already running. */
       genomeHead: string | null;
       mode: "dev" | "packaged";
       /** Whether this body can actually be swapped — read from the core, which
@@ -133,10 +137,10 @@ export type Readiness =
  *
  * Preconditions read from `kernel_identity`:
  *   - not threaded → REASON_UNTHREADED
- *   - the running generation already IS the genome's HEAD (and not `force`)
- *     → REASON_NOTHING_NEW. A null generation (no body woven yet, or dev mode)
- *     always has something to weave, and so does a genome whose head cannot be
- *     read — the core re-checks, and refuses with its own sentence.
+ *   - the RUNNING BODY already IS the genome's HEAD (and not `force`) →
+ *     REASON_NOTHING_NEW. A genome whose head cannot be read always has
+ *     something to weave — the core re-checks, and refuses with its own
+ *     sentence.
  *
  * Round-3 review, Finding 1: this compared `generation` with `genomeSha` — the
  * sha the RUNNING BINARY was compiled from. Threading's register step sets
@@ -145,6 +149,18 @@ export type Readiness =
  * weave, LOOM could never weave again. A self-edit moves `loomhome/source`
  * HEAD and neither of the others. The gate reads HEAD now, as the core's own
  * `check_start` always did.
+ *
+ * Round-4 review, Finding 1: and it must compare HEAD against the same thing
+ * the core compares it against — `genomeSha`, the sha baked into the running
+ * binary — not `generation`, the ledger's claim. The swap writes the ledger
+ * BEFORE the new body has ever booted (the ledger may lag the body, never
+ * lead it), so a swap that dies at its last step leaves the ledger naming a
+ * body that is not running. Reading the ledger there, this gate said "nothing
+ * new to weave — the body already matches the genome" about a body that did
+ * not, while the core would have allowed the weave; and the remedy it pointed
+ * at, RETURN from Settings, is refused by `check_return` for the same reason,
+ * because that one correctly compares against the running body. Both roads
+ * out were closed.
  */
 export async function reweaveReadiness(
   deps: ReadinessDeps = { identity: kernelIdentity },
@@ -153,14 +169,14 @@ export async function reweaveReadiness(
   try {
     const id = await deps.identity();
     if (!id.threaded) return { ok: false, reason: REASON_UNTHREADED };
-    if (!force && id.genomeHead !== null && id.genomeHead === id.generation) {
+    if (!force && id.genomeHead !== null && id.genomeHead === id.genomeSha) {
       return { ok: false, reason: REASON_NOTHING_NEW };
     }
     // `mode` travels with the verdict so the consent line can say what will
     // actually happen — in dev nothing is swapped and LOOM does not close.
     return {
       ok: true,
-      generation: id.generation,
+      body: id.genomeSha,
       genomeHead: id.genomeHead,
       mode: id.mode,
       canSwap: id.canSwap,

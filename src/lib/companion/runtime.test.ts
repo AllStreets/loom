@@ -176,7 +176,7 @@ function rebirth(over: Partial<RebirthDeps> = {}): RebirthDeps {
   return {
     readiness: vi
       .fn()
-      .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
+      .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
     threadStatus: vi.fn().mockResolvedValue(threadStatus()),
     threadLoom: vi.fn().mockResolvedValue(undefined),
     identity: vi.fn().mockResolvedValue(identity()),
@@ -225,7 +225,7 @@ describe("handle — reweave", () => {
     const rb = rebirth({
       readiness: vi
         .fn()
-        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
     });
     const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toContain("weave generation 3f2a1c");
@@ -237,7 +237,7 @@ describe("handle — reweave", () => {
     const rb = rebirth({
       readiness: vi
         .fn()
-        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: null, mode: "packaged", canSwap: true }),
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: null, mode: "packaged", canSwap: true }),
     });
     const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toBe(
@@ -247,7 +247,7 @@ describe("handle — reweave", () => {
 
   it("dev → the consent line never promises a close and return that will not happen", async () => {
     const rb = rebirth({
-      readiness: vi.fn().mockResolvedValue({ ok: true, generation: null, genomeHead: SHA_A, mode: "dev" }),
+      readiness: vi.fn().mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "dev" }),
     });
     const turn = await handle("rebuild yourself", [], makeDeps({ rebirth: rb }));
     expect(turn).toEqual({
@@ -261,7 +261,7 @@ describe("handle — reweave", () => {
     const rb = rebirth({
       readiness: vi
         .fn()
-        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: false }),
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: false }),
     });
     const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toBe(
@@ -336,12 +336,41 @@ describe("handle — identity", () => {
     expect(turn).toEqual({ kind: "reply", text: "generation 9b8c7d · packaged · threaded" });
   });
 
-  it("no generation yet → unwoven, not threaded", async () => {
+  /**
+   * Round-4 review, Finding 2. "which generation is this" was answered from
+   * `generation` — the LEDGER's claim about which body is on disk, which is
+   * allowed to lag the body and, after a half-finished swap, names the body
+   * that is NOT running. The binary's baked sha is the one value that cannot
+   * be wrong about which body is executing, so that is the one that answers.
+   */
+  it("names the body that is running, not the ledger's claim", async () => {
+    const rb = rebirth({
+      // The half-finished swap: the ledger already moved to the new sha, the
+      // old body is still the one asking and answering.
+      identity: vi.fn().mockResolvedValue(identity({ genomeSha: SHA_A, generation: SHA_B })),
+    });
+    const turn = await handle("which generation is this", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "generation 3f2a1c · packaged · threaded" });
+  });
+
+  /** And a torn or absent ledger cannot make a real woven body say it is not
+   *  one: `generation: null` is the ledger's silence, not the body's. */
+  it("a silent ledger does not unweave a body that knows its own sha", async () => {
     const rb = rebirth({
       identity: vi.fn().mockResolvedValue(identity({ mode: "dev", generation: null, threaded: false })),
     });
     const turn = await handle("what generation are you?", [], makeDeps({ rebirth: rb }));
-    expect(turn).toEqual({ kind: "reply", text: "generation unwoven · dev · not threaded" });
+    expect(turn).toEqual({ kind: "reply", text: "generation 9b8c7d · dev · not threaded" });
+  });
+
+  /** The one body that genuinely cannot name itself: built outside the
+   *  genome, so `build.rs` baked the literal "unknown". */
+  it("a body built outside the genome says it is unnamed", async () => {
+    const rb = rebirth({
+      identity: vi.fn().mockResolvedValue(identity({ genomeSha: "unknown", generation: SHA_B })),
+    });
+    const turn = await handle("which generation is this", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "generation unnamed · packaged · threaded" });
   });
 });
 
