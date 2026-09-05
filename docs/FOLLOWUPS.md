@@ -294,24 +294,20 @@ which is where all the proving had been done.
   typechecks and builds the packaged app, asserting the `.app` exists, is
   executable, and carries the genome it must rebuild from.
 
+**Closed after the review, in the same run**
+
+- **The carried genome is re-staged at `stage`**, so the bundle inside the app
+  names the body it is about to become. It kept the sha the app was first built
+  at, and a re-seed would have rewound the genome past every self-edit.
+- **The warden's reason reaches the owner.** The notice flattened a crash and a
+  body that was still running when the clock ran out into one sentence; the
+  hinge follows what the warden actually saw now.
+
 **Left standing, deliberately**
 
-- **The genome bundle is never re-staged.** The shipped `genome.bundle` keeps
-  the sha the app was built at, so if `loomhome/source` is ever removed, a
-  re-seed rewinds the genome past every self-edit while the body is generation N.
-  Narrow, and the seed follows the bundle's own sha by design — but it is a
-  writer and a reader that disagree after the first weave.
-- **Threading has no stop button and no progress surface of its own.**
-  `thread_cancel` is wired and tested with no production caller, and `loom-thread`
-  has one listener, inside the organ API. A ceremony that spends the owner's one
-  network trip runs for tens of minutes with no rail and no cancel. A chrome-owned
-  thread card mirroring the reweave card is the fix.
 - **A SIGKILLed warden still leaves its pid behind.** `release_pid` clears it on
   every ordinary exit; only an outright kill defeats it, and the sha stamp is the
   load-bearing half anyway.
-- **`Recovery.reason` crosses the boundary and dies at the last inch** — the
-  notice always says "and couldn't", so the distinction between a crash and a
-  body still running when the clock ran out never reaches the owner.
 
 ### Phase-23 backlog (beyond Rebirth)
 
