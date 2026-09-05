@@ -11,10 +11,17 @@ jobs:
       - run: npm ci
       # `npm test` is `vitest run`, which transpiles without typechecking: a
       # type error passed CI and then broke `npm run build` — which is
-      # reweave's own stage 1, the first step of every self-rebuild. The same
-      # command is the first half of `npm run check`, so the local gate and
-      # this one agree.
-      - run: npx tsc --noEmit
+      # reweave's own stage 1, the first step of every self-rebuild.
+      #
+      # `npm run typecheck` is now BOTH passes: tsconfig.json (what ships, the
+      # build's own config) and tsconfig.check.json (the same options over the
+      # tests too). Round 4 found the first gate covered no test file at all —
+      # a deliberate type error appended to a test passed `tsc --noEmit` AND
+      # `npm run build` — and a test is exactly where a Rust-to-TypeScript
+      # shape drift shows up first. Running the npm script rather than a bare
+      # `tsc` keeps this gate and the local one (`npm run check`) identical by
+      # construction.
+      - run: npm run typecheck
       - run: npm test
       - run: cd src-tauri && cargo test
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractCode, scrubFences, applyBlock, applyEditBlocks, spliceEntries } from "./edits";
+import { extractCode, applyBlock, applyEditBlocks, spliceEntries } from "./edits";
 
 describe("extractCode", () => {
   it("strips a clean fenced block", () => {

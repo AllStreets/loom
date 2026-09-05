@@ -15,7 +15,7 @@ afterEach(() => vi.clearAllMocks());
 
 describe("runBootCheck", () => {
   it("returns the sha and dispatches the recovery event when a rollback happened", async () => {
-    const check = vi.fn(async () => ({ rolledBackTo: "deadbeef12345" }));
+    const check = vi.fn(async () => ({ rolledBackTo: "deadbeef12345", rollbackFailed: false }));
     const events: string[] = [];
     const listener = (e: Event) =>
       events.push((e as CustomEvent<{ sha: string }>).detail.sha);
@@ -29,7 +29,7 @@ describe("runBootCheck", () => {
   });
 
   it("returns null and dispatches nothing when nothing rolled back", async () => {
-    const check = vi.fn(async () => ({ rolledBackTo: null }));
+    const check = vi.fn(async () => ({ rolledBackTo: null, rollbackFailed: false }));
     const listener = vi.fn();
     window.addEventListener(RECOVERY_EVENT, listener);
 
