@@ -295,10 +295,15 @@ fn running() -> &'static str {
 /// `beforeBuildCommand` writes `Contents/Resources/genome/{genome.bundle,
 /// genome.json}` once, when the app is first built. A reweave replaces only the
 /// executable, so without this the carried genome ages out from under the body.
-/// Runs at `stage`, before the swap re-signs the bundle.
+/// Runs at `stage`, and re-seals the bundle itself: the swap's re-sign runs
+/// only when a swap happens, and this changes the app whether one follows or
+/// not.
+#[allow(clippy::too_many_arguments)]
 fn restage_genome(
     runner: &mut dyn Runner,
     p: &mut Progress,
+    home: &Home,
+    os: &str,
     app_path: &Path,
     source: &Path,
     target: &str,
@@ -346,7 +351,28 @@ fn restage_genome(
     // The manifest the seed reads to decide which sha to check out.
     let meta = serde_json::json!({ "sha": target, "createdAt": generations::now_rfc3339() });
     crate::threads::write_json_atomic(&dir.join("genome.json"), &meta)
-        .map_err(|e| failed(e.to_string(), e))
+        .map_err(|e| failed(e.to_string(), e))?;
+
+    // Whoever changes the bundle re-seals it, here, at once.
+    //
+    // Round-4 review, Finding 4. This used to lean on the swap's own re-sign,
+    // which only exists on the swap's SUCCESS path: a refused `swap_plan`, a
+    // non-macOS packaged build, a dev weave, or a quit between stage and swap
+    // each left `Contents/Resources/genome` rewritten and unsigned, and
+    // `codesign --verify` failed from then on.
+    //
+    // The other repair — moving the re-stage between the swap's copy and its
+    // re-sign — was rejected: `git bundle create` is a long, fallible,
+    // cancellable spawn, and the swap is the point of no return. Putting it
+    // there would leave the bundle unsigned for the whole pack, in exactly the
+    // window `platform::survivable` reasons about, and would still do nothing
+    // for the paths that never reach the swap. Signing here costs one more
+    // ad-hoc `codesign`; the swap's later re-sign is idempotent.
+    if os == "macos" {
+        platform::execute(&[Step::Codesign { path: app_path.to_path_buf() }], home, tools)
+            .map_err(|e| failed(format!("the re-staged genome could not be sealed — {e}"), e))?;
+    }
+    Ok(())
 }
 
 /// `reweave_start`'s rules (spec §Reweave): threaded; the voice engine's
@@ -592,7 +618,16 @@ fn job_steps(
             // weave was cancelled" into the log while the swap went on to
             // replace the running generation (round-4 review, Finding 2).
             if let Some(layout) = ctx.layout.as_ref() {
-                match restage_genome(runner, p, &layout.app_path, source, target, ctx.tools) {
+                match restage_genome(
+                    runner,
+                    p,
+                    home,
+                    ctx.os,
+                    &layout.app_path,
+                    source,
+                    target,
+                    ctx.tools,
+                ) {
                     Ok(()) => p.line("the carried genome now matches the woven body"),
                     Err(e) if runner.cancelled() => return Err(e),
                     Err(e) => p.line(&format!(
@@ -1232,8 +1267,15 @@ mod tests {
         let ledger = generations::read(&fx.home);
         assert_eq!(ledger.kept, vec![fx.head.clone()]);
         assert!(ledger.current.is_none(), "dev never swaps — current stays unset");
+        // Signed twice: the body on the shelf, and — because the re-stage
+        // rewrote `Contents/Resources/genome` inside it — the app bundle.
         let sign = fx.argv("codesign");
-        assert_eq!(sign, vec!["--force", "--deep", "--sign", "-", fx.home.generation_exe(&fx.head).to_str().unwrap()]);
+        let seal = |path: &str| {
+            vec!["--force".into(), "--deep".into(), "--sign".into(), "-".into(), path.to_string()]
+        };
+        let mut expected: Vec<String> = seal(fx.home.generation_exe(&fx.head).to_str().unwrap());
+        expected.extend(seal(fx.lay.app_path.to_str().unwrap()));
+        assert_eq!(sign, expected, "the re-stage re-seals the bundle it changed");
         // The genome the app CARRIES was re-staged to name the woven body.
         // Without this the bundle keeps the sha the app was first built at, so
         // a later re-seed would rewind the genome past every self-edit while
