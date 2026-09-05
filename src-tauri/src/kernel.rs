@@ -1523,8 +1523,23 @@ pub fn kernel_boot_ok(app: tauri::AppHandle) -> Result<(), LoomError> {
 /// `ok` (this boot held) and, Phase 23, a ledger that exists is marked
 /// `confirmed: true` — the warden reads the sentinel, the owner reads the
 /// ledger. No ledger is ever invented here: a dev LOOM has none.
+///
+/// ONLY AN UNCONFIRMED SENTINEL IS CONFIRMED (round-3 review, Finding 2).
+/// This was the one consumer of the state machine that did not guard with
+/// `is_unconfirmed`, and the `HealedNextLaunch` ending walks straight into
+/// it: a usable generation misses the deadline, the warden heals and
+/// deliberately leaves that process running, and the process then beacons
+/// late. Writing `ok` over `healed` erases the only durable statement that
+/// the birth ended badly, and stamps `confirmed: true` on a `current` the
+/// beaconing process is not running. The same call erased `rollback-failed`,
+/// the record of a body that could not come home at all. A terminal state is
+/// somebody else's verdict; this beacon is too late to overturn it, and the
+/// ledger is left alone with it.
 fn boot_ok_at(sp: &Path, home: Option<&Home>) -> Result<(), LoomError> {
     if let Some(mut s) = read_sentinel(sp) {
+        if !is_unconfirmed(&s.status) {
+            return Ok(());
+        }
         s.status = "ok".into();
         write_sentinel(sp, &s)?;
     }
@@ -3414,6 +3429,51 @@ mod tests {
         app_sentinel(&home, "pending", None);
         boot_ok_at(&sp, None).unwrap();
         assert_eq!(app_sentinel_status(&home).as_deref(), Some("ok"));
+    }
+
+    /// Round-3 review, Finding 2. `boot_ok_at` read the sentinel and wrote
+    /// `ok` unconditionally — the one consumer of the state machine that did
+    /// not guard with `is_unconfirmed`. The `HealedNextLaunch` ending exists
+    /// precisely because a USABLE generation can miss the deadline: the
+    /// warden heals, deliberately leaves the running process alone, and that
+    /// process beacons late. `healed` then became `ok`, erasing the only
+    /// durable statement that the birth ended badly, and the ledger was
+    /// stamped `confirmed: true` on a `current` the beaconing process is not
+    /// even running. The same call erased `rollback-failed`. A terminal state
+    /// is somebody else's verdict.
+    #[test]
+    fn boot_ok_does_not_overwrite_a_terminal_sentinel() {
+        for status in ["healed", "ok", "rollback-failed"] {
+            let d = tempfile::tempdir().unwrap();
+            let home = Home::at(d.path().join("loom"));
+            fs::create_dir_all(&home.root).unwrap();
+            let sp = home.sentinel_json();
+            // The disk the late beacon finds: the warden healed to aaa111 and
+            // left the bbb222 window running; its ledger is unconfirmed
+            // because the generation it names never confirmed.
+            crate::generations::write(
+                &home,
+                &crate::generations::Ledger {
+                    current: Some("aaa111".into()),
+                    previous: Some("bbb222".into()),
+                    kept: vec!["aaa111".into(), "bbb222".into()],
+                    keep: 3,
+                    confirmed: false,
+                },
+            )
+            .unwrap();
+            app_sentinel(&home, status, Some("reweave"));
+            boot_ok_at(&sp, Some(&home)).unwrap();
+            assert_eq!(
+                app_sentinel_status(&home).as_deref(),
+                Some(status),
+                "`{status}` is terminal — a late beacon must not rewrite it"
+            );
+            assert!(
+                !crate::generations::read(&home).confirmed,
+                "`{status}`: a generation the beaconing process is not running is not confirmed"
+            );
+        }
     }
 
     #[test]
