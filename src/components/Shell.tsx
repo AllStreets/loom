@@ -93,21 +93,42 @@ export default function Shell() {
   // the sha (recovery.ts dispatches the notice event). Then, once this shell has
   // mounted and first paint settled, markBootOk clears the pending sentinel —
   // THIS boot held, so the last applied edit is confirmed good. Fires once.
+  //
+  // THE GUARD MEANS "THE BEACON HAS FIRED", NOT "WE SCHEDULED IT" (round-4
+  // finding 1). `main.tsx` wraps the app in `<React.StrictMode>`, which in
+  // development double-invokes effects: mount, cleanup, mount. A guard that
+  // tripped on SCHEDULING meant the first mount armed the timer, the cleanup
+  // cancelled it, and the second mount returned early — markBootOk never ran.
+  // It is the only caller of `kernel_boot_ok`, so the pending sentinel was
+  // never cleared and the next dev start hard-reset the tree to the pre-edit
+  // sha: a self-edit that WORKED, thrown away. So every mount schedules
+  // freshly, every cleanup cancels cleanly, and the ref is set at the moment
+  // the beacon actually fires — which makes the confirmation happen once.
   const bootBeaconFired = useRef(false);
+  const bootCheckStarted = useRef(false);
   useEffect(() => {
-    if (bootBeaconFired.current) return;
-    bootBeaconFired.current = true;
-    // Early check — the RecoveryNotice card renders whatever it reports.
-    void runBootCheck();
+    // Early check — the RecoveryNotice card renders whatever it reports. This
+    // one IS once-only: it is fire-and-forget (nothing cancels it) and it
+    // dispatches the recovery notice, which the owner should read once.
+    if (!bootCheckStarted.current) {
+      bootCheckStarted.current = true;
+      void runBootCheck();
+    }
     // Confirm after first paint settles (two rAFs → after layout+paint).
+    let raf2: number | null = null;
     let t: ReturnType<typeof setTimeout> | null = null;
     const raf1 = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        t = setTimeout(() => { void markBootOk(); }, 400);
+      raf2 = requestAnimationFrame(() => {
+        t = setTimeout(() => {
+          if (bootBeaconFired.current) return;
+          bootBeaconFired.current = true;
+          void markBootOk();
+        }, 400);
       });
     });
     return () => {
       cancelAnimationFrame(raf1);
+      if (raf2 !== null) cancelAnimationFrame(raf2);
       if (t) clearTimeout(t);
     };
   }, []);
