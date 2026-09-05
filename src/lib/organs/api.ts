@@ -44,8 +44,12 @@ export type LoomSettingsApi = {
  * all: each dispatches a `loom-body-request` (see bodyGate.ts) and waits for
  * chrome to render the owner's consent card and answer. Round-1 review: organs
  * share the shell's JS realm, so a capability any organ holds is a capability
- * every organ's code can reach — the grant decides who may ask, and only the
- * shell decides what happens.
+ * every organ's code can reach — the grant decides who may ask through this
+ * api, and the card is where the owner decides.
+ *
+ * That is honesty-enforcement, not a sandbox: same-realm code can dispatch the
+ * request itself or skip the api entirely and invoke the Tauri command. See the
+ * docblock in `bodyGate.ts` for the whole statement.
  */
 export type LoomSelfApi = {
   /** `{ mode, genomeSha, generation, threaded, loomhome, loomhomeBytes }`. */
@@ -64,7 +68,16 @@ export type LoomSelfApi = {
   reweave(): Promise<StartResult>;
   /** Ask the owner to become `sha` again. LOOM will close and return. */
   returnTo(sha: string): Promise<void>;
+  /** Arm or disarm the standing yes: after an approved CORE edit, weave without
+   *  a second card. A body decision, so it lives here and not in `settings`. */
+  setAutoReweave(on: boolean): Promise<void>;
 };
+
+/** The one settings key that moves the body, so the body power owns it. */
+export const AUTO_REWEAVE_KEY = "kernel.autoReweave";
+/** Copy law (docs/BRAND.md): fact — hinge — remedy. */
+export const LINE_AUTO_REWEAVE_IS_BODY =
+  "kernel.autoReweave arms a body change — it lives behind the self power, not settings";
 
 export type LoomApi = {
   storage: { get<T>(k: string, fallback: T): T; set(k: string, v: unknown): void; del(k: string): void };
@@ -328,6 +341,12 @@ export function makeLoomApi(
         spend("self");
         return _requestBody("return", organId, String(sha));
       },
+      async setAutoReweave(on) {
+        // A preference, not an act: no card, no budget token. What it costs is
+        // the `self` grant, because arming it is a standing yes about the body.
+        need("self");
+        setSetting(AUTO_REWEAVE_KEY, on ? "on" : "off");
+      },
     },
     pulse: {
       every(ms, fn) {
@@ -358,6 +377,15 @@ export function makeLoomApi(
       },
       set(k, v) {
         need("settings");
+        // `kernel.autoReweave` decides whether an approved core edit weaves the
+        // body with NO card at all. Round-2 review: any organ holding the
+        // generic `settings` grant could arm that from behind a permission the
+        // owner reads as harmless. It is a decision about the body, so it lives
+        // on the `self` power — the grant whose card says this organ may ask
+        // about LOOM's body. (Settings are localStorage-backed and organs share
+        // the realm, so this is honesty-enforcement, not a wall: it keeps the
+        // API from handing the key out, nothing more.)
+        if (k === AUTO_REWEAVE_KEY) throw new Error(LINE_AUTO_REWEAVE_IS_BODY);
         setSetting(k, v);
       },
       async voices() {

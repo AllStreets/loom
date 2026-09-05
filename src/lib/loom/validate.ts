@@ -17,8 +17,10 @@ export const POWERS = ["timeline", "voice", "notify", "pulse"] as const;
  *
  * That split is the round-1 correction. Organs share the shell's JS realm and
  * are honesty-enforced, not sandboxed, so a capability one organ holds is one
- * any organ's code can reach: a grant can decide who may ask, and only chrome
- * can decide what happens. The Settings seed declares `self`; the prompts
+ * any organ's code can reach: a grant decides who may ask through the api, and
+ * the owner's card is where what happens is decided. The card is not a wall —
+ * same-realm code can reach the Tauri bridge directly; `bodyGate.ts` states the
+ * whole threat model. The Settings seed declares `self`; the prompts
  * never teach it, so a built organ does not learn to ask for it. Any manifest
  * that does declare it still passes through the owner's permission card, and
  * `need("self")` gates every call.

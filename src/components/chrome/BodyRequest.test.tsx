@@ -8,12 +8,19 @@
  * never from anything the organ sent.
  */
 
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom";
 import BodyRequest from "./BodyRequest";
-import { requestBody, BodyRequestDeclined, LINE_BUSY } from "../../lib/organs/bodyGate";
+import {
+  BODY_REQUEST_EVENT,
+  BodyRequestDeclined,
+  LINE_BUSY,
+  LINE_NO_CHROME,
+  pendingBodyRequests,
+  requestBody,
+} from "../../lib/organs/bodyGate";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -196,5 +203,172 @@ describe("BodyRequest — one card at a time", () => {
     expect(screen.queryByTestId("consent-thread_consent")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "NOT NOW" }));
     await expect(first.p).rejects.toBeInstanceOf(BodyRequestDeclined);
+  });
+});
+
+/**
+ * Round-2 finding 1: the event detail carried the whole request, and chrome
+ * read `kind` / `sha` / `organId` off that same mutable object at CLICK time —
+ * long after the sentence was composed. Organs share the shell's realm, so any
+ * of them can listen for `loom-body-request`, hold the reference, and change it
+ * between the reading and the act. The card and the act both come from the
+ * claimed record now, which nothing outside this module can reach.
+ */
+describe("BodyRequest — the card and the act read the same claimed record", () => {
+  /** An organ that keeps the event's detail and edits it later. */
+  function eavesdrop() {
+    const held: { detail: Record<string, unknown> | null } = { detail: null };
+    const on = (ev: Event) => {
+      held.detail = (ev as CustomEvent).detail as Record<string, unknown>;
+    };
+    window.addEventListener(BODY_REQUEST_EVENT, on);
+    return { held, off: () => window.removeEventListener(BODY_REQUEST_EVENT, on) };
+  }
+
+  it("a kind swapped after the card is drawn cannot turn a THREAD into a weave", async () => {
+    const a = await mount();
+    const spy = eavesdrop();
+    const { p } = ask("thread", "notes");
+    await act(async () => {});
+    expect(screen.getByTestId("consent-thread_consent")).toBeInTheDocument();
+    // The owner is reading "threading needs the network once" above a THREAD
+    // button. The organ swaps the kind underneath it.
+    if (spy.held.detail) spy.held.detail.kind = "reweave";
+    await userEvent.click(screen.getByRole("button", { name: "THREAD" }));
+    await expect(p).resolves.toBeUndefined();
+    expect(a.thread).toHaveBeenCalledTimes(1);
+    expect(a.reweave).not.toHaveBeenCalled();
+    spy.off();
+  });
+
+  it("a sha swapped after the card is drawn cannot redirect the return", async () => {
+    const a = await mount();
+    const spy = eavesdrop();
+    const { p } = ask("return", "settings", PREV);
+    await act(async () => {});
+    expect(screen.getByTestId("consent-generation_return_consent")).toHaveTextContent("9b8c7d");
+    if (spy.held.detail) spy.held.detail.sha = SHA;
+    await userEvent.click(screen.getByRole("button", { name: "RETURN" }));
+    await expect(p).resolves.toBeUndefined();
+    expect(a.returnTo).toHaveBeenCalledWith(PREV);
+    spy.off();
+  });
+
+  it("the organ that asked cannot make the card name another one", async () => {
+    await mount();
+    // Mutated in the same breath as the dispatch — before the card renders.
+    const on = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as Record<string, unknown>;
+      if (d) d.organId = "clock";
+    };
+    window.addEventListener(BODY_REQUEST_EVENT, on);
+    ask("reweave", "notes");
+    await act(async () => {});
+    expect(screen.getByTestId("consent-note")).toHaveTextContent("notes asked");
+    window.removeEventListener(BODY_REQUEST_EVENT, on);
+  });
+
+  it("a synthetic event with an id nobody issued raises no card", async () => {
+    await mount();
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(BODY_REQUEST_EVENT, {
+          detail: { id: "body-999-forged", kind: "reweave", organId: "loom", sha: SHA },
+        }),
+      );
+    });
+    expect(screen.queryByTestId("body-request")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Round-2 finding 2: identity was read once at mount, so after a packaged
+ * self-edit moved the genome head — the sequence this phase exists for — the
+ * card still named the OLD sha, and `canSwap` was stale with it.
+ */
+describe("BodyRequest — the body is read when the request is claimed", () => {
+  it("a second request names the genome as it is now, not as it was at mount", async () => {
+    const heads = [SHA, PREV];
+    let n = 0;
+    const identity = async () => ({
+      ...(await PACKAGED()),
+      genomeSha: heads[Math.min(n++, heads.length - 1)],
+    });
+    render(<BodyRequest identity={identity} acts={acts()} />);
+    await act(async () => {});
+
+    const first = ask("reweave", "notes");
+    await act(async () => {});
+    expect(screen.getByTestId("consent-reweave_consent")).toHaveTextContent("weave generation 3f2a1c");
+    await userEvent.click(screen.getByRole("button", { name: "NOT NOW" }));
+    await expect(first.p).rejects.toBeInstanceOf(BodyRequestDeclined);
+
+    ask("reweave", "notes");
+    await act(async () => {});
+    expect(screen.getByTestId("consent-reweave_consent")).toHaveTextContent("weave generation 9b8c7d");
+  });
+
+  it("a body that became swappable is not still described as one that cannot swap", async () => {
+    const swaps = [false, true];
+    let n = 0;
+    const identity = async () => ({
+      ...(await PACKAGED()),
+      canSwap: swaps[Math.min(n++, swaps.length - 1)],
+    });
+    render(<BodyRequest identity={identity} acts={acts()} />);
+    await act(async () => {});
+
+    const first = ask("reweave", "notes");
+    await act(async () => {});
+    expect(screen.getByTestId("consent-reweave_consent")).toHaveTextContent(/macOS-only/);
+    await userEvent.click(screen.getByRole("button", { name: "NOT NOW" }));
+    await expect(first.p).rejects.toBeInstanceOf(BodyRequestDeclined);
+
+    ask("reweave", "notes");
+    await act(async () => {});
+    expect(screen.getByTestId("consent-reweave_consent")).toHaveTextContent(
+      "weave generation 3f2a1c — LOOM will close and return",
+    );
+  });
+});
+
+/**
+ * Round-2 finding 3: the double-fire guard was state, and three clicks inside
+ * one React tick all read the same stale `false`. The Companion documents this
+ * exact hazard and guards with a ref; so does this card now.
+ */
+describe("BodyRequest — one press, one act", () => {
+  it("three clicks in a single tick run the orchestration once", async () => {
+    const a = await mount();
+    const { p } = ask("reweave", "notes");
+    await act(async () => {});
+    const btn = screen.getByRole("button", { name: "REWEAVE" });
+    await act(async () => {
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+    });
+    await expect(p).resolves.toBeUndefined();
+    expect(a.reweave).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Round-2 finding 4: unmounting with a card open removed the listener without
+ * answering, so the organ's promise never settled and the pending entry leaked
+ * — reachable from any render throw inside the surrounding ErrorBoundary.
+ */
+describe("BodyRequest — an unmount answers the card it is taking away", () => {
+  it("the organ hears the no-chrome line instead of waiting forever", async () => {
+    const a = acts();
+    const { unmount } = render(<BodyRequest identity={PACKAGED} acts={a} />);
+    await act(async () => {});
+    const { p } = ask("reweave", "notes");
+    await act(async () => {});
+    expect(screen.getByTestId("body-request")).toBeInTheDocument();
+    unmount();
+    await expect(p).rejects.toThrow(LINE_NO_CHROME);
+    expect(pendingBodyRequests()).toBe(0);
+    expect(a.reweave).not.toHaveBeenCalled();
   });
 });

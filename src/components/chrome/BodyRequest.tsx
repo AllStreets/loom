@@ -6,8 +6,8 @@
  * explicitly NOT a security sandbox, so a capability one organ holds is one
  * any organ's code can reach. `loom.self.thread/reweave/returnTo` no longer
  * touch the protected orchestration at all — they dispatch a
- * `loom-body-request` (bodyGate.ts) and wait. This component is the only thing
- * that answers, and the only thing that calls `threadLoom`,
+ * `loom-body-request` (bodyGate.ts) and wait. This component answers them, and
+ * it is the only place in LOOM's own code that calls `threadLoom`,
  * `startReweave` and `returnToGeneration` on an organ's behalf.
  *
  * It renders the SAME consent card the Companion uses, plus a quiet line
@@ -16,9 +16,28 @@
  * can be swapped at all) — never from
  * anything the organ sent. The organ can ask; only the owner decides.
  *
+ * Round-2 review taught this card three things:
+ *   - the request it shows and the request it runs are ONE frozen record,
+ *     claimed from the gate. The event carries only an id, so an organ holding
+ *     the detail has nothing to swap between the sentence and the act;
+ *   - the body is read when a request is CLAIMED, not at mount — a packaged
+ *     self-edit moves the genome head while this component stays mounted, and
+ *     a card naming the previous sha would be a lie;
+ *   - the once-only guard is a ref, not state: three clicks inside one React
+ *     tick all read the same stale `false` (the Companion documents the same
+ *     hazard beside `settledConsents`).
+ *
+ * And it answers on the way out: an unmount with a card open (a render throw
+ * caught by the ErrorBoundary, say) tells the organ there is no shell rather
+ * than leaving its promise pending forever.
+ *
  * One card at a time: a second request while one is open is refused with the
  * calm busy line rather than stacking, so a misbehaving organ cannot bury the
  * screen in cards.
+ *
+ * None of this is a security boundary — organs share the shell's realm and can
+ * reach the Tauri bridge directly. It is honesty-enforcement and owner consent;
+ * see the docblock in `bodyGate.ts`.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -32,9 +51,11 @@ import {
   BODY_REQUEST_EVENT,
   LINE_BUSY,
   LINE_DECLINED,
+  LINE_NO_CHROME,
   answerBodyRequest,
   claimBodyRequest,
   type BodyRequest as Request,
+  type BodyRequestEvent,
 } from "../../lib/organs/bodyGate";
 import {
   LINE_THREAD_CONSENT,
@@ -92,61 +113,76 @@ export default function BodyRequest({
   const rm = useReducedMotion() ?? false;
   const [req, setReq] = useState<Request | null>(null);
   const [id, setId] = useState<Identity | null>(null);
-  const [busy, setBusy] = useState(false);
   // The open request, readable synchronously — a second `loom-body-request`
   // arrives in the same tick and must be refused, not queued behind stale state.
+  // It holds the CLAIMED record: the card's sentence and the act it runs come
+  // from the same frozen object, so the two can never describe different things.
   const open = useRef<Request | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      try {
-        const got = await identity();
-        if (live && got && (got.mode === "dev" || got.mode === "packaged")) setId(got);
-      } catch {
-        // no shell — the dev framing stands, and nothing can be swapped anyway.
-      }
-    })();
-    return () => {
-      live = false;
-    };
-  }, [identity]);
+  // Once-only, in a ref: three clicks inside one React tick would all read the
+  // same stale state and run the act three times.
+  const busy = useRef(false);
+  // The identity read belongs to the request that started it; a later card
+  // must not be painted with an earlier body.
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
 
   useEffect(() => {
     function onRequest(ev: Event) {
-      const detail = (ev as CustomEvent<Request>).detail;
+      const detail = (ev as CustomEvent<BodyRequestEvent>).detail;
       if (!detail || typeof detail.id !== "string") return;
-      if (!(detail.kind === "thread" || detail.kind === "reweave" || detail.kind === "return")) return;
       // Claim first, synchronously — an unclaimed request is refused by the
-      // gate with "there is no shell to ask", which would be a lie here.
-      if (!claimBodyRequest(detail.id)) return;
+      // gate with "there is no shell to ask", which would be a lie here. What
+      // comes back is the gate's own record, not the event's detail.
+      const claimed = claimBodyRequest(detail.id);
+      if (!claimed) return;
       if (open.current) {
-        answerBodyRequest(detail.id, { ok: false, reason: LINE_BUSY });
+        answerBodyRequest(claimed.id, { ok: false, reason: LINE_BUSY });
         return;
       }
-      open.current = detail;
-      setReq(detail);
-      setBusy(false);
+      open.current = claimed;
+      busy.current = false;
+      // Read the body NOW: a packaged self-edit moves the genome head while
+      // this component stays mounted, and the sentence must name what is true
+      // at the moment the owner is asked.
+      void (async () => {
+        let got: Identity | null = null;
+        try {
+          const read = await identityRef.current();
+          if (read && (read.mode === "dev" || read.mode === "packaged")) got = read;
+        } catch {
+          // no shell — the dev framing stands, and nothing can be swapped anyway.
+        }
+        if (open.current !== claimed) return; // answered or unmounted meanwhile
+        setId(got);
+        setReq(claimed);
+      })();
     }
     window.addEventListener(BODY_REQUEST_EVENT, onRequest);
-    return () => window.removeEventListener(BODY_REQUEST_EVENT, onRequest);
+    return () => {
+      window.removeEventListener(BODY_REQUEST_EVENT, onRequest);
+      // Going away with a card open: the organ hears the no-chrome line rather
+      // than waiting on a promise nothing will ever settle.
+      const current = open.current;
+      open.current = null;
+      if (current) answerBodyRequest(current.id, { ok: false, reason: LINE_NO_CHROME });
+    };
   }, []);
 
   function close() {
     open.current = null;
+    busy.current = false;
     setReq(null);
-    setBusy(false);
   }
 
   function choose(confirmed: boolean) {
     const current = open.current;
-    if (!current || busy) return;
+    if (!current || busy.current) return;
+    busy.current = true;
     if (!confirmed) {
       answerBodyRequest(current.id, { ok: false, reason: LINE_DECLINED, declined: true });
       close();
       return;
     }
-    setBusy(true);
     void (async () => {
       try {
         if (current.kind === "thread") {

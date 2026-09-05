@@ -249,6 +249,7 @@ type SelfMock = {
   thread: (onEvent?: (e: TEvent) => void) => Promise<void>;
   reweave: () => Promise<{ ok: boolean; reason?: string }>;
   returnTo: (sha: string) => Promise<void>;
+  setAutoReweave: (on: boolean) => Promise<void>;
 };
 
 const SHA_A = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -264,7 +265,12 @@ const TOOL = (name: string, over: Partial<{ path: string | null; version: string
 });
 
 function threadedDev(over: Record<string, unknown> = {}) {
-  return { mode: "dev", genomeSha: SHA_A, generation: SHA_A, threaded: true, loomhome: "/home/loom", loomhomeBytes: 2_300_000_000, ...over };
+  return { mode: "dev", genomeSha: SHA_A, generation: SHA_A, threaded: true, loomhome: "/home/loom", loomhomeBytes: 2_300_000_000, canSwap: false, ...over };
+}
+
+/** Packaged on macOS: the one body that actually closes and returns. */
+function swappable(over: Record<string, unknown> = {}) {
+  return threadedDev({ mode: "packaged", canSwap: true, ...over });
 }
 
 function selfMock(over: Partial<SelfMock> = {}): SelfMock {
@@ -282,6 +288,7 @@ function selfMock(over: Partial<SelfMock> = {}): SelfMock {
     thread: async () => {},
     reweave: async () => ({ ok: true }),
     returnTo: async () => {},
+    setAutoReweave: async () => {},
     ...over,
   };
 }
@@ -449,13 +456,17 @@ describe("settings seed — LOOM page", () => {
     const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", generation: SHA_B }), reweave }));
     (el.querySelector('[data-action="self-reweave"]') as HTMLButtonElement).click();
     await tick();
-    expect(el.querySelector('[data-testid="loom-reweave-note"]')!.textContent).toContain("you said not now");
+    const note = el.querySelector('[data-testid="loom-reweave-note"]') as HTMLElement;
+    expect(note.textContent).toContain("you said not now");
+    // Round-2 finding 7: the owner's own choice is not a fault, so it is not
+    // painted in the warn token.
+    expect(note.style.color).toBe(toRgb(KIT_TOKENS.t2));
   });
 
   it("generations list rows with the current marked and RETURN on the others; RETURN only asks", async () => {
     const returnTo = vi.fn(async () => {});
     const { el } = await renderSettings(selfMock({
-      identity: async () => threadedDev({ mode: "packaged", generation: SHA_A }),
+      identity: async () => swappable({ generation: SHA_A }),
       generations: async () => [
         { sha: SHA_A, wovenAt: new Date(Date.now() - 2 * 3_600_000).toISOString(), sizeBytes: 42, reason: "reweave", commitSubject: "feat: second weave", isCurrent: true, isPrevious: false },
         { sha: SHA_B, wovenAt: new Date(Date.now() - 26 * 3_600_000).toISOString(), sizeBytes: 41, reason: "threading", commitSubject: "feat: first weave", isCurrent: false, isPrevious: true },
@@ -493,8 +504,28 @@ describe("settings seed — LOOM page", () => {
     const rowB = el.querySelector('[data-testid="loom-generation-' + SHA_B.slice(0, 7) + '"]') as HTMLElement;
     (rowB.querySelector('[data-action="self-return-' + SHA_B.slice(0, 7) + '"]') as HTMLButtonElement).click();
     await tick();
+    const note = rowB.querySelector('[data-testid="loom-return-note-' + SHA_B.slice(0, 7) + '"]') as HTMLElement;
+    expect(note.textContent).toContain("you said not now");
+    expect(note.style.color).toBe(toRgb(KIT_TOKENS.t2));
+  });
+
+  /**
+   * Round-2 finding 7: the row said "the reweave card carries the rail" on a
+   * body that had just been told it would not move.
+   */
+  it("a return on a body that cannot swap says the genome moved and the body stayed", async () => {
+    const { el } = await renderSettings(selfMock({
+      identity: async () => threadedDev({ generation: SHA_A }),
+      generations: async () => [
+        { sha: SHA_A, wovenAt: new Date().toISOString(), sizeBytes: 42, reason: "reweave", commitSubject: "b", isCurrent: true, isPrevious: false },
+        { sha: SHA_B, wovenAt: new Date().toISOString(), sizeBytes: 41, reason: "threading", commitSubject: "a", isCurrent: false, isPrevious: true },
+      ],
+    }));
+    const rowB = el.querySelector('[data-testid="loom-generation-' + SHA_B.slice(0, 7) + '"]') as HTMLElement;
+    (rowB.querySelector('[data-action="self-return-' + SHA_B.slice(0, 7) + '"]') as HTMLButtonElement).click();
+    await tick();
     expect(rowB.querySelector('[data-testid="loom-return-note-' + SHA_B.slice(0, 7) + '"]')!.textContent)
-      .toContain("you said not now");
+      .toBe("returned to " + SHA_B.slice(0, 7) + " — the genome moved; the body stays.");
   });
 
   it("an empty ledger says so plainly", async () => {
@@ -502,15 +533,51 @@ describe("settings seed — LOOM page", () => {
     expect(el.querySelector('[data-testid="loom-generations"]')!.textContent).toContain("no generations yet");
   });
 
-  it("the autoReweave toggle carries the exact copy, reads off when the store does not know the key, and writes kernel.autoReweave", async () => {
-    const { el, store } = await renderSettings(selfMock());
+  it("the autoReweave toggle carries the exact copy on a body that can swap, and arms through the self power", async () => {
+    const setAutoReweave = vi.fn(async () => {});
+    const { el, store } = await renderSettings(selfMock({ identity: async () => swappable(), setAutoReweave }));
     const toggle = el.querySelector('[data-action="self-autoreweave"]') as HTMLElement;
     expect(toggle).not.toBeNull();
     expect(toggle.textContent).toContain("reweave automatically after an approved core edit — LOOM will close and return each time");
     toggle.click();
-    expect(store.get("kernel.autoReweave")).toBe("on");
+    await tick();
+    expect(setAutoReweave).toHaveBeenLastCalledWith(true);
     toggle.click();
-    expect(store.get("kernel.autoReweave")).toBe("off");
+    await tick();
+    expect(setAutoReweave).toHaveBeenLastCalledWith(false);
+    // The key is the body's, not a plain setting — the seed never writes it there.
+    expect(store.has("kernel.autoReweave")).toBe(false);
+  });
+
+  /**
+   * Round-2 finding 5: the toggle promised "LOOM will close and return each
+   * time" on every body. In dev nothing happens at all, and a packaged build
+   * off macOS builds without swapping. The consent lines read `canSwap` from
+   * the core; so does this label now.
+   */
+  it("in dev the toggle does not promise a close and return", async () => {
+    const { el } = await renderSettings(selfMock());
+    const toggle = el.querySelector('[data-action="self-autoreweave"]') as HTMLElement;
+    expect(toggle.textContent).toContain(
+      "reweave automatically after an approved core edit — in dev the body stays; restart tauri dev to become it",
+    );
+  });
+
+  it("off macOS the toggle says the swap is not there", async () => {
+    const { el } = await renderSettings(selfMock({ identity: async () => threadedDev({ mode: "packaged", canSwap: false }) }));
+    const toggle = el.querySelector('[data-action="self-autoreweave"]') as HTMLElement;
+    expect(toggle.textContent).toContain(
+      "reweave automatically after an approved core edit — the swap is macOS-only in this generation; the build and the ledger still work, the body stays",
+    );
+  });
+
+  it("a preference the body refuses is stated, not swallowed", async () => {
+    const setAutoReweave = vi.fn(async () => { throw new Error('permission "self" not granted'); });
+    const { el } = await renderSettings(selfMock({ identity: async () => swappable(), setAutoReweave }));
+    (el.querySelector('[data-action="self-autoreweave"]') as HTMLElement).click();
+    await tick();
+    expect(el.querySelector('[data-testid="loom-autoreweave-note"]')!.textContent)
+      .toContain("the self power isn't granted");
   });
 
   it("the autoReweave toggle reflects a stored on", async () => {

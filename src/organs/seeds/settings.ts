@@ -197,6 +197,16 @@ const ORGAN_JS = `export default {
       if (m.indexOf("desktop shell") !== -1) return "this surface needs the desktop shell";
       return m.replace(/^(http|timeout|parse|git|not found|unsupported): */i, "");
     }
+    // The owner pressing NOT NOW is an answer, not a fault: it is said in the
+    // quiet token, never in warn (round-2 review).
+    var DECLINE_LINE = "you said not now — the body stays as it is";
+    function selfColor(err) {
+      return String(err && err.message || err) === DECLINE_LINE ? ui.tokens.t2 : ui.tokens.warn;
+    }
+    // What this body can actually do, read from the core — the same fact the
+    // consent cards read. Null until the first identity comes back.
+    var bodyId = null;
+    function canSwapNow() { return !!(bodyId && bodyId.mode === "packaged" && bodyId.canSwap); }
     function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
 
     // -- identity -----------------------------------------------------------------
@@ -235,7 +245,7 @@ const ORGAN_JS = `export default {
         }
       }).catch(function(err) {
         reweaveBtn.disabled = false;
-        reweaveNote.style.color = ui.tokens.warn;
+        reweaveNote.style.color = selfColor(err);
         reweaveNote.textContent = selfReason(err);
       });
     });
@@ -296,7 +306,7 @@ const ORGAN_JS = `export default {
         refreshLoomPage();
       }).catch(function(err) {
         threadBtn.disabled = false;
-        logLine(selfReason(err), ui.tokens.warn);
+        logLine(selfReason(err), selfColor(err));
       });
     });
 
@@ -411,10 +421,14 @@ const ORGAN_JS = `export default {
               Promise.resolve().then(function() { return self.returnTo(g.sha); }).then(function() {
                 ret.disabled = false;
                 note.style.color = ui.tokens.t2;
-                note.textContent = "returning to " + short + " — the reweave card carries the rail.";
+                // Only a body that can swap gets a rail to watch; everywhere
+                // else the card just said the body stays, and so does this.
+                note.textContent = canSwapNow()
+                  ? "returning to " + short + " — the reweave card carries the rail."
+                  : "returned to " + short + " — the genome moved; the body stays.";
               }).catch(function(err) {
                 ret.disabled = false;
-                note.style.color = ui.tokens.warn;
+                note.style.color = selfColor(err);
                 note.textContent = selfReason(err);
               });
             });
@@ -437,23 +451,38 @@ const ORGAN_JS = `export default {
       }
     }
     var autoNote = quiet("");
+    autoNote.dataset.testid = "loom-autoreweave-note";
     autoNote.style.marginTop = "6px";
+    // The preference is the body's, not a plain setting: kernel.autoReweave
+    // arms a weave with no card, so it is written through the self power (the
+    // grant whose card says this organ may ask about LOOM's body).
     function writeAuto(on) {
       autoNote.textContent = "";
-      try {
-        settings.set(AUTO_KEY, on ? "on" : "off");
-      } catch (e) {
-        try {
-          settings.set(AUTO_KEY, on ? "true" : "false");
-        } catch (e2) {
-          autoNote.style.color = ui.tokens.warn;
-          autoNote.textContent = "the preference could not be kept — " + String(e2 && e2.message || e2);
-        }
-      }
+      Promise.resolve().then(function() {
+        if (!self) throw new Error('permission "self" not granted');
+        return self.setAutoReweave(on);
+      }).catch(function(err) {
+        autoNote.style.color = selfColor(err);
+        autoNote.textContent = "the preference could not be kept — " + selfReason(err);
+      });
     }
-    var autoToggle = ui.toggle("reweave automatically after an approved core edit — LOOM will close and return each time", readAuto(), writeAuto);
+    // The same three truths the consent lines tell, read from the core rather
+    // than promised blind: a dev body does not swap, and off macOS neither does
+    // a packaged one (round-2 review).
+    var AUTO_HEAD = "reweave automatically after an approved core edit";
+    function autoLabel() {
+      if (!bodyId) return AUTO_HEAD;
+      if (bodyId.mode === "dev") return AUTO_HEAD + " — in dev the body stays; restart tauri dev to become it";
+      if (!bodyId.canSwap) return AUTO_HEAD + " — the swap is macOS-only in this generation; the build and the ledger still work, the body stays";
+      return AUTO_HEAD + " — LOOM will close and return each time";
+    }
+    var autoToggle = ui.toggle(autoLabel(), readAuto(), writeAuto);
     autoToggle.dataset.action = "self-autoreweave";
     autoToggle.style.marginTop = "8px";
+    var autoLabelEl = autoToggle.querySelector("span");
+    function refreshAutoLabel() {
+      if (autoLabelEl) autoLabelEl.textContent = autoLabel();
+    }
     loomPage.appendChild(autoToggle);
     loomPage.appendChild(autoNote);
 
@@ -464,6 +493,9 @@ const ORGAN_JS = `export default {
 
     // -- fill ---------------------------------------------------------------------
     function renderIdentity(id) {
+      // Everything that describes what a body change will DO reads this.
+      bodyId = id;
+      refreshAutoLabel();
       clear(identityBlock);
       identityBlock.appendChild(ui.keyval([
         ["mode", id.mode],
@@ -1314,15 +1346,18 @@ const TEST_JS = `export const tests = [
     },
   },
   {
-    name: "autoReweave toggle writes kernel.autoReweave",
+    name: "autoReweave toggle arms the body through the self power",
     fn: async function({ el, loom, assert }) {
       await new Promise(function(r) { setTimeout(r, 50); });
       var toggle = el.querySelector('[data-action="self-autoreweave"]');
       assert(toggle !== null, "autoReweave toggle exists");
+      assert(toggle.textContent.indexOf("in dev the body stays") !== -1, "the label tells this body's truth");
       toggle.click();
-      assert(loom.settings.get("kernel.autoReweave") === "on", "toggle on writes on");
+      await new Promise(function(r) { setTimeout(r, 10); });
+      assert(loom.settings.get("kernel.autoReweave") === "on", "toggle on arms it");
       toggle.click();
-      assert(loom.settings.get("kernel.autoReweave") === "off", "toggle off writes off");
+      await new Promise(function(r) { setTimeout(r, 10); });
+      assert(loom.settings.get("kernel.autoReweave") === "off", "toggle off disarms it");
     },
   },
   {

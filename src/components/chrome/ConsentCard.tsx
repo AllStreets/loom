@@ -5,8 +5,9 @@
  * the conversation when the owner says "reweave yourself"; `BodyRequest.tsx`
  * renders the same card, shell-owned, when an ORGAN asks through the `self`
  * power. Round-1 review: an organ that could reach the swap directly meant the
- * grant card was doing work it was never a wall for. Now every path to the
- * body ends at this card, and only chrome acts on the answer.
+ * grant card was doing work it was never a wall for. Now every path LOOM itself
+ * offers to the body ends at this card, and chrome acts on the answer. It is
+ * the owner's consent, not a security boundary — see `bodyGate.ts`.
  *
  * Accent-soft panel, uppercase-mono eyebrow and actions, calm lowercase line.
  * Tokens only, no exclamation marks (docs/BRAND.md).
