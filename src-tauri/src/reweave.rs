@@ -290,6 +290,47 @@ fn running() -> &'static str {
     loomhome::genome_sha()
 }
 
+/// Re-pack the genome the app carries so it names the body just woven.
+///
+/// `beforeBuildCommand` writes `Contents/Resources/genome/{genome.bundle,
+/// genome.json}` once, when the app is first built. A reweave replaces only the
+/// executable, so without this the carried genome ages out from under the body.
+/// Runs at `stage`, before the swap re-signs the bundle.
+fn restage_genome(
+    runner: &mut dyn Runner,
+    p: &mut Progress,
+    app_path: &Path,
+    source: &Path,
+    target: &str,
+    tools: &dyn Fn(&str) -> Option<PathBuf>,
+) -> Result<(), Failed> {
+    let git = tools("git")
+        .ok_or_else(|| failed("git is missing".into(), LoomError::NotFound("git".into())))?;
+    let git = git.to_string_lossy().into_owned();
+    let dir = app_path.join("Contents").join("Resources").join("genome");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| failed(e.to_string(), LoomError::Git(e.to_string())))?;
+    let bundle = dir.join("genome.bundle");
+    let bundle_s = bundle.to_string_lossy().into_owned();
+    let out = run(
+        runner,
+        p,
+        "stage",
+        &[&git, "bundle", "create", &bundle_s, "--all"],
+        source,
+        source,
+        &[],
+    )?;
+    if out.code != 0 {
+        let e = LoomError::Git(format!("git bundle: {}", out.stderr));
+        return Err(failed(format!("git bundle: {}", out.stderr), e));
+    }
+    // The manifest the seed reads to decide which sha to check out.
+    let meta = serde_json::json!({ "sha": target, "createdAt": generations::now_rfc3339() });
+    crate::threads::write_json_atomic(&dir.join("genome.json"), &meta)
+        .map_err(|e| failed(e.to_string(), e))
+}
+
 /// `reweave_start`'s rules (spec §Reweave): threaded; the voice engine's
 /// build cache still on the machine; this body able to name itself; and in
 /// packaged mode the genome's HEAD must differ from the running body unless
@@ -519,6 +560,25 @@ fn job_steps(
                     .map_err(|e| failed(format!("the woven body could not be signed — {e}; {UNTOUCHED}"), e))?;
             } else {
                 p.line("codesign skipped — not macOS");
+            }
+
+            // The genome the app CARRIES is re-staged to match the body it is
+            // about to become. Without this the bundle keeps the sha the app
+            // was first built at forever, so if `loomhome/source` is ever
+            // removed, the seed re-clones that bundle and — following the
+            // bundle's own sha, as it must — rewinds the genome past every
+            // self-edit while the body is generation N. Best effort: a body
+            // that built is worth more than a bundle that did not, and the
+            // swap's own re-sign covers whatever this wrote.
+            if let Some(layout) = ctx.layout.as_ref() {
+                match restage_genome(runner, p, &layout.app_path, source, target, ctx.tools) {
+                    Ok(()) => p.line("the carried genome now matches the woven body"),
+                    Err(e) => p.line(&format!(
+                        "the carried genome could not be re-staged — {}; the body is unaffected, \
+                         but a re-seed would rewind it",
+                        e.outcome
+                    )),
+                }
             }
 
             if ctx.mode == Mode::Dev {
@@ -1103,6 +1163,20 @@ mod tests {
         assert!(ledger.current.is_none(), "dev never swaps — current stays unset");
         let sign = fx.argv("codesign");
         assert_eq!(sign, vec!["--force", "--deep", "--sign", "-", fx.home.generation_exe(&fx.head).to_str().unwrap()]);
+        // The genome the app CARRIES was re-staged to name the woven body.
+        // Without this the bundle keeps the sha the app was first built at, so
+        // a later re-seed would rewind the genome past every self-edit while
+        // the body is generation N.
+        let carried = fx.lay.app_path.join("Contents/Resources/genome");
+        assert!(carried.join("genome.bundle").is_file(), "the bundle is re-packed at stage");
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(carried.join("genome.json")).unwrap()).unwrap();
+        assert_eq!(meta["sha"], fx.head, "the carried manifest names the woven body");
+        // A real clone of what was written lands on that sha — the seed's contract.
+        let out = tempfile::tempdir().unwrap();
+        git(&["clone", "-q", carried.join("genome.bundle").to_str().unwrap(), "g"], out.path());
+        assert_eq!(git(&["rev-parse", "HEAD"], &out.path().join("g")), fx.head);
+
         // Nothing beyond stage ran: the live exe and the warden file are untouched.
         assert_eq!(std::fs::read_to_string(&fx.lay.exe_path).unwrap(), "old body");
         assert!(!fx.home.warden_json().exists());
