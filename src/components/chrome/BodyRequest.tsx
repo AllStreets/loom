@@ -6,8 +6,8 @@
  * explicitly NOT a security sandbox, so a capability one organ holds is one
  * any organ's code can reach. `loom.self.thread/reweave/returnTo` no longer
  * touch the protected orchestration at all — they dispatch a
- * `loom-body-request` (bodyGate.ts) and wait. This component is the only thing
- * that answers, and the only thing that calls `threadLoom`,
+ * `loom-body-request` (bodyGate.ts) and wait. This component answers them, and
+ * it is the only place in LOOM's own code that calls `threadLoom`,
  * `startReweave` and `returnToGeneration` on an organ's behalf.
  *
  * It renders the SAME consent card the Companion uses, plus a quiet line

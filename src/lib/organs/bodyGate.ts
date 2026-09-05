@@ -1,5 +1,6 @@
 /**
- * bodyGate.ts — an organ may ASK about LOOM's body; only chrome may move it.
+ * bodyGate.ts — an organ ASKS about LOOM's body; the owner's card is where it
+ * moves. Honesty-enforcement and consent, not a security boundary (see below).
  *
  * Round-1 review found the `self` power handing any organ the binary swap
  * behind a one-click pill: `loom.self.reweave()` reached the protected

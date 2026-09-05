@@ -166,6 +166,56 @@ calling it shipped.**
 - **The genome bundle carries the repo's whole history**, including the deck
   scratch removed on this branch. Untracking stops it reaching a fresh
   checkout's working tree; the blobs remain in history.
+- **The body-consent card is not a wall (round-2).** `bodyGate` + `BodyRequest`
+  make every path LOOM itself offers end at a card the owner reads, and the card
+  can no longer describe one act while performing another. It is not a security
+  boundary: organs run in the shell's JS realm, so organ code can dispatch a
+  `loom-body-request` itself, synthesise a click on the card, answer a card it
+  did not raise, or skip the card entirely and call
+  `window.__TAURI_INTERNALS__.invoke("reweave_start")` with no grant at all.
+  This is the same statement already made about the kernel-edit whitelist. A
+  real wall would put the decision outside the webview realm — a native
+  confirmation issued by the Rust core before `reweave_start` does anything —
+  and that does not exist yet.
+- **`kernel.autoReweave` moved to the `self` power, not out of organs' reach
+  (round-2).** The key arms a card-free weave after an approved core edit, so
+  `loom.settings.set` refuses it and `loom.self.setAutoReweave` writes it: the
+  generic `settings` grant no longer carries a body decision. It is still an
+  organ API, and settings are localStorage-backed in a shared realm, so this is
+  capability hygiene rather than a wall. Taking it out of organs entirely needs
+  a chrome-owned control to replace the Settings toggle (the KernelDiff card
+  does at least disclose, at approval time, that the weave will start on its
+  own).
+
+### Resolved in the round-2 review (2026-09-04)
+
+Round 1 moved the consent for a body change into shell-owned chrome. Round 2
+broke that gate; every finding was reproduced by an executed test first.
+
+- **The card's sentence and the act could be made to disagree.** The
+  `loom-body-request` detail carried `{kind, organId, sha}` and chrome read that
+  same mutable object again when the owner clicked — so an organ listening for
+  the event could hold the reference and swap it in between: a THREAD card
+  running a binary swap, a return consent naming one sha calling `returnTo` with
+  another, a card naming an innocent organ. The event carries an opaque id now;
+  `claimBodyRequest` returns the module-private record, frozen, and the card
+  composes and acts from that alone.
+- **Identity is read when a request is claimed, not at mount** — a packaged
+  self-edit moves the genome head while the card stays mounted, and the card was
+  naming the old sha with a stale `canSwap` beside it.
+- **The double-fire guard is a ref**, like the Companion's: three clicks in one
+  React tick all read the same stale state and ran the act three times.
+- **An unmount with a card open answers the organ** with the no-chrome line
+  instead of leaving its promise pending and the entry leaked.
+- **`kernel.autoReweave` left the generic `settings` grant** (above), and the
+  Settings toggle's label reads `canSwap` from the core instead of promising a
+  close-and-return that dev and non-macOS builds will not do.
+- **The owner's own NOT NOW is no longer painted in the warn token**, the
+  post-return line no longer promises a rail on a body that just stayed, and the
+  sandbox's `identity()` returns `canSwap` like the shell does.
+- **Three overclaims corrected** — `bodyGate.ts`, this file, and the spec said
+  or implied the card was the only path to the orchestration. It is not; see the
+  residual above.
 
 ### Resolved in the round-1 review (2026-09-04)
 
@@ -186,10 +236,12 @@ calling it shipped.**
   panicking job returns its slot.
 - The streaming runner's timeout fires even while a child keeps printing —
   before this, reweave and threading had no timeout at all.
-- An organ may now only *ask* for a body change; shell-owned chrome asks the
-  owner and is the only caller of the orchestration. That chrome is protected,
-  as are the organ power seam, the manifest wall, the reweave card and the
-  settings seed.
+- An organ that goes through LOOM's own API can now only *ask* for a body
+  change: `loom.self.thread/reweave/returnTo` dispatch a request and shell-owned
+  chrome renders the owner's consent card before anything runs. **The card is
+  honesty-enforcement and owner consent, not a security boundary** — see the
+  residual below. That chrome is protected, as are the organ power seam, the
+  manifest wall, the reweave card and the settings seed.
 - `autoReweave` honours `isCore`; a refused weave is spoken rather than
   swallowed; the point-of-return warning arrives while CANCEL still works; the
   consent line tells the truth in dev and off macOS, reading `canSwap` from the

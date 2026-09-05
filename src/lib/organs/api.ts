@@ -44,8 +44,12 @@ export type LoomSettingsApi = {
  * all: each dispatches a `loom-body-request` (see bodyGate.ts) and waits for
  * chrome to render the owner's consent card and answer. Round-1 review: organs
  * share the shell's JS realm, so a capability any organ holds is a capability
- * every organ's code can reach — the grant decides who may ask, and only the
- * shell decides what happens.
+ * every organ's code can reach — the grant decides who may ask through this
+ * api, and the card is where the owner decides.
+ *
+ * That is honesty-enforcement, not a sandbox: same-realm code can dispatch the
+ * request itself or skip the api entirely and invoke the Tauri command. See the
+ * docblock in `bodyGate.ts` for the whole statement.
  */
 export type LoomSelfApi = {
   /** `{ mode, genomeSha, generation, threaded, loomhome, loomhomeBytes }`. */

@@ -458,10 +458,13 @@ describe("power: self — the three acts only ever ASK", () => {
     await expect(api.self.reweave()).resolves.toEqual({ ok: false, reason: LINE_NO_CHROME });
   });
 
-  it("api.ts holds no path to the orchestration at all — the ask is the only door", async () => {
-    // Structural, not behavioural: the finding was that an organ could reach
-    // `startReweave` through the api at all. If someone reintroduces the import
-    // this fails, whatever the call site looks like.
+  it("api.ts holds no path to the orchestration — the ask is the only door the api opens", async () => {
+    // Structural, not behavioural, and NOT proof of a wall: organs share the
+    // shell's realm and can reach the Tauri bridge directly, card or no card
+    // (see the bodyGate docblock). What this pins is narrower and still worth
+    // pinning — the api LOOM hands an organ does not itself import the
+    // orchestration, so the ask stays the only door the API offers. If someone
+    // reintroduces the import this fails, whatever the call site looks like.
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
     const src = await fs.readFile(path.resolve("src/lib/organs/api.ts"), "utf8");
