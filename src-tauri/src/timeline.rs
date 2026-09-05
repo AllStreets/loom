@@ -34,7 +34,7 @@ target/
 worktrees/
 generations/
 voice/
-*.json
+/*.json
 ";
 
 pub fn ensure_repo(p: &Path) -> Result<(), LoomError> {
@@ -188,8 +188,8 @@ mod tests {
         fs::write(p.join("threads.json"), "{}").unwrap();
         fs::write(p.join("generations.json"), "{}").unwrap();
 
-        // Prove the PATHSPEC on its own: remove the ignore file so it cannot
-        // be the thing doing the work. Both walls are tested, separately.
+        // Prove the PATHSPEC on its own: remove the ignore file so it cannot be
+        // the thing doing the work. Both walls are tested, separately.
         assert!(p.join(".gitignore").is_file(), "ensure_repo must write the guard");
         fs::remove_file(p.join(".gitignore")).unwrap();
 
@@ -208,5 +208,55 @@ mod tests {
         .unwrap();
 
         assert_eq!(staged, vec!["organs/notes/organ.js".to_string()]);
+    }
+
+    /// The guard must not eat what the timeline is FOR. `*.json` with no
+    /// leading slash matches at EVERY depth, so it silently dropped each
+    /// organ's `manifest.json` — the file carrying its declared powers — from
+    /// the timeline on every fresh install, and a rollback would have restored
+    /// an organ's code without it. Anchored to the loomhome root now.
+    #[test]
+    fn the_guard_does_not_eat_organ_manifests() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        ensure_repo(p).unwrap();
+        assert!(p.join(".gitignore").is_file(), "the guard must be in place for this test");
+
+        fs::create_dir_all(p.join("organs/notes")).unwrap();
+        for (rel, body) in [
+            ("organs/notes/manifest.json", "{\"id\":\"notes\"}"),
+            ("organs/notes/organ.js", "v1"),
+            ("organs/notes/test.js", "t"),
+        ] {
+            fs::write(p.join(rel), body).unwrap();
+        }
+        // The loomhome JSON at the ROOT is still ignored — that is what the
+        // pattern is for.
+        fs::write(p.join("generations.json"), "{}").unwrap();
+
+        let sha = commit_all(p, "organ: notes").unwrap();
+        assert_ne!(sha, "nochange");
+
+        let repo = Repository::open(p).unwrap();
+        let tree = repo.find_commit(git2::Oid::from_str(&sha).unwrap()).unwrap().tree().unwrap();
+        let mut staged: Vec<String> = Vec::new();
+        tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+            if entry.kind() == Some(git2::ObjectType::Blob) {
+                staged.push(format!("{root}{}", entry.name().unwrap_or("")));
+            }
+            git2::TreeWalkResult::Ok
+        })
+        .unwrap();
+        staged.sort();
+
+        assert_eq!(
+            staged,
+            vec![
+                "organs/notes/manifest.json".to_string(),
+                "organs/notes/organ.js".to_string(),
+                "organs/notes/test.js".to_string(),
+            ],
+            "all three of an organ's files belong in the timeline; loomhome's own JSON does not"
+        );
     }
 }
