@@ -14,7 +14,11 @@
 //!     `RING_LINES` lines per stream so a runaway build cannot exhaust memory.
 //!   - `#[cfg(unix)]` `process_group(0)` so the child is its own group leader;
 //!     on timeout AND on drop we `kill(-pgid, SIGKILL)` to take the WHOLE tree
-//!     (npx → tsc/vitest grandchildren) down, not just the npx shim.
+//!     (npx → tsc/vitest grandchildren) down, not just the npx shim. The
+//!     honest limit: a child that exits CLEANLY is reaped, not signalled, so
+//!     a grandchild it backgrounded and left behind survives. None of LOOM's
+//!     own steps background anything; the group kill is the wall for the
+//!     paths that go wrong, not a promise about the ones that go right.
 //!
 //! `run_checked_env` is the same runner with a fixed list of env pairs the
 //! caller composes from constants and LOOM-owned paths. `run_checked_env_stream`
@@ -23,7 +27,10 @@
 //! pgid so `thread_cancel` / reweave-cancel can take the tree down from
 //! another thread. There is ONE global `JOB` slot: threading and reweave can
 //! never run at once, and a job holds it through a `SlotGuard` so a panicking
-//! job thread frees it on the way out. `run_detached` is the one exception to
+//! job thread frees it on the way out. Each tenancy is named by a `JobToken`,
+//! and `kill(token)` refuses every token but the one currently held — so a
+//! cancel that arrives after its own job ended cannot land on the next one.
+//! `run_detached` is the one exception to
 //! "wait and kill":
 //! it spawns a process meant to outlive us (the warden, the relaunch) and
 //! returns only its pid.
@@ -87,8 +94,16 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        // Safety net: if we return/panic before an explicit reap, take the tree
-        // down. No orphan process group ever survives run_checked.
+        // Safety net: if we return/panic before an explicit reap, take the
+        // tree down. That covers every path out that did NOT end in a clean
+        // exit — timeout, wait error, escape, unwind.
+        //
+        // It does not cover the clean-exit path, and does not claim to: a
+        // child that exits 0 is reaped, `reaped` is set, and nothing is
+        // signalled — so a grandchild it backgrounded and left behind keeps
+        // running. `a_clean_exit_leaves_a_backgrounded_grandchild_alive`
+        // pins that. LOOM's own steps (npm, cargo, git) do not background
+        // anything, which is why this is a stated limit and not a hole.
         self.kill_tree();
     }
 }
@@ -247,15 +262,30 @@ pub fn run_checked_env(
 
 // ── The job slot ──────────────────────────────────────────────────────────────
 
+/// The name of one job's tenancy of the slot. Monotonic, never reused, and
+/// never zero — zero means "no job". A cancel carries the token of the job it
+/// means to stop, so a kill that arrives after that job ended cannot land on
+/// whichever job took the slot next.
+pub type JobToken = u64;
+
 /// One reusable slot for a long background job (threading now, reweave
-/// later). Holds whether a job is in flight and, once its child is spawned,
-/// the child's pgid so `kill` can take the whole tree down from another
-/// thread. There is exactly one global `JOB`, so threading and reweave can
-/// never run at once.
+/// later). Holds whether a job is in flight, the token naming that tenancy
+/// and, once its child is spawned, the child's pgid so `kill` can take the
+/// whole tree down from another thread. There is exactly one global `JOB`, so
+/// threading and reweave can never run at once.
+struct SlotState {
+    held: bool,
+    /// The pgid of the running child. It is its own group leader
+    /// (`process_group(0)`), so pgid == pid.
+    pid: Option<u32>,
+    /// The token of the job currently holding the slot; 0 when free.
+    token: JobToken,
+    /// The last token handed out, so the next is always new.
+    issued: JobToken,
+}
+
 pub struct Slot {
-    /// `(held, pgid of the running child)`. The child is its own group
-    /// leader (`process_group(0)`), so pgid == pid.
-    state: Mutex<(bool, Option<u32>)>,
+    state: Mutex<SlotState>,
     /// Set by `kill`; cleared by `try_take` / `release`. Lets the job's owner
     /// tell "cancelled" from "failed on its own".
     cancelled: AtomicBool,
@@ -263,48 +293,59 @@ pub struct Slot {
 
 impl Slot {
     pub const fn new() -> Slot {
-        Slot { state: Mutex::new((false, None)), cancelled: AtomicBool::new(false) }
+        Slot {
+            state: Mutex::new(SlotState { held: false, pid: None, token: 0, issued: 0 }),
+            cancelled: AtomicBool::new(false),
+        }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, (bool, Option<u32>)> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, SlotState> {
         // A poisoned slot is a job thread that panicked mid-step; the state
-        // itself is two plain values, still meaningful.
+        // itself is four plain values, still meaningful.
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Claim the slot. `false` if a job is already in flight.
-    pub fn try_take(&self) -> bool {
+    /// Claim the slot, answering with the token that names this tenancy.
+    /// `None` if a job is already in flight.
+    pub fn try_take(&self) -> Option<JobToken> {
         let mut s = self.lock();
-        if s.0 {
-            return false;
+        if s.held {
+            return None;
         }
-        *s = (true, None);
+        s.issued += 1;
+        s.held = true;
+        s.pid = None;
+        s.token = s.issued;
         self.cancelled.store(false, Ordering::SeqCst);
-        true
+        Some(s.token)
     }
 
     /// Record the running child's pgid. Ignored when the slot is not held —
     /// a stray spawn must never become killable by a job it is not part of.
     pub fn set_pid(&self, pid: u32) {
         let mut s = self.lock();
-        if s.0 {
-            s.1 = Some(pid);
+        if s.held {
+            s.pid = Some(pid);
         }
     }
 
     /// Forget the child (it was reaped); the slot stays held.
     pub fn clear_pid(&self) {
-        self.lock().1 = None;
+        self.lock().pid = None;
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn pid(&self) -> Option<u32> {
-        self.lock().1
+        self.lock().pid
     }
 
     /// Free the slot for the next job.
     pub fn release(&self) {
-        *self.lock() = (false, None);
+        let mut s = self.lock();
+        s.held = false;
+        s.pid = None;
+        s.token = 0;
+        drop(s);
         self.cancelled.store(false, Ordering::SeqCst);
     }
 
@@ -315,8 +356,21 @@ impl Slot {
     /// Group-kill the running child's tree (unix), if any, and mark the job
     /// cancelled. The runner that owns the child reaps it and returns
     /// `code: -1`; the job's owner then reads `cancelled()`.
-    pub fn kill(&self) {
-        let pid = self.lock().1;
+    ///
+    /// `token` names the job the caller means to stop. A cancel command reads
+    /// its own in-flight flag and then calls here, and between those two the
+    /// job can end and the other subsystem can claim the slot — so a token
+    /// that is not the one currently held does nothing at all, not even the
+    /// cancel mark. Without that, threading's stop button could group-kill a
+    /// weave, or a weave's cancel could kill the ceremony's `npm ci`.
+    pub fn kill(&self, token: JobToken) {
+        let pid = {
+            let s = self.lock();
+            if token == 0 || s.token != token {
+                return;
+            }
+            s.pid
+        };
         self.cancelled.store(true, Ordering::SeqCst);
         if let Some(pid) = pid {
             #[cfg(unix)]
@@ -341,29 +395,28 @@ pub static JOB: Slot = Slot::new();
 /// would answer "already in flight" until the app restarted.
 ///
 /// Hold it for the whole life of the job thread; never call `release`
-/// yourself while one is alive.
-///
-/// TODO(rebirth, other agent's file): `reweave.rs` still takes and releases
-/// `JOB` by hand in `spawn_job` / `reweave_start` / `generations_return`, so a
-/// panicking weave leaks the slot exactly as a panicking ceremony did. It
-/// should hold a `SlotGuard` the way `threads::thread_loom` now does.
+/// yourself while one is alive. Both `threads::thread_loom` and
+/// `reweave::spawn_job` hold one.
 pub struct SlotGuard<'a> {
     slot: &'a Slot,
+    token: JobToken,
 }
 
 impl<'a> SlotGuard<'a> {
     /// Claim `slot`, or `None` when a job is already in flight.
     pub fn take(slot: &'a Slot) -> Option<SlotGuard<'a>> {
-        if slot.try_take() {
-            Some(SlotGuard { slot })
-        } else {
-            None
-        }
+        slot.try_take().map(|token| SlotGuard { slot, token })
     }
 
     /// The slot being held — for `set_pid` / `cancelled` while the job runs.
     pub fn slot(&self) -> &'a Slot {
         self.slot
+    }
+
+    /// The token naming this tenancy. A cancel command carries it so its kill
+    /// can only reach the job it was issued for.
+    pub fn token(&self) -> JobToken {
+        self.token
     }
 }
 
@@ -514,9 +567,15 @@ fn stream_impl(
         // Evaluated on EVERY iteration, not only when the channel is idle. A
         // chatty child — `cargo build`, `npm ci`, every long step here — hands
         // us a line on each poll and takes the `Ok` arm above; a timeout that
-        // only fires when the channel goes quiet is no timeout at all. An
-        // exited child broke out above, so reaching here means it still runs.
+        // only fires when the channel goes quiet is no timeout at all.
         if start.elapsed() >= timeout {
+            // …but the `Ok` arm is also how a backlog drains after the child
+            // has already exited, and a drain is not a run. Ask the child
+            // first: one that is gone gets its output and its exit code, not
+            // a Timeout that discards a successful build.
+            if let Ok(Some(status)) = guard.child.try_wait() {
+                break status;
+            }
             guard.kill_tree();
             if let Some(s) = slot {
                 s.clear_pid();
@@ -813,14 +872,18 @@ mod tests {
     #[test]
     fn slot_refuses_a_second_job() {
         let slot = Slot::new();
-        assert!(slot.try_take(), "a free slot is taken");
-        assert!(!slot.try_take(), "a held slot refuses a second job");
+        let first = slot.try_take().expect("a free slot is taken");
+        assert!(slot.try_take().is_none(), "a held slot refuses a second job");
         slot.set_pid(4242);
         assert_eq!(slot.pid(), Some(4242));
         slot.release();
         assert_eq!(slot.pid(), None, "release forgets the pid");
-        assert!(slot.try_take(), "released slot is free again");
+        let second = slot.try_take().expect("released slot is free again");
+        assert!(second > first, "tokens are monotonic and never reused");
         slot.release();
+        // A kill for a job nobody holds is nothing at all.
+        slot.kill(second);
+        assert!(!slot.cancelled(), "a kill on a free slot marks nothing");
     }
 
     #[test]
@@ -832,7 +895,7 @@ mod tests {
         });
         assert!(job.join().is_err(), "the job thread panicked");
         assert!(
-            slot.try_take(),
+            slot.try_take().is_some(),
             "a panicking job must not strand the slot — every later weave would answer IN_FLIGHT until restart"
         );
         slot.release();
@@ -844,11 +907,12 @@ mod tests {
         {
             let held = SlotGuard::take(slot).expect("a free slot is taken");
             assert!(SlotGuard::take(slot).is_none(), "a held slot refuses a second job");
+            assert!(held.token() > 0, "a held slot names its tenancy");
             held.slot().set_pid(77);
             assert_eq!(slot.pid(), Some(77));
         }
         assert_eq!(slot.pid(), None, "drop released the slot");
-        assert!(slot.try_take(), "the slot is free again");
+        assert!(slot.try_take().is_some(), "the slot is free again");
         slot.release();
     }
 
@@ -857,7 +921,7 @@ mod tests {
     fn slot_kill_takes_the_running_job_down() {
         let dir = tempfile::tempdir().unwrap();
         let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
-        assert!(slot.try_take());
+        let token = slot.try_take().expect("a free slot is taken");
         let cwd = dir.path().to_path_buf();
         let job = std::thread::spawn(move || {
             run_job_stream(
@@ -876,12 +940,124 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(slot.pid().is_some(), "runner registers its pid in the slot");
-        slot.kill();
+        slot.kill(token);
         let out = job.join().unwrap().unwrap();
         assert_eq!(out.code, -1, "killed by signal → -1");
         assert!(start.elapsed() < Duration::from_secs(10));
         assert!(slot.cancelled(), "kill marks the job cancelled");
         slot.release();
         assert!(!slot.cancelled(), "release clears the cancel mark");
+    }
+
+    /// Round-2 review, Finding 5. The elapsed check runs on the `Ok(line)`
+    /// arm too, so a child that has ALREADY EXITED while its backlog is
+    /// still draining could cross the deadline and have its whole `ExecOut`
+    /// discarded as a timeout. A drain is not a run.
+    #[cfg(unix)]
+    #[test]
+    fn a_drain_after_the_child_exits_is_never_a_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut n = 0usize;
+        // The child prints 400 lines and exits 0 at once; the consumer is
+        // slow, so the deadline passes while only the backlog is left.
+        let res = run_checked_env_stream(
+            &["sh", "-c", "for i in $(seq 1 400); do echo line$i; done; exit 0"],
+            dir.path(),
+            dir.path(),
+            Duration::from_millis(150),
+            &[],
+            &mut |_| {
+                n += 1;
+                std::thread::sleep(Duration::from_millis(1));
+            },
+        );
+        let out = res.expect("a successful run must not be discarded as a timeout");
+        assert_eq!(out.code, 0, "the child exited 0");
+        assert!(n >= 400, "every line was delivered, saw {n}");
+        assert!(out.stdout.contains("line400"), "the tail is kept: {:?}", out.stdout);
+    }
+
+    /// Round-2 review, Finding 3. Check-then-kill is not atomic: a cancel
+    /// reads its own flag, then calls the shared `JOB.kill()`. Between those
+    /// the job can end and the OTHER subsystem can take the slot — and the
+    /// stale kill lands on it. The token is the wall: a kill naming a job
+    /// that no longer holds the slot does nothing at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_kill_cannot_land_on_the_next_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let slot: &'static Slot = Box::leak(Box::new(Slot::new()));
+
+        // Job A takes the slot and ends.
+        let stale = slot.try_take().expect("a free slot is taken");
+        slot.release();
+
+        // Job B takes it next and starts a child.
+        let fresh = slot.try_take().expect("the released slot is free again");
+        assert_ne!(stale, fresh, "each job gets its own token");
+        let cwd = dir.path().to_path_buf();
+        let job = std::thread::spawn(move || {
+            run_job_stream(
+                slot,
+                &["sh", "-c", "sleep 30"],
+                &cwd,
+                &cwd,
+                Duration::from_secs(60),
+                &[],
+                &mut |_| {},
+            )
+        });
+        let start = Instant::now();
+        while slot.pid().is_none() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid = slot.pid().expect("job B registered its child");
+
+        // Job A's cancel arrives late. It must not touch job B.
+        slot.kill(stale);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!slot.cancelled(), "a stale kill must not mark the live job cancelled");
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+        assert!(alive, "job B's child {pid} must survive a kill meant for job A");
+
+        // B's own cancel still works.
+        slot.kill(fresh);
+        let out = job.join().unwrap().unwrap();
+        assert_eq!(out.code, -1, "the job's own kill still takes it down");
+        assert!(slot.cancelled());
+        slot.release();
+    }
+
+    /// Round-2 review, Finding 7. The Guard's group kill covers the timeout
+    /// and error paths; a child that exits CLEANLY is never group-killed, so
+    /// a grandchild it backgrounded outlives `run_checked`. The module doc
+    /// used to claim otherwise. This pins what is actually true.
+    #[cfg(unix)]
+    #[test]
+    fn a_clean_exit_leaves_a_backgrounded_grandchild_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        // The grandchild's stdio is closed, so it does not hold the pipes open
+        // — the runner returns the moment the shell exits, with the sleep
+        // still running in the group nobody signalled.
+        let out = sh(
+            "sleep 5 >/dev/null 2>&1 </dev/null & echo $! > pid.txt; exit 0",
+            dir.path(),
+            5000,
+        )
+        .unwrap();
+        assert_eq!(out.code, 0);
+        let pid: i32 = std::fs::read_to_string(dir.path().join("pid.txt"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(
+            alive,
+            "a cleanly-exited child's backgrounded grandchild survives — the module must not claim it never does"
+        );
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
     }
 }
