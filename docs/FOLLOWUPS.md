@@ -329,6 +329,64 @@ which is where all the proving had been done.
   every ordinary exit; only an outright kill defeats it, and the sha stamp is the
   load-bearing half anyway.
 
+### Round-4 review (2026-09-05) — more real bugs than rounds 1 and 2 combined
+
+Three reviewers: the code written after round 3 (unreviewed by anyone), the act
+end to end again, and a fresh read of the whole branch with no steer. **A fourth
+round was expected to find polish. It found that the act still could not
+complete, and that a wall was inverted in dev.**
+
+**Resolved**
+
+- **In dev, a self-edit that WORKED was thrown away on the next start.** React's
+  development mode double-invokes effects; the boot-confirm guard meant "we
+  scheduled the beacon" rather than "it fired", so the first mount scheduled, the
+  cleanup cancelled, and the second mount returned early. The confirmation never
+  fired, the sentinel stayed unconfirmed, and the next start hard-reset the
+  source. This is the exact failure Marrow's round 1 caught, reintroduced through
+  a framework behaviour and invisible for three rounds because no test rendered
+  the shell the way the app renders it. There is one now.
+- **Validation's cargo spawn never got round 3's PATH fix**, so in a packaged app
+  `cargo check` could not find `rustc`, and the owner was told THEIR EDIT failed
+  to compile while the repair loop burned its rounds on it. Third time this bug
+  was found in a new place — so `kernel::cargo_run` is now the only builder of a
+  cargo spawn, handing back argv and env together, and the ceremony's warm step
+  goes through it too. `cargo vendor` stays outside it deliberately: it is the
+  one cargo call allowed to reach the network.
+- **`applyBlock` silently corrupted any model-written replacement containing
+  `$$`, `$&`, `` $` `` or `$'`** — it used the substitution-aware replace while
+  its Rust twin had used find-and-slice all along. The two now agree, including
+  refusing an empty or ambiguous anchor.
+- **The typecheck gate covered no test file.** Turning it on immediately caught
+  the fifth wall's own test asserting a shape Rust does not return. 119
+  pre-existing errors in test files are a named ratchet that can only shrink,
+  not a blanket exemption.
+- **The shell and the core disagreed about which of three shas means "the
+  running body"**, so a swap that died at its last step closed both roads out:
+  the shell said nothing was new to weave, and the offered return refused the
+  previous generation as already running.
+- **A healed generation was offered as the way home** — the body that had just
+  failed to boot. A generation that failed to be born is stamped in its own
+  record now, keeps its RETURN for a deliberate choice, and loses the invitation.
+- **A cancel during `stage` was seen and discarded**; the weave swapped and
+  relaunched anyway, logging that the running generation was untouched as it was
+  being replaced.
+- **A cancelled weave left a git lock inside the app bundle**, silently freezing
+  the carried genome at the pre-cancel sha forever.
+- **The seed rewound the genome's `main`** past commits the carried bundle held.
+- **The re-stage now seals the bundle it changed**, rather than relying on a swap
+  that may never come.
+- Docs: the handoff still said Phase 23 was not started; `BRAND.md` — law for
+  anything that renders as LOOM — cited failure copy from a deleted file; two
+  icons and a Tapestry comment outlived the subsystem they served.
+
+**Left standing**
+
+- **Swap, relaunch and the warden are still proven only against injected fakes.**
+  The real-tool tests stop at "built"; exercising the rest means replacing a
+  running application, which a test must not do. That is the owner ceremony, and
+  it remains the one thing nobody has run.
+
 ### Phase-23 backlog (beyond Rebirth)
 
 - **Toolchain distribution** — LOOM only adopts tools already on the machine; a missing rustup/node/cmake is reported with its install line and threading stops. Installing them from inside the app (pinned versions, offline archives) is its own phase.
