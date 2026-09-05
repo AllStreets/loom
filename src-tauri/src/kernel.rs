@@ -333,8 +333,22 @@ pub fn resolve_source_repo_at(
             .source(),
         Mode::Dev => match override_opt {
             Some(s) if !s.trim().is_empty() => PathBuf::from(s.trim()),
-            _ => std::env::current_dir()
-                .map_err(|e| LoomError::NotFound(format!("cwd unavailable: {e}")))?,
+            // The cwd, or the first ancestor of it that is a work tree.
+            //
+            // `tauri dev` runs the app with cwd `src-tauri/`, which has no
+            // `.git` — so this refused, `kernel_editable` threw, and the
+            // companion showed the PACKAGED refusal ("changing myself needs dev
+            // mode") to an owner who was already in dev mode. Self-edit, the
+            // whole of Phases 21 and 22, was unreachable from the one command
+            // the README tells you to run. Found by driving the real interface.
+            _ => {
+                let cwd = std::env::current_dir()
+                    .map_err(|e| LoomError::NotFound(format!("cwd unavailable: {e}")))?;
+                cwd.ancestors()
+                    .find(|a| a.join(".git").exists())
+                    .map(Path::to_path_buf)
+                    .unwrap_or(cwd)
+            }
         },
     };
     let canonical = raw
@@ -628,15 +642,18 @@ fn write_mirror(source_root: &Path, s: &Sentinel) -> Result<(), LoomError> {
     write_sentinel(&mirror_path(source_root), s)
 }
 
+/// The sentinel, at LOOM'S HOME — resolved the one way, like everything else.
+///
+/// This composed `app_data_dir()/loom/kernel-boot.json` itself, and that was the
+/// sharper of the two leaks the UI-driven ceremony found. `platform::execute`
+/// arms the sentinel through `Home` and `warden::watch` reads it through `Home`,
+/// both rehearsal-aware — while `kernel_boot_ok` wrote `ok` here, rehearsal-
+/// blind, and marked the ledger confirmed through `Home`. One statement landing
+/// in two homes. Identical in an ordinary launch; under a rehearsal the warden
+/// could never see the confirmation and would heal a perfectly healthy body —
+/// breaking exactly the facility that exists to make rehearsing safe.
 fn sentinel_path(app: &tauri::AppHandle) -> Result<PathBuf, LoomError> {
-    use tauri::Manager;
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| LoomError::Git(e.to_string()))?
-        .join("loom");
-    std::fs::create_dir_all(&dir).map_err(|e| LoomError::Git(e.to_string()))?;
-    Ok(dir.join("kernel-boot.json"))
+    Ok(crate::loomhome::Home::from_app(app)?.sentinel_json())
 }
 
 /// The sentinel at `path`, or `None` when absent or torn. `pub(crate)` for
@@ -1343,6 +1360,16 @@ fn test_siblings(rel: &str) -> Vec<String> {
         if let Some((stem, e)) = stem_ext(ext) {
             for kind in [".test", ".spec"] {
                 out.push(format!("{stem}{kind}{e}"));
+                // …and the same name under a sibling `__tests__/`. Vitest is
+                // handed these as FILTERS and exits 1 when none match, so a
+                // kernel file whose tests live in `__tests__/` could never
+                // validate: "No test files found, exiting with code 1". The
+                // UI-driven ceremony hit it on the first file the model chose,
+                // and 23 of the 77 non-test files under `src/` were in that
+                // state — permanently un-editable, for where their tests sit.
+                if let Some((dir, name)) = stem.rsplit_once('/') {
+                    out.push(format!("{dir}/__tests__/{name}{kind}{e}"));
+                }
             }
             break; // .tsx matched first; don't also strip .ts from it
         }
@@ -2368,6 +2395,54 @@ mod tests {
         assert!(
             PROTECTED_PREFIXES.contains(&"src-tauri/genome/"),
             "genome/ must be a protected prefix"
+        );
+    }
+
+    /// `tauri dev` runs the app from `src-tauri/`, which is not a work tree.
+    ///
+    /// So self-edit — Phases 21 and 22 entire — was unreachable from the one
+    /// command the README tells an owner to run, and the companion showed them
+    /// the PACKAGED refusal while they were in dev. Found by driving the real
+    /// interface, not by reading.
+    /// A kernel file whose tests live in `__tests__/` must still be editable.
+    ///
+    /// These names are handed to vitest as FILTERS, and vitest exits 1 when
+    /// none match — so validation failed with "No test files found" and the
+    /// owner was told their edit had broken the tests. The UI-driven ceremony
+    /// hit it on the very first file the model picked.
+    #[test]
+    fn tests_in_a_sibling_directory_are_not_invisible() {
+        let got = test_siblings("src/lib/orb/moods.ts");
+        assert!(
+            got.contains(&"src/lib/orb/__tests__/moods.test.ts".to_string()),
+            "the real layout of this repo's orb tests must be found: {got:?}"
+        );
+        assert!(got.contains(&"src/lib/orb/moods.test.ts".to_string()), "and the plain sibling");
+
+        // .tsx keeps its extension, and a file at the root has no directory to
+        // hang a `__tests__` off — it must not invent one.
+        let tsx = test_siblings("src/components/Companion.tsx");
+        assert!(tsx.contains(&"src/components/__tests__/Companion.test.tsx".to_string()));
+        assert!(!tsx.iter().any(|p| p.ends_with(".ts")), "no .ts guesses for a .tsx: {tsx:?}");
+        assert!(test_siblings("main.ts").iter().all(|p| !p.contains("__tests__")));
+    }
+
+    #[test]
+    fn dev_finds_the_repo_from_the_subdirectory_tauri_dev_runs_in() {
+        let (_d, root) = init_repo();
+        let sub = root.join("src-tauri");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert!(!sub.join(".git").exists(), "the fixture must mirror the real layout");
+
+        let here = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&sub).unwrap();
+        let got = resolve_source_repo_at(Mode::Dev, None, None);
+        std::env::set_current_dir(here).unwrap();
+
+        assert_eq!(
+            got.unwrap().canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+            "it walks up to the work tree"
         );
     }
 

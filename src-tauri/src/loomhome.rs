@@ -806,6 +806,28 @@ mod tests {
         assert_ne!(landed, second, "it must never invent a third commit");
     }
 
+    /// Every writer must resolve LOOM's home the SAME way.
+    ///
+    /// The UI-driven ceremony found two that composed `app_data_dir()/loom`
+    /// themselves — the organ timeline and the boot sentinel. Identical in an
+    /// ordinary launch, and a different directory under a rehearsal: the
+    /// rehearsal app wrote into the owner's real home and read the owner's
+    /// organs, and the sentinel split meant the warden would have healed a
+    /// healthy body because the confirmation landed somewhere it never looked.
+    #[test]
+    fn nothing_composes_a_home_of_its_own() {
+        let src = std::fs::read_to_string("src/timeline.rs").unwrap()
+            + &std::fs::read_to_string("src/kernel.rs").unwrap();
+        // `app_data_dir` belongs to `Home::from_app` and nowhere else.
+        for line in src.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            assert!(
+                !code.contains("app_data_dir"),
+                "a second composer of LOOM's home: {line}"
+            );
+        }
+    }
+
     /// A rehearsal must not be the dangerous option.
     ///
     /// The first end-to-end ceremony could not use the real launch path, because

@@ -93,12 +93,15 @@ pub fn last_good(p: &Path) -> Result<String, LoomError> {
     head.target().map(|o| o.to_string()).ok_or(LoomError::Git("no HEAD".into()))
 }
 
+/// Where the organ timeline lives — LOOM'S HOME, resolved the one way.
+///
+/// It used to compose `app_data_dir()/loom` itself, which is the same path
+/// `Home::from_app` returns in an ordinary launch and a DIFFERENT one under a
+/// rehearsal. The UI-driven ceremony caught it: a rehearsal app wrote into the
+/// owner's real home thirteen seconds after launch, and read the owner's organs.
+/// A second composer of a home is how a rehearsal stops being a rehearsal.
 pub(crate) fn loom_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, LoomError> {
-    use tauri::Manager;
-    let dir = app.path().app_data_dir()
-        .map_err(|e| LoomError::Git(e.to_string()))?.join("loom");
-    std::fs::create_dir_all(&dir).map_err(|e| LoomError::Git(e.to_string()))?;
-    Ok(dir)
+    Ok(crate::loomhome::Home::from_app(app)?.root)
 }
 
 #[tauri::command]
