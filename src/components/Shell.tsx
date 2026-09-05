@@ -20,6 +20,7 @@ import Notices from './chrome/Notices';
 import Proposal from './chrome/Proposal';
 import KernelDiff, { type KernelAppliedInfo } from './chrome/KernelDiff';
 import Reweave from './chrome/Reweave';
+import Threading from './chrome/Threading';
 import BodyRequest from './chrome/BodyRequest';
 import RecoveryNotice from './chrome/recoveryNotice';
 import { runBootCheck, markBootOk } from '../lib/loom/recovery';
@@ -878,6 +879,16 @@ export default function Shell() {
           has just ended; fed by the protected reweave.ts subscription. ── */}
       <ErrorBoundary zone="reweave">
         <Reweave />
+      </ErrorBoundary>
+
+      {/* ── Threading: the six-station card for the one-time ceremony (z 1700 —
+          the reweave card's tier; the two share one job slot in the core and
+          can never be live together). Present only while a ceremony is under
+          way or has just ended, however it was started — the companion,
+          Settings, or an organ's request. It carries the only CANCEL for the
+          longest, most expensive thing LOOM ever does. ── */}
+      <ErrorBoundary zone="threading">
+        <Threading />
       </ErrorBoundary>
 
       {/* ── BodyRequest: the shell's answer when an ORGAN asks to thread,
