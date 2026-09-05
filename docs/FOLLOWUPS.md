@@ -380,6 +380,14 @@ complete, and that a wall was inverted in dev.**
   anything that renders as LOOM — cited failure copy from a deleted file; two
   icons and a Tapestry comment outlived the subsystem they served.
 
+**Also closed, after the round's own fixes**
+
+- The threading card's heading no longer points at a rail that marks nothing.
+- The seed marker answers to the disk, so a removed `source/` is re-cloned —
+  which is what made the carried genome's justification reachable at all.
+- A return brings the carried genome back with the body, rather than leaving the
+  bundle naming the generation the owner just walked away from.
+
 **Left standing**
 
 - **Swap, relaunch and the warden are still proven only against injected fakes.**
