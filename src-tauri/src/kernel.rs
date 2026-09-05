@@ -111,6 +111,14 @@ const PROTECTED_PREFIXES: &[&str] = &[
     "src/lib/organs/budgets",         // the meter on that seam (+ tests)
     "src/lib/loom/validate",          // manifest wall + the owner-facing labels
     "src/components/chrome/reweave",  // the reweave card — CANCEL lives here
+    // Round-3 review: the ceremony that spends the owner's single network trip
+    // and runs for tens of minutes had no surface and no stop button. These two
+    // are that surface — the only caller of `thread_cancel` in the product, and
+    // the only listener of `loom-thread` outside an organ power. Same class as
+    // the reweave card: a self-edit here could detach the stop from the job, or
+    // stop the card from ever appearing, and threading would run blind again.
+    "src/lib/loom/threading",         // threading orchestration (+ tests)
+    "src/components/chrome/threading", // the threading card — CANCEL lives here
     "src/organs/seeds/settings",      // the generations list: the road home
     // Round-1 fixes moved the consent for a body change out of the organ API
     // and into shell-owned chrome. That chrome is now the ONLY wall between an
@@ -2219,6 +2227,10 @@ mod tests {
             "src/organs/seeds/settings.ts",
             "src/lib/loom/reweave.ts",
             "src/lib/loom/reweave.test.ts",
+            "src/components/chrome/Threading.tsx",
+            "src/components/chrome/Threading.test.tsx",
+            "src/lib/loom/threading.ts",
+            "src/lib/loom/threading.test.ts",
             "src/lib/loom/generations.ts",
             "src/lib/loom/generations.test.ts",
             ".cargo/config.toml",
