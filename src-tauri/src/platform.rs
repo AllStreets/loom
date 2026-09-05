@@ -119,7 +119,8 @@ pub fn layout_from_exe(exe: &Path, os: &str) -> Result<AppLayout, LoomError> {
 #[serde(tag = "step", rename_all = "camelCase")]
 pub enum Step {
     /// Copy the live executable at `from` to `generations/<sha>/loom` if that
-    /// file is absent — generation 0 may predate the ledger.
+    /// file is absent — generation 0 may predate the ledger — and name it in
+    /// the ledger's `kept`, which is what Settings reads.
     EnsureCurrentKept { sha: String, from: PathBuf },
     /// `<to>.weaving` ← `from`, then rename over `to`.
     CopyExe { from: PathBuf, to: PathBuf },
@@ -184,6 +185,10 @@ pub fn execute(
                 if !generations::shelved_whole(home, sha) {
                     copy_atomic(from, &home.generation_exe(sha))?;
                 }
+                // And a shelved body the ledger does not name is invisible to
+                // `generations_list`, so Settings — the protected road home —
+                // cannot offer it (round-2 review, Finding 5).
+                generations::keep(home, sha)?;
             }
             Step::CopyExe { from, to } => copy_atomic(from, to)?,
             Step::Codesign { path } => codesign(path, tools)?,
@@ -543,7 +548,10 @@ mod tests {
         assert_eq!(after.current.as_deref(), Some("bbb222"));
         assert_eq!(after.previous.as_deref(), Some("aaa111"));
         assert!(!after.confirmed);
-        assert_eq!(after.kept, vec!["aaa111".to_string()], "kept is the shelf's business, not the swap's");
+        // The shelved body is NAMED in the ledger, or Settings cannot offer
+        // the way back to it (round-2 review, Finding 5). `current`/`previous`
+        // are still the swap's business alone.
+        assert_eq!(after.kept, vec!["aaa111".to_string()]);
     }
 
     /// Round-1 review, Finding 1; round-2 review, Findings 1 and 3. The plan
@@ -596,6 +604,29 @@ mod tests {
         let step = Step::EnsureCurrentKept { sha: "aaa111".into(), from: f.lay.exe_path.clone() };
         execute(&[step], &f.home, &f.tools()).unwrap();
         assert_eq!(std::fs::read_to_string(&shelved).unwrap(), "already shelved");
+    }
+
+    /// Round-2 review, Finding 5. The step copies the running body to the
+    /// shelf; until the ledger NAMES it, `generations_list` cannot see it and
+    /// Settings — the protected road home — has nothing to offer. On a first
+    /// weave that body is the only way back there is.
+    #[test]
+    fn execute_names_the_body_it_shelves() {
+        let f = fake_app("aaa111", "bbb222");
+        // Generation 0: the ledger knows what is running and has never
+        // shelved anything.
+        generations::write(
+            &f.home,
+            &Ledger { current: Some("aaa111".into()), previous: None, kept: vec![], keep: 3, confirmed: true },
+        )
+        .unwrap();
+        let step = Step::EnsureCurrentKept { sha: "aaa111".into(), from: f.lay.exe_path.clone() };
+        execute(std::slice::from_ref(&step), &f.home, &f.tools()).unwrap();
+        assert_eq!(generations::read(&f.home).kept, vec!["aaa111".to_string()]);
+        assert_eq!(generations::list(&f.home).unwrap()[0].sha, "aaa111");
+        // Twice is once: the running body is not news.
+        execute(&[step], &f.home, &f.tools()).unwrap();
+        assert_eq!(generations::read(&f.home).kept, vec!["aaa111".to_string()]);
     }
 
     /// Round-1 review, Finding 8. A shelved body cut short by an earlier

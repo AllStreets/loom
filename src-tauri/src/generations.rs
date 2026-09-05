@@ -136,6 +136,42 @@ pub fn prune(ledger: &Ledger) -> (Ledger, Vec<String>) {
     (Ledger { kept, ..ledger.clone() }, gone)
 }
 
+// ── Keep ──────────────────────────────────────────────────────────────────────
+
+/// Name a body that is already on the shelf in the ledger, then trim the
+/// shelf. Round-2 review, Finding 5: the swap's `EnsureCurrentKept` copies
+/// the running body to `generations/<sha>/loom`, but `generations_list` reads
+/// the LEDGER, so until `kept` names the sha the body is invisible — Settings
+/// cannot offer RETURN to it, and on a first weave it is the only body there
+/// is to come home to.
+///
+/// Idempotent, and it leaves the order alone when the sha is already named:
+/// `kept` is the order the owner sees, and the running body is not news.
+pub fn keep(home: &Home, sha: &str) -> Result<(), LoomError> {
+    let mut ledger = read(home);
+    if ledger.kept.iter().any(|s| s == sha) {
+        return Ok(());
+    }
+    ledger.kept.push(sha.to_string());
+    let (ledger, gone) = prune(&ledger);
+    remove_gone(home, &gone)?;
+    write(home, &ledger)
+}
+
+/// Delete the directories of generations the prune dropped. Already gone is
+/// done, not an error.
+fn remove_gone(home: &Home, gone: &[String]) -> Result<(), LoomError> {
+    for old in gone {
+        let d = home.generations_dir().join(old);
+        match std::fs::remove_dir_all(&d) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_err("remove", &d, e)),
+        }
+    }
+    Ok(())
+}
+
 // ── Record ────────────────────────────────────────────────────────────────────
 
 /// Shelve a freshly woven body: copy the exe to `generations/<sha>/loom`,
@@ -174,14 +210,7 @@ pub fn record(home: &Home, sha: &str, exe_src: &Path, reason: &str) -> Result<Me
     ledger.kept.retain(|s| s != sha);
     ledger.kept.push(sha.to_string());
     let (ledger, gone) = prune(&ledger);
-    for old in &gone {
-        let d = home.generations_dir().join(old);
-        match std::fs::remove_dir_all(&d) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io_err("remove", &d, e)),
-        }
-    }
+    remove_gone(home, &gone)?;
     write(home, &ledger)?;
     Ok(meta)
 }
@@ -371,6 +400,46 @@ mod tests {
         let v = serde_json::to_value(&m).unwrap();
         assert!(v.get("wovenAt").is_some() && v.get("sizeBytes").is_some());
         assert!(v.get("woven_at").is_none(), "snake_case must not leak");
+    }
+
+    /// Round-2 review, Finding 5. The swap's `EnsureCurrentKept` copies the
+    /// running body to the shelf; `keep` is what names it in the ledger.
+    /// `generations_list` reads the ledger, not the directory, so a body the
+    /// ledger does not name is invisible to Settings — and on a first weave
+    /// it is the only body to come home to.
+    #[test]
+    fn keep_names_a_shelved_body_in_the_ledger() {
+        let (d, h) = home();
+        let src = d.path().join("built-loom");
+        std::fs::write(&src, b"a body").unwrap();
+
+        // Generation 0: the running body, copied to the shelf by the swap,
+        // with nothing in `kept` to say it is there.
+        let dest = h.generation_exe("aaa111");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::copy(&src, &dest).unwrap();
+        write(&h, &ledger(Some("aaa111"), None, &[], 3)).unwrap();
+        assert!(list(&h).unwrap().is_empty(), "invisible until the ledger names it");
+
+        keep(&h, "aaa111").unwrap();
+        assert_eq!(read(&h).kept, vec!["aaa111"]);
+        assert_eq!(list(&h).unwrap()[0].sha, "aaa111", "Settings can now offer the way back");
+
+        // Idempotent, and it does not reshuffle the order the owner sees.
+        record(&h, "bbb222", &src, "reweave").unwrap();
+        keep(&h, "aaa111").unwrap();
+        assert_eq!(read(&h).kept, vec!["aaa111", "bbb222"]);
+
+        // It trims the shelf like `record` does, and never drops the live
+        // bodies: `keep` past the limit removes the oldest and its directory.
+        let mut l = read(&h);
+        l.kept = vec!["old111".into(), "old222".into(), "aaa111".into()];
+        l.keep = 3;
+        write(&h, &l).unwrap();
+        std::fs::create_dir_all(h.generations_dir().join("old111")).unwrap();
+        keep(&h, "ccc333").unwrap();
+        assert_eq!(read(&h).kept, vec!["old222", "aaa111", "ccc333"]);
+        assert!(!h.generations_dir().join("old111").exists(), "a pruned body's directory goes with it");
     }
 
     #[test]
