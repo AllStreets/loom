@@ -79,17 +79,39 @@ reaches for `npx`. Every cargo argv the code composes carries `--offline`; the
 one deliberate exception is threading's `cargo vendor`, which is one of the two
 steps allowed to touch the network.
 
-**What has actually been run, and what has not.** From a clean clone on a machine
-with no prior LOOM build: `npm ci`, the full test suite, `cargo test` with a cold
-crate registry, `npm run tauri build`, and launching the resulting app — all
-green. Everything downstream of that is unit-tested and **has not been executed
-end to end by anyone.** Threading has never run against real git, npm and cargo;
-no binary has ever been swapped into a bundle; the warden has never been spawned
-as a process; no generation has ever been shelved, returned to, or healed. The
-packaged body builds and launches; the swap, the warden and the generations
-ledger are proven against mocks. Doing it for real is one ceremony: build, launch,
-thread with the network on, unplug, ask for a core change, approve, reweave, and
-watch LOOM come back as its next generation.
+**What has actually been run.** The ceremony, end to end, on a real app and the
+real genome — twice, after the first run found the bug that made it impossible.
+
+From a clean clone on a machine with no prior LOOM build: install, the full
+suite, a cold-registry `cargo test`, `npm run tauri build`, and launching the
+app. Then, against a copy of that app and a fresh loomhome: threading cloned
+LOOM's whole history, installed its dependencies, vendored all 559 crates and
+built LOOM from source in 90 seconds. A re-run resumed in 0.03 seconds. A
+committed core edit wove a new body offline in 18.5 seconds, resolving entirely
+from the vendored crates. The swap replaced the executable, shelved the old
+body, armed the sentinel, moved the ledger and re-staged the carried genome.
+
+**The rewoven body launched and painted** — the console, the Timeline organ, the
+permission card, the Tapestry, and its own reweave card reading *woven — this is
+the generation the weave made*. **The warden then stood down**: verdict
+`Confirmed` in 2.6 seconds, nothing healed. That generation went on to weave the
+next one, which printed *this body was woven BY a body LOOM wove*. A deliberately
+panicking edit after that was healed home in 1.8 seconds, and the recovery
+notice was consumed by the shell of the body that came back — which is how we
+know it booted and painted too.
+
+The first run failed, and the failure was the point: every part of the machine
+was correct and the body it produced could not paint, because a weave ran a bare
+release build. Tauri derives "this is a development build" from the absence of a
+feature its own tool passes, so LOOM was weaving itself a binary with no frontend
+inside it. One flag, in the one place cargo spawns are composed.
+
+What is still proven only against fakes: nothing in the chain. What is still not
+proven: the ceremony driven from LOOM's own interface rather than from its own
+functions, and the warden's relaunch going through the system launcher rather
+than spawning the executable directly — that step was faked so the rehearsal
+could not touch the owner's real home. `LOOM_REHEARSAL_HOME` now exists so the
+next rehearsal need not fake it.
 
 Honest residuals: threading needs the network once, and the speech archive it
 fetches lands in a macOS cache LOOM does not own — if the system purges it,

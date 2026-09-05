@@ -388,12 +388,51 @@ complete, and that a wall was inverted in dev.**
 - A return brings the carried genome back with the body, rather than leaving the
   bundle naming the generation the owner just walked away from.
 
-**Left standing**
+**Left standing — CLOSED 2026-09-05: the ceremony was run.**
 
-- **Swap, relaunch and the warden are still proven only against injected fakes.**
-  The real-tool tests stop at "built"; exercising the rest means replacing a
-  running application, which a test must not do. That is the owner ceremony, and
-  it remains the one thing nobody has run.
+See §The ceremony below. Swap, relaunch, a confirmed birth, a second weave from
+a self-woven body and a heal are all now executed against a real app and the
+real genome.
+
+## The ceremony (2026-09-05) — run twice, and the first run failed
+
+**The failure was the point.** Threading, vendoring, the offline weave, the
+shelf, the ledger, the sentinel, the swap, the genome re-stage and the warden
+were all correct — and the body they produced opened a blank window. `tauri-build`
+derives `cfg(dev)` from the ABSENCE of `--features tauri/custom-protocol`, which
+the Tauri CLI passes when it builds an app; a weave ran a bare
+`cargo build --release`. So every body LOOM wove itself was a dev binary with no
+embedded frontend, pointed at a devUrl where nothing listens. It could never call
+the boot beacon, so the birth could never confirm, so the warden healed it —
+deterministically, every time. It also reported `Mode::Dev`, which would have made
+it resolve its source to the process cwd and refuse to weave again.
+`CargoRun::app_argv` is now a separate thing from `argv`, so neither call site can
+compose an app build without the flag, and validation deliberately does not carry
+it (`cargo check` would then demand a built frontend to embed).
+
+**The second run:** threading 90 s (846 MB vendored, 559 crates), resume 0.03 s,
+weave 18.5 s offline, the rewoven body PAINTED, and the warden returned
+`Confirmed` in 2.6 s — the half of the fifth wall that had never succeeded.
+Generation 1 then wove generation 2. A deliberately panicking edit was healed in
+1.8 s, and `recovery.json` was consumed by the healed body's own shell, which is
+independent proof it booted and painted.
+
+**Found by the successful run, and fixed:**
+- The heal did not bring the carried genome home, so an app that came home
+  carried a genome naming the generation that had just panicked. It names the
+  body it came home to now — only the manifest, since the bundle already holds
+  every ancestor and a heal has no git to re-pack with.
+- After three weaves, `keep: 3` pruned generation zero — the body the owner
+  installed — leaving every road home a body LOOM had woven itself. The ledger
+  records `genesis` and pruning never drops it.
+- The real-tool fixture did not accept the flag LOOM's own build now carries, so
+  it gained a crate that owns it. Without that the test would have proved the
+  argument is never passed.
+
+**Still not proven:** the ceremony driven from LOOM's own interface rather than
+its functions, and the warden relaunching through the system launcher rather than
+spawning the executable directly — faked so the rehearsal could not reach the
+owner's real home. `LOOM_REHEARSAL_HOME` exists now so the next one need not.
 
 ### Phase-23 backlog (beyond Rebirth)
 
