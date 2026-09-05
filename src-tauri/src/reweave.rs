@@ -653,6 +653,21 @@ fn job_steps(
             if out.code != 0 {
                 return Err(exit_failed(runner, "stage", "the genome could not be checked out at that generation", &out));
             }
+
+            // A return moves the body backwards, so the carried genome must
+            // come with it — otherwise the bundle inside the app still names
+            // the generation the owner just walked away from, and a later
+            // re-seed would put the source back there (round-4 review).
+            if let Some(layout) = ctx.layout.as_ref() {
+                match restage_genome(runner, p, home, ctx.os, &layout.app_path, source, sha, ctx.tools) {
+                    Ok(()) => p.line("the carried genome came back with the body"),
+                    Err(e) if runner.cancelled() => return Err(e),
+                    Err(e) => p.line(&format!(
+                        "the carried genome could not be re-staged — {}; the body still returns",
+                        e.outcome
+                    )),
+                }
+            }
         }
     }
 
@@ -1565,6 +1580,13 @@ mod tests {
         assert_eq!(seen.last().unwrap().target_sha.as_deref(), Some(older.as_str()));
         assert_eq!(seen.last().unwrap().outcome.as_deref(), Some("LOOM will close and return in a moment"));
 
+        // The carried genome came back with the body: the bundle inside the app
+        // now names the generation returned to, not the one walked away from.
+        let carried = fx.lay.app_path.join("Contents/Resources/genome");
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(carried.join("genome.json")).unwrap()).unwrap();
+        assert_eq!(meta["sha"], older, "a return re-stages the genome too");
+
         // The genome agrees with the body: a branch generation/<sha7> at the sha,
         // and the newer commit is still on main.
         let src = fx.home.source();
@@ -1577,8 +1599,14 @@ mod tests {
         // The swap happened: the live file is the older body, signed, sentinel
         // applied by reweave, ledger moved and unconfirmed.
         assert_eq!(std::fs::read_to_string(&fx.lay.exe_path).unwrap().contains("older body"), true);
-        let sign = fx.argv("codesign");
-        assert_eq!(sign, vec!["--force", "--deep", "--sign", "-", fx.lay.app_path.to_str().unwrap()]);
+        // TWICE, both on the bundle: the re-stage seals what it changed inside
+        // Resources, and the swap seals again after replacing the executable.
+        // Whoever changes the bundle seals it — the second sealing is
+        // idempotent, not redundant.
+        let seal: Vec<&str> = vec!["--force", "--deep", "--sign", "-", fx.lay.app_path.to_str().unwrap()];
+        let mut twice = seal.clone();
+        twice.extend(seal.iter());
+        assert_eq!(fx.argv("codesign"), twice);
         let s: crate::kernel::Sentinel =
             serde_json::from_str(&std::fs::read_to_string(fx.home.sentinel_json()).unwrap()).unwrap();
         assert_eq!(s.status, "applied");

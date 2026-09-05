@@ -768,6 +768,18 @@ fn cargo_config(vendor: &Path) -> String {
     )
 }
 
+/// Is the genome already seeded? The marker is sticky; the SOURCE is the fact.
+///
+/// A marker reading "seeded" over a `source/` that is no longer there sent the
+/// ceremony on to `npm ci` in a directory that does not exist. It is also
+/// exactly the case the carried genome is re-staged for — "if `loomhome/source`
+/// is ever removed, the seed re-clones that bundle" — which could not happen
+/// while the marker alone decided. Dev has no seeded source at all: the
+/// checkout IS the genome, so the marker stands on its own there.
+fn already_seeded(marked: bool, mode: Mode, source: &Path) -> bool {
+    marked && (mode == Mode::Dev || source.join(".git").is_dir())
+}
+
 /// The ceremony, factored so a test can stage fake tools in a tempdir.
 ///
 /// - `source` is the genome to work in: the checkout in dev, `loomhome/source`
@@ -862,9 +874,19 @@ fn ceremony_steps(
     let none: &[String] = &[];
 
     // 1 · seed
-    if t.steps.seed {
+    //
+    // The marker is sticky, but the SOURCE is the fact. A marker saying "seeded"
+    // over a `source/` that is no longer there sent the ceremony on to `npm ci`
+    // in a directory that does not exist — and it is exactly the case the
+    // carried genome is re-staged for ("if `loomhome/source` is ever removed,
+    // the seed re-clones that bundle"), which could not happen while the marker
+    // alone decided. Ask the disk.
+    if already_seeded(t.steps.seed, mode, &home.source()) {
         emit("seed", "already seeded", none);
     } else {
+        if t.steps.seed {
+            emit("seed", "the source is gone — re-cloning the genome LOOM carries", none);
+        }
         match mode {
             Mode::Dev => emit("seed", "dev mode — the source is this checkout", none),
             Mode::Packaged => {
@@ -1845,6 +1867,33 @@ fi"#;
         // root is the checkout — loomhome would refuse every spawn.
         let checkout = d.path().join("checkout");
         assert_eq!(ceremony_root(&home, Mode::Dev, &checkout), checkout);
+    }
+
+    /// The seed marker is sticky; the source is the fact. A marker reading
+    /// "seeded" over a `source/` that has been removed used to send the
+    /// ceremony on to `npm ci` in a directory that is not there — and it made
+    /// the re-staged carried genome's whole justification unreachable, since
+    /// the re-clone it exists for could never run.
+    #[test]
+    fn a_removed_source_is_seeded_again_whatever_the_marker_says() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("source");
+
+        // Packaged: the marker is not enough on its own.
+        assert!(!already_seeded(true, Mode::Packaged, &source), "no source, no seed");
+        std::fs::create_dir_all(source.join(".git")).unwrap();
+        assert!(already_seeded(true, Mode::Packaged, &source), "a real clone is seeded");
+        std::fs::remove_dir_all(source.join(".git")).unwrap();
+        assert!(!already_seeded(true, Mode::Packaged, &source), "and gone again is not");
+
+        // An unmarked ceremony is never seeded, whatever is on disk.
+        std::fs::create_dir_all(source.join(".git")).unwrap();
+        assert!(!already_seeded(false, Mode::Packaged, &source));
+
+        // Dev has no seeded source at all — the checkout IS the genome, so the
+        // marker stands alone and a missing `source/` is not its business.
+        assert!(already_seeded(true, Mode::Dev, &d.path().join("nothing-here")));
+        assert!(!already_seeded(false, Mode::Dev, &source));
     }
 
     #[cfg(unix)]

@@ -368,3 +368,30 @@ describe("Threading — copy law", () => {
     expect(screen.getByTestId("threading-card").outerHTML).not.toMatch(/#[0-9a-f]{3,8}\b/i);
   });
 });
+
+describe("Threading — a heading must not point at nothing", () => {
+  it("a card whose first event is failed does not claim a station is marked", () => {
+    // A shell reload during a long ceremony that then dies: the card has never
+    // seen a station, so the rail marks nothing. Saying "stopped at the station
+    // marked above" would be pointing at an empty rail.
+    const f = makeFeed();
+    render(<Threading feed={f.feed} />);
+    f.push(ev({ step: "failed", detail: "npm ci: ENOTFOUND registry.npmjs.org" }));
+
+    const card = screen.getByTestId("threading-card");
+    expect(card).toHaveTextContent("the ceremony stopped before this card saw where");
+    expect(card).not.toHaveTextContent("the station marked above");
+    // The evidence for the remedy is still there.
+    expect(card).toHaveTextContent("ENOTFOUND");
+  });
+
+  it("still points at the rail when it has actually seen a station", () => {
+    const f = makeFeed();
+    render(<Threading feed={f.feed} />);
+    f.push(ev({ step: "vendor", detail: "cargo vendor" }));
+    f.push(ev({ step: "failed", detail: "cargo vendor failed" }));
+    expect(screen.getByTestId("threading-card")).toHaveTextContent(
+      "the ceremony stopped at the station marked above",
+    );
+  });
+});

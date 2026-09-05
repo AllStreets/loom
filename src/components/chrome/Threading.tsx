@@ -193,9 +193,16 @@ export default function Threading({ feed = subscribe, cancel = cancelThreading }
 
   // Present tense only while it is present tense — a stopped ceremony that
   // still says "preparing" is describing something that is not happening.
+  // ...and a heading must not point at a rail that marks nothing. A card
+  // mounted mid-ceremony (a shell reload) whose first event is `failed` has
+  // never seen a station, so `lastStation` is still -1 and every station reads
+  // pending — "stopped at the station marked above" would be pointing at
+  // nothing at all.
   const heading =
     step === "failed"
-      ? "the ceremony stopped at the station marked above"
+      ? lastStation.current >= 0
+        ? "the ceremony stopped at the station marked above"
+        : "the ceremony stopped before this card saw where"
       : step === "done"
         ? "the ceremony is over"
         : "preparing the loom to weave";
