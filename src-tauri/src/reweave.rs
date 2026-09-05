@@ -14,9 +14,13 @@
 //! 3. `stage`    — the body goes on the shelf (`generations::record`) and is
 //!                 ad-hoc signed. Dev mode stops here, honestly: `tauri dev`
 //!                 owns the binary.
-//! 4. `swap`     — the point of return. `platform::swap_plan` + `execute`:
-//!                 shelve the running body, replace the file, re-sign, sentinel
-//!                 `applied` armed by reweave, ledger moved and unconfirmed.
+//! 4. `swap`     — the point of return. `platform::swap_plan` + `execute`, in
+//!                 the order two review rounds settled on: shelve the running
+//!                 body, arm the sentinel (`applied`, armed by reweave),
+//!                 replace the file, move the ledger, re-sign. The sentinel
+//!                 precedes the copy so a healer is always armed; the ledger
+//!                 follows it so the ledger never names a body that is not
+//!                 there. See `platform::survivable` for the rule itself.
 //! 5. `relaunch` — `warden.json` is written and the PREVIOUS generation's body
 //!                 is spawned detached as the warden; the command then exits
 //!                 the app so the warden can open the new one.
@@ -1231,15 +1235,26 @@ mod tests {
 
         // The PREVIOUS generation's body was launched as the warden with the
         // job file — detached, so it outlives us.
+        // Wait on the CONDITION, never on a duration: this watches a detached
+        // process, and a loaded machine can take many seconds to get to it. The
+        // bound is a wall against hanging, not a guess at how long it takes —
+        // the loop leaves the moment the file is there, so a healthy run pays
+        // nothing. (A fixed 5 s wait plus a fixed 50 ms sleep flaked here once
+        // on a run that took 17 s under load.)
         let launched = fx.root.join("warden-launched.txt");
-        let start = std::time::Instant::now();
-        while !launched.exists() && start.elapsed() < std::time::Duration::from_secs(5) {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        let body = fx.root.join("warden-body.txt");
+        let wait_for = |p: &std::path::Path| {
+            let start = std::time::Instant::now();
+            while !p.exists() && start.elapsed() < std::time::Duration::from_secs(60) {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            assert!(p.exists(), "{} never appeared", p.display());
+        };
+        wait_for(&launched);
         let argv: Vec<String> = std::fs::read_to_string(&launched).unwrap().lines().map(str::to_string).collect();
         assert_eq!(argv, vec!["--warden".to_string(), fx.home.warden_json().to_string_lossy().into_owned()]);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert_eq!(std::fs::read_to_string(fx.root.join("warden-body.txt")).unwrap(), "newer body");
+        wait_for(&body);
+        assert_eq!(std::fs::read_to_string(&body).unwrap(), "newer body");
     }
 
     /// Round-1 review, Finding 7. The job slot was given back before the
