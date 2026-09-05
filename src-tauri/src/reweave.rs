@@ -546,7 +546,9 @@ fn job_steps(
         failed(format!("{} — the body is on the shelf", platform::UNSUPPORTED_SWAP), e)
     })?;
     let ledger = generations::read(home);
-    let plan = platform::swap_plan(&ledger, &layout, home, target, ctx.os)
+    // `running()` — the sha baked into this executing binary — is who is being
+    // replaced. The ledger may lag it; the binary cannot be wrong about itself.
+    let plan = platform::swap_plan(&ledger, &layout, home, target, ctx.os, running())
         .map_err(|e| failed(format!("the swap could not be planned — {e}; {UNTOUCHED}"), e))?;
     for step in &plan {
         if let Ok(v) = serde_json::to_string(step) {
@@ -1251,10 +1253,15 @@ mod tests {
         let fx = fixture();
         let tools = fx.tools();
         let ctx = fx.ctx(Mode::Packaged, &tools);
-        // Two bodies on the shelf: the running one and an older one to return to.
+        // Two bodies on the shelf: the running one and an older one to return
+        // to. The RUNNING one is named by the sha baked into this binary, not
+        // by the ledger (round-3: the ledger may lag the body; the binary
+        // cannot be wrong about itself), so the fixture's "newer" generation
+        // must be that sha for the test to describe a real machine.
         std::fs::write(fx.home.source().join("a.txt"), "two").unwrap();
         git(&["commit", "-qam", "two"], &fx.home.source());
-        let newer = git(&["rev-parse", "HEAD"], &fx.home.source());
+        let main_head = git(&["rev-parse", "HEAD"], &fx.home.source());
+        let newer = crate::loomhome::genome_sha().to_string();
         let older = fx.head.clone();
         generations::write(&fx.home, &generations::Ledger {
             current: Some(newer.clone()),
@@ -1285,7 +1292,9 @@ mod tests {
         let src = fx.home.source();
         assert_eq!(git(&["rev-parse", "HEAD"], &src), older);
         assert_eq!(git(&["rev-parse", "--abbrev-ref", "HEAD"], &src), format!("generation/{}", &older[..7]));
-        assert_eq!(git(&["rev-parse", "main"], &src), newer);
+        // `main` still carries the genome's own newer commit — the return moved
+        // the body, not the genome's history.
+        assert_eq!(git(&["rev-parse", "main"], &src), main_head);
 
         // The swap happened: the live file is the older body, signed, sentinel
         // applied by reweave, ledger moved and unconfirmed.
