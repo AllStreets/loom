@@ -1023,7 +1023,7 @@ fn ceremony_steps(
         // a fourth. `cargo_run` hands back argv and env together so neither
         // can be had without the other.
         let run = crate::kernel::cargo_run(tools, Some(&home.target()))?;
-        let argv = run.argv(&["build", "--release"]);
+        let argv = run.app_argv(&["build", "--release"]);
         let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
         let envs = run.envs();
         let (out, tail) = run_step(
@@ -1766,7 +1766,9 @@ fi"#;
         assert_eq!(calls[0], "npm ci --no-audit --no-fund");
         assert_eq!(calls[1], format!("cargo vendor --versioned-dirs {vendor_dir}"));
         assert_eq!(calls[2], "npm run build");
-        assert_eq!(calls[3], "cargo build --release --offline");
+        // The warm step builds LOOM's own body, so it carries the feature that
+        // makes it an APP rather than a dev binary — see `CargoRun::app_argv`.
+        assert_eq!(calls[3], "cargo build --release --features tauri/custom-protocol --offline");
         assert_eq!(
             calls[4],
             format!("target={} offline=true", st.home.target().display()),

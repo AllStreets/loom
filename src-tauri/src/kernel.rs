@@ -1171,6 +1171,33 @@ impl CargoRun {
     /// `[cargo, <sub…>, "--offline"]`. `--offline` is ALWAYS appended — no
     /// cargo LOOM runs touches the network (the crates were fetched once, at
     /// threading in packaged mode, by the dev build in dev).
+    /// The argv for building LOOM'S OWN BODY — the only kind of cargo build
+    /// whose product is an app the owner will launch.
+    ///
+    /// It carries `--features tauri/custom-protocol`, and without it the whole
+    /// phase is inert. `tauri-build` sets `cfg(dev)` from the ABSENCE of that
+    /// feature (`let dev = !has_feature("custom-protocol")`), and the Tauri CLI
+    /// passes it when it builds an app. A bare `cargo build --release` is
+    /// therefore a DEV binary: the frontend is not embedded, it points at
+    /// `devUrl` where nothing is listening, and it opens a blank window. It also
+    /// reports `Mode::Dev`, so it would resolve its source to the process cwd
+    /// and refuse to weave again.
+    ///
+    /// The end-to-end ceremony proved this the only way it could be proved: the
+    /// machinery was all correct and the body it produced could not paint, so
+    /// the birth could never confirm and the warden healed it every time.
+    /// Validation must NOT use this — `cargo check` with the feature would
+    /// demand a built frontend to embed, and validation checks source.
+    pub fn app_argv(&self, sub: &[&str]) -> Vec<String> {
+        let mut v = self.argv(sub);
+        // Before `--offline`, which `argv` always appends last.
+        let tail = v.pop().expect("argv always ends with --offline");
+        v.push("--features".into());
+        v.push("tauri/custom-protocol".into());
+        v.push(tail);
+        v
+    }
+
     pub fn argv(&self, sub: &[&str]) -> Vec<String> {
         cargo_argv(&self.cargo, sub)
     }
@@ -3328,6 +3355,39 @@ mod tests {
     /// can fix, and no core edit was ever approved or woven.
     ///
     /// Every cargo spawn is composed in one place now, and this is it.
+    /// The flag that makes a woven body an APP.
+    ///
+    /// The end-to-end ceremony ran the whole machine correctly and still could
+    /// not work: `tauri-build` derives `cfg(dev)` from the ABSENCE of
+    /// `tauri/custom-protocol`, so a bare `cargo build --release` produced a
+    /// dev binary with no embedded frontend. It opened a blank window, could
+    /// never confirm its birth, and the warden healed it back every time.
+    /// Validation must not carry the feature — `cargo check` would then need a
+    /// built frontend to embed, and validation checks source.
+    #[test]
+    fn only_an_app_build_asks_for_the_frontend_to_be_embedded() {
+        let d = tempfile::tempdir().unwrap();
+        let cargo = d.path().join("cargo");
+        std::fs::write(&cargo, "#!/bin/sh\nexit 0\n").unwrap();
+        let tools = |n: &str| (n == "cargo").then(|| cargo.clone());
+        let run = cargo_run(&tools, None).unwrap();
+
+        let app = run.app_argv(&["build", "--release"]);
+        assert!(
+            app.windows(2).any(|w| w[0] == "--features" && w[1] == "tauri/custom-protocol"),
+            "an app build must embed its frontend: {app:?}"
+        );
+        assert_eq!(app.last().unwrap(), "--offline", "--offline stays last");
+
+        for sub in [vec!["check"], vec!["test", "--no-run"]] {
+            let v = run.argv(&sub);
+            assert!(
+                !v.iter().any(|a| a == "tauri/custom-protocol"),
+                "validation checks source and must not demand a built frontend: {v:?}"
+            );
+        }
+    }
+
     #[test]
     fn validation_cargo_spawn_leads_path_with_the_recorded_toolchain() {
         use crate::loomhome::Home;

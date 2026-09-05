@@ -581,7 +581,7 @@ fn job_steps(
             // literal "cmake", which it looks up on PATH.
             p.stage("core", true);
             let spawn = cargo_run(ctx.tools, &home.target())?;
-            let argv = spawn.argv(&["build", "--release"]);
+            let argv = spawn.app_argv(&["build", "--release"]);
             let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
             let envs = spawn.envs();
             let core = source.join("src-tauri");
@@ -1276,7 +1276,16 @@ mod tests {
 
         // Fixed argv: npm run build; cargo build --release --offline.
         assert_eq!(fx.argv("npm"), vec!["run", "build"]);
-        assert_eq!(fx.argv("cargo"), vec!["build", "--release", "--offline"]);
+        // `--features tauri/custom-protocol` is load-bearing, not decoration:
+        // without it tauri-build sets cfg(dev) and the body LOOM weaves has no
+        // embedded frontend — it opens a blank window, can never confirm its
+        // birth, and reports Mode::Dev so it would never weave again. The
+        // end-to-end ceremony failed on exactly this, with every other part of
+        // the machine correct.
+        assert_eq!(
+            fx.argv("cargo"),
+            vec!["build", "--release", "--features", "tauri/custom-protocol", "--offline"]
+        );
         // The body was shelved from the shared target dir, and signed.
         assert_eq!(std::fs::read_to_string(fx.home.generation_exe(&fx.head)).unwrap(), "new body");
         let ledger = generations::read(&fx.home);
@@ -1843,7 +1852,16 @@ mod tests {
             "CMAKE names it outright — the cmake crate honours that before searching"
         );
         // The argv is unchanged: still the fixed, always-offline cargo build.
-        assert_eq!(fx.argv("cargo"), vec!["build", "--release", "--offline"]);
+        // `--features tauri/custom-protocol` is load-bearing, not decoration:
+        // without it tauri-build sets cfg(dev) and the body LOOM weaves has no
+        // embedded frontend — it opens a blank window, can never confirm its
+        // birth, and reports Mode::Dev so it would never weave again. The
+        // end-to-end ceremony failed on exactly this, with every other part of
+        // the machine correct.
+        assert_eq!(
+            fx.argv("cargo"),
+            vec!["build", "--release", "--features", "tauri/custom-protocol", "--offline"]
+        );
     }
 
     /// The same finding at the argv/env boundary: the pairs are what the
@@ -1866,7 +1884,16 @@ mod tests {
             .iter()
             .find(|(stage, _, _)| stage == "core")
             .expect("the core stage spawned");
-        assert_eq!(&argv[1..], &["build".to_string(), "--release".to_string(), "--offline".to_string()]);
+        assert_eq!(
+            &argv[1..],
+            &[
+                "build".to_string(),
+                "--release".to_string(),
+                "--features".to_string(),
+                "tauri/custom-protocol".to_string(),
+                "--offline".to_string(),
+            ]
+        );
         let keys: Vec<&str> = envs.iter().map(|(k, _)| k.as_str()).collect();
         for want in ["CARGO_TARGET_DIR", "CARGO_NET_OFFLINE", "PATH", "CMAKE"] {
             assert!(keys.contains(&want), "the core stage passes {want}, got {keys:?}");
