@@ -66,7 +66,9 @@ const freshLoom = () => {
   var SELF_TOOLS = ["git", "cargo", "rustc", "node", "npm", "cmake", "clang", "codesign"];
   var selfApi = { returned: [], asked: [] };
   selfApi.identity = async function() {
-    return { mode: "dev", genomeSha: SELF_SHA, generation: SELF_SHA, threaded: true, loomhome: "/sandbox/loom", loomhomeBytes: 0 };
+    // canSwap is part of Identity in the shell, so it is part of it here: an
+    // organ's tests read a boolean, not undefined. A dev body never swaps.
+    return { mode: "dev", genomeSha: SELF_SHA, generation: SELF_SHA, threaded: true, loomhome: "/sandbox/loom", loomhomeBytes: 0, canSwap: false };
   };
   selfApi.threads = async function() {
     return {
@@ -90,6 +92,12 @@ const freshLoom = () => {
   selfApi.returnTo = async function(sha) {
     selfApi.asked.push({ kind: "return", sha: String(sha) });
     selfApi.returned.push(String(sha));
+  };
+  // The one settings key the body owns: armed through this power, never
+  // through loom.settings.set. Reads still come back through settings.get.
+  selfApi.setAutoReweave = async function(on) {
+    selfApi.asked.push({ kind: "autoReweave", on: !!on });
+    settingsMap.set("kernel.autoReweave", on ? "on" : "off");
   };
   return {
     storage: { _m: new Map(), get(k, f) { return this._m.has(k) ? this._m.get(k) : f; }, set(k, v) { this._m.set(k, v); }, del(k) { this._m.delete(k); } },

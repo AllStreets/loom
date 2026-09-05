@@ -303,6 +303,44 @@ describe("makeLoomApi settings.resetAll", () => {
   });
 });
 
+/**
+ * Round-2 finding 6: `kernel.autoReweave` decides whether an approved core edit
+ * weaves the body with no card at all. It was writable by anything holding the
+ * generic `settings` grant — a body change armed from behind an innocuous
+ * permission. It belongs to the body, so it sits behind the `self` power, whose
+ * grant card is the one that says this organ may ask about LOOM's body.
+ */
+describe("kernel.autoReweave is not a plain setting", () => {
+  it("the settings power cannot write it", () => {
+    const api = makeLoomApi("notes", ["settings"]);
+    expect(() => api.settings.set("kernel.autoReweave", "on")).toThrow(
+      "kernel.autoReweave arms a body change — it lives behind the self power, not settings",
+    );
+    expect(localStorage.getItem("kernel.autoReweave")).toBeNull();
+  });
+
+  it("the settings power still reads it, and still writes every other key", () => {
+    const api = makeLoomApi("notes", ["settings"]);
+    expect(api.settings.get("kernel.autoReweave")).toBe("off");
+    api.settings.set("voice.speakReplies", "never");
+    expect(api.settings.get("voice.speakReplies")).toBe("never");
+  });
+
+  it("the self power arms and disarms it", async () => {
+    const api = makeLoomApi("settings", ["settings", "self"]);
+    await api.self.setAutoReweave(true);
+    expect(api.settings.get("kernel.autoReweave")).toBe("on");
+    await api.self.setAutoReweave(false);
+    expect(api.settings.get("kernel.autoReweave")).toBe("off");
+  });
+
+  it("without the self grant nothing can arm it", async () => {
+    const api = makeLoomApi("notes", ["settings"]);
+    await expect(api.self.setAutoReweave(true)).rejects.toThrow(/permission "self" not granted/);
+    expect(localStorage.getItem("kernel.autoReweave")).toBeNull();
+  });
+});
+
 // ── power: self (Rebirth — Settings → LOOM) ────────────────────────────────────
 
 const IDENTITY = {
