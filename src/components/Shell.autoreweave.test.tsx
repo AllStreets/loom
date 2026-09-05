@@ -59,10 +59,20 @@ vi.mock("../lib/loom/kernelBuild", async (importActual) => ({
   ...kernelBuild,
 }));
 
-const reweave = vi.hoisted(() => ({ startReweave: vi.fn(async () => ({ ok: true as const })) }));
+const reweave = vi.hoisted(() => ({
+  startReweave: vi.fn(async () => ({ ok: true as const })),
+  /** The reweave feed, captured so a test can push a stage through it. */
+  feed: [] as ((s: unknown) => void)[],
+}));
 vi.mock("../lib/loom/reweave", async (importActual) => ({
   ...(await importActual<typeof import("../lib/loom/reweave")>()),
   startReweave: reweave.startReweave,
+  subscribe: (on: (s: unknown) => void) => {
+    reweave.feed.push(on);
+    return () => {
+      reweave.feed = reweave.feed.filter((f) => f !== on);
+    };
+  },
 }));
 
 import Shell from "./Shell";
@@ -98,6 +108,7 @@ beforeEach(() => {
   localStorage.setItem("loom.orb", "flat");
   localStorage.setItem("kernel.autoReweave", "on");
   reweave.startReweave.mockResolvedValue({ ok: true });
+  reweave.feed = [];
 });
 
 afterEach(() => {
@@ -129,5 +140,43 @@ describe("Shell — a refused auto-weave is spoken", () => {
     await approve(proposal({ targetPaths: ["src-tauri/src/moods.rs"], isCore: true }));
     expect(screen.getByText("the weave did not start")).toBeInTheDocument();
     expect(screen.getByText("a weave is already under way")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Round-3 review. The generations strand refreshed on a window event
+ * (`loom-generations-changed`) that nothing in LOOM ever dispatched. A
+ * packaged weave hid it — the relaunched body refetches at boot — but a dev
+ * weave ends at `stage`, having shelved a real generation, and the Tapestry's
+ * strand stayed stale until the app was restarted. The strand follows the
+ * reweave feed now, which has an emitter.
+ */
+describe("Shell — the generations strand follows the reweave feed", () => {
+  const listCalls = async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return (invoke as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter(
+      (c) => c[0] === "generations_list",
+    ).length;
+  };
+
+  it("refetches the shelf when a weave finishes, and not when one fails", async () => {
+    render(<Shell />);
+    await act(async () => {});
+    const atBoot = await listCalls();
+    expect(atBoot).toBe(1);
+    expect(reweave.feed.length).toBeGreaterThan(0);
+
+    // A stage nobody shelved anything for changes nothing to refetch.
+    await act(async () => {
+      reweave.feed.forEach((f) => f({ stage: "core" }));
+      reweave.feed.forEach((f) => f({ stage: "failed" }));
+    });
+    expect(await listCalls()).toBe(atBoot);
+
+    // `done` put a body on the shelf: the strand asks again.
+    await act(async () => {
+      reweave.feed.forEach((f) => f({ stage: "done" }));
+    });
+    expect(await listCalls()).toBe(atBoot + 1);
   });
 });

@@ -23,7 +23,7 @@ import Reweave from './chrome/Reweave';
 import BodyRequest from './chrome/BodyRequest';
 import RecoveryNotice from './chrome/recoveryNotice';
 import { runBootCheck, markBootOk } from '../lib/loom/recovery';
-import { startReweave, shouldAutoReweave } from '../lib/loom/reweave';
+import { startReweave, shouldAutoReweave, subscribe as subscribeReweave } from '../lib/loom/reweave';
 import { shellNotify } from '../lib/organs/notifyGate';
 import { mountInitiative } from '../lib/initiative/runtime';
 import Shuttle from './Shuttle';
@@ -144,7 +144,16 @@ export default function Shell() {
     return unmount;
   }, []);
 
-  // ----- generations (Rebirth): one fetch at boot, refreshed after a reweave -----
+  // ----- generations (Rebirth): one fetch at boot, refreshed when the shelf
+  // actually changes -----
+  //
+  // Round-3 review: this listened for a `loom-generations-changed` window
+  // event that NOTHING in LOOM ever dispatched. In packaged mode the relaunch
+  // hid it — the new body refetches at boot — but a dev weave stops after
+  // `stage`, which DOES shelve a generation, and the Tapestry's strand stayed
+  // stale until the app was restarted. The reweave feed is the real signal and
+  // has an emitter (`loom-reweave`, from Rust, every state change), so the
+  // strand follows it instead of an event with no sender.
   useEffect(() => {
     let live = true;
     const load = () =>
@@ -157,8 +166,11 @@ export default function Shell() {
         })
         .catch(() => { /* no shell or no ledger yet — the cloth simply has no knots */ });
     void load();
-    window.addEventListener("loom-generations-changed", load);
-    return () => { live = false; window.removeEventListener("loom-generations-changed", load); };
+    // `done` is the only stage that has put a body on the shelf: dev's
+    // built-and-shelved, and the settled state a returning packaged body reads
+    // at boot. Failures and cancels changed nothing to refetch.
+    const off = subscribeReweave((s) => { if (s.stage === "done") void load(); });
+    return () => { live = false; off(); };
   }, []);
 
   // ----- seed install (originally in App) -----
