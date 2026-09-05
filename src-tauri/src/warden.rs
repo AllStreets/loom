@@ -75,7 +75,9 @@ pub struct Job {
     pub timeout_secs: u64,
     /// The heal already happened in-process; only open the app.
     pub relaunch_only: bool,
-    /// The warden's own pid, written by the warden at start.
+    /// The warden's own pid, written by the warden at start and cleared by it
+    /// on the way out (round-2 review, Finding 8) — a pid left behind can be
+    /// recycled, and would then read as a guard that is not there.
     #[serde(default)]
     pub warden_pid: Option<u32>,
 }
@@ -485,6 +487,32 @@ pub fn dispatch(args: impl Iterator<Item = String>) -> Option<i32> {
     None
 }
 
+/// Unstamp the job as the warden leaves. A pid is not an identity — the
+/// system recycles it — so a dead warden's number, handed to some unrelated
+/// process, reads as alive to the pre-main backstop, which then Leaves a body
+/// that never confirmed unguarded on every boot after (round-2 review,
+/// Finding 8). Clearing the stamp on the way out costs one atomic write on a
+/// path the warden always takes, and it composes with the job's `newSha`
+/// stamp: a leftover job is then inert twice over.
+///
+/// The alternative was to record the warden's start time and compare it with
+/// the pid's, which is the only way to survive a warden that is SIGKILLed —
+/// but reading a process's start time means a per-OS process-table read
+/// (`sysctl KERN_PROC_PID` on macOS) on the pre-main path, where the rule is
+/// panic-free and does as little as it can. The honest residual: a warden
+/// killed outright still leaves its pid behind.
+pub(crate) fn release_pid(job_path: &Path) {
+    let Ok(raw) = std::fs::read_to_string(job_path) else { return };
+    let Ok(mut job) = serde_json::from_str::<Job>(&raw) else { return };
+    if job.warden_pid.is_none() {
+        return;
+    }
+    job.warden_pid = None;
+    if let Err(e) = threads::write_json_atomic(job_path, &job) {
+        eprintln!("[warden] my pid could not be cleared as I left — {e}");
+    }
+}
+
 fn run_warden(job_path: &Path) -> i32 {
     let mut job: Job = match std::fs::read_to_string(job_path)
         .map_err(|e| LoomError::Git(format!("read {}: {e}", job_path.display())))
@@ -507,7 +535,11 @@ fn run_warden(job_path: &Path) -> i32 {
     }
     let home = Home::at(job.loomhome.clone());
     let mut world = RealWorld::new(&home);
-    match watch(&job, &mut world, &home) {
+    let verdict = watch(&job, &mut world, &home);
+    // Whatever happened, this warden is done. Its pid must stop claiming to
+    // guard the birth (round-2 review, Finding 8).
+    release_pid(job_path);
+    match verdict {
         Verdict::Confirmed => 0,
         Verdict::Healed { reason } => {
             eprintln!("[warden] the new body {reason} — LOOM came home to {}", &job.prev_sha);
@@ -1046,6 +1078,42 @@ mod tests {
         assert!(take_recovery(&fx.home).is_some());
         assert!(!fx.home.recovery_json().exists());
         assert!(take_recovery(&fx.home).is_none());
+    }
+
+    /// Round-2 review, Finding 8. `warden_alive` is a pid, and pids are
+    /// recycled: a dead warden's number handed to some unrelated process
+    /// reads as alive, and the pre-main backstop then leaves a bad body
+    /// unguarded on every boot after. The warden clears its own pid as it
+    /// leaves, so the job it leaves behind names no guard at all.
+    #[test]
+    fn a_warden_that_has_left_names_no_pid() {
+        let fx = fixture();
+        let job_path = fx.home.warden_json();
+        let mut job = fx.job.clone();
+        job.warden_pid = Some(4242);
+        threads::write_json_atomic(&job_path, &job).unwrap();
+
+        release_pid(&job_path);
+        let after: Job =
+            serde_json::from_str(&std::fs::read_to_string(&job_path).unwrap()).unwrap();
+        assert_eq!(after.warden_pid, None, "a warden that has left is not a guard");
+        assert_eq!(
+            Job { warden_pid: Some(4242), ..after },
+            job,
+            "nothing else about the job may change"
+        );
+        // A job that is already unstamped, and a job file that is gone, are
+        // both fine: this runs on the way out and may never panic.
+        release_pid(&job_path);
+        assert_eq!(
+            serde_json::from_str::<Job>(&std::fs::read_to_string(&job_path).unwrap())
+                .unwrap()
+                .warden_pid,
+            None
+        );
+        std::fs::remove_file(&job_path).unwrap();
+        release_pid(&job_path);
+        assert!(!job_path.exists());
     }
 
     #[test]

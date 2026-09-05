@@ -1734,7 +1734,10 @@ fn preboot_heal_packaged_in(
     // running (round-1 review, Finding 5). `warden.json` is never deleted, so
     // a job left by an earlier birth — whose pid the system may since have
     // handed to something else — is a leftover, not a guard: trusting it
-    // would disarm the backstop forever.
+    // would disarm the backstop forever. A warden that exits normally also
+    // clears its own pid (round-2 review, Finding 8), so a job for THIS birth
+    // whose warden has left names no guard either, however alive the machine
+    // says that number is.
     let warden_alive = job.as_ref().map_or(false, |j| {
         j.new_sha == s.applied_sha && j.warden_pid.map_or(false, |p| pid_alive(p))
     });
@@ -3652,6 +3655,35 @@ mod tests {
             Backstop::Healed { .. }
         ));
         assert_eq!(app_sentinel_status(&fx2.home).as_deref(), Some("healed"));
+    }
+
+    /// Round-2 review, Finding 8. A pid is not an identity — the system
+    /// recycles it. A warden that died leaving `wardenPid: 777` behind is
+    /// indistinguishable from a live one once 777 belongs to something else,
+    /// and the backstop would then Leave a body that never confirmed,
+    /// unguarded, on every boot after. The warden clears its pid as it
+    /// leaves, so the job it leaves behind names no guard however alive the
+    /// machine says that number is.
+    #[test]
+    fn preboot_packaged_heals_when_the_warden_released_its_pid() {
+        let fx = packaged_fx();
+        app_sentinel(&fx.home, "booting", Some("reweave"));
+        warden_file(&fx.home, Some(777));
+        // Every pid on this machine reads as alive — the recycling case.
+        let alive = |_: u32| true;
+        assert!(
+            matches!(
+                preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools()),
+                Backstop::Left
+            ),
+            "a stamped pid that is alive is still a guard"
+        );
+
+        // The warden leaves.
+        crate::warden::release_pid(&fx.home.warden_json());
+        let out = preboot_heal_packaged_in(&fx.home, Some(&fx.layout), &alive, &fx.tools());
+        assert!(matches!(out, Backstop::Healed { .. }), "got {out:?}");
+        assert_eq!(app_sentinel_status(&fx.home).as_deref(), Some("healed"));
     }
 
     #[test]
