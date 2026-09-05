@@ -44,9 +44,9 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import ConsentCard, { type ConsentKind } from "./ConsentCard";
 import LoomGlyph from "./LoomGlyph";
-import { kernelIdentity, threadLoom, type Identity } from "../../lib/core";
+import { kernelIdentity, threadLoom, type Generation, type Identity } from "../../lib/core";
 import { startReweave } from "../../lib/loom/reweave";
-import { returnToGeneration } from "../../lib/loom/generations";
+import { listGenerations, returnToGeneration } from "../../lib/loom/generations";
 import {
   BODY_REQUEST_EVENT,
   LINE_BUSY,
@@ -77,6 +77,7 @@ export function requestLine(
   req: Request,
   identity: Identity | null,
   canSwap: boolean,
+  failedBefore = false,
 ): string {
   const mode = identity?.mode ?? "dev";
   if (req.kind === "thread") return LINE_THREAD_CONSENT;
@@ -84,7 +85,9 @@ export function requestLine(
   // The genome's HEAD is what a weave builds; `genomeSha` is the body already
   // running (round-3 review, findings 1 and 2). A chrome that could not read
   // identity names no sha at all.
-  return reweaveConsentLine(identity?.genomeHead ?? null, mode, canSwap);
+  // Round-4 review, Finding 4: the same sentence the companion speaks,
+  // including the shelf's memory that this sha has already failed to be born.
+  return reweaveConsentLine(identity?.genomeHead ?? null, mode, canSwap, failedBefore);
 }
 
 /** `"notes asked"` — the owner always knows who is asking. */
@@ -95,6 +98,9 @@ export function askedBy(organId: string): string {
 export type BodyRequestProps = {
   /** Who this binary is — defaults to `kernelIdentity`; unreachable reads as dev. */
   identity?: () => Promise<Identity>;
+  /** The shelf, read only to tell the owner when the weave being asked for is
+   *  one that already failed to boot. Unreadable reads as "no failure". */
+  shelf?: () => Promise<Generation[]>;
   /** The three acts, injectable so tests need no shell. */
   acts?: {
     thread: () => Promise<void>;
@@ -111,11 +117,13 @@ const DEFAULT_ACTS = {
 
 export default function BodyRequest({
   identity = kernelIdentity,
+  shelf = listGenerations,
   acts = DEFAULT_ACTS,
 }: BodyRequestProps) {
   const rm = useReducedMotion() ?? false;
   const [req, setReq] = useState<Request | null>(null);
   const [id, setId] = useState<Identity | null>(null);
+  const [failedBefore, setFailedBefore] = useState(false);
   // The open request, readable synchronously — a second `loom-body-request`
   // arrives in the same tick and must be refused, not queued behind stale state.
   // It holds the CLAIMED record: the card's sentence and the act it runs come
@@ -128,6 +136,8 @@ export default function BodyRequest({
   // must not be painted with an earlier body.
   const identityRef = useRef(identity);
   identityRef.current = identity;
+  const shelfRef = useRef(shelf);
+  shelfRef.current = shelf;
 
   useEffect(() => {
     function onRequest(ev: Event) {
@@ -155,8 +165,18 @@ export default function BodyRequest({
         } catch {
           // no shell — the dev framing stands, and nothing can be swapped anyway.
         }
+        let failed = false;
+        if (got && got.genomeHead !== null) {
+          try {
+            const rows = await shelfRef.current();
+            failed = rows.some((g) => g.sha === got.genomeHead && g.failedToBoot);
+          } catch {
+            // an unreadable shelf says nothing — never a warning LOOM invented.
+          }
+        }
         if (open.current !== claimed) return; // answered or unmounted meanwhile
         setId(got);
+        setFailedBefore(failed);
         setReq(claimed);
       })();
     }
@@ -243,7 +263,7 @@ export default function BodyRequest({
           <LoomGlyph size={18} style={{ flexShrink: 0, marginTop: 2 }} />
           <ConsentCard
             consent={KIND_TO_CONSENT[req.kind]}
-            line={requestLine(req, id, id?.canSwap ?? false)}
+            line={requestLine(req, id, id?.canSwap ?? false, failedBefore)}
             note={askedBy(req.organId)}
             settled={null}
             onChoose={choose}

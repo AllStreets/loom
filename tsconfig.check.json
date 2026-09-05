@@ -1,0 +1,65 @@
+{
+  // The typecheck-only config (round-4 finding 3).
+  //
+  // tsconfig.json is the BUILD config: `npm run build` is `tsc && vite build`,
+  // which is reweave's own stage 1, so it must see exactly what ships — tests
+  // and the selftest are excluded there on purpose, and that stays true.
+  //
+  // Nothing then typechecked the tests at all. vitest transpiles without
+  // checking, so a deliberate type error appended to a test file passed both
+  // `npx tsc --noEmit` and `npm run build`. That is precisely where a
+  // Rust-to-TypeScript shape drift hides — the seam that broke this phase
+  // twice: the drift shows up first in the test that mirrors the Rust shape.
+  // It did here, immediately: `recovery.test.ts` was mocking `kernel_boot_check`
+  // with `{ rolledBackTo }` while `KernelBootCheck` also requires
+  // `rollbackFailed`. The fifth wall's own test was checking a shape the Rust
+  // side does not return, and nothing said so.
+  //
+  // Same compiler options as the build, a wider net. Used by `npm run
+  // typecheck` and by CI, never by the build.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // `node` because tests legitimately reach for node builtins the product
+    // never does — tokens.test.ts reads the token stylesheet off disk,
+    // prompts.test.ts hashes with node:crypto, the selftest reads env.
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"]
+  },
+  // `src` only. vite.config.ts / vitest.config.ts are node-side and belong to
+  // tsconfig.node.json, which carries the settings they need (they fail under
+  // the DOM-side options here).
+  "include": ["src"],
+
+  // A RATCHET, NOT A CARVE-OUT. Everything under src/ is checked by default —
+  // every new test is covered the day it is written, and the fifth wall's own
+  // tests (recovery, edits, the boot beacon, the kernel-edit grammar) are
+  // covered now. The files below carry a pre-existing backlog of 119 type
+  // errors, almost all one idiom: an untyped `vi.fn()` in a deps object, which
+  // vitest 4 types as `Mock<Procedure | Constructable>` and which then satisfies
+  // no specific signature. Turning the gate on and fixing 19 unrelated test
+  // files in the same change would have buried three real findings under a
+  // mechanical diff, so the list is written down instead of pretended away.
+  //
+  // The list only ever shrinks. Delete a line, run `npm run typecheck`, fix
+  // what it says. When it is empty, delete the "exclude" key.
+  "exclude": [
+    "src/components/Companion.test.tsx",
+    "src/components/Shell.test.tsx",
+    "src/components/Shell.autoreweave.test.tsx",
+    "src/components/ambient/Field.test.tsx",
+    "src/components/chrome/BodyRequest.test.tsx",
+    "src/components/chrome/KernelDiff.test.tsx",
+    "src/components/orb/orb.test.tsx",
+    "src/lib/companion/companion.test.ts",
+    "src/lib/companion/editOrgan.test.ts",
+    "src/lib/companion/runtime.test.ts",
+    "src/lib/core.test.ts",
+    "src/lib/initiative/observe.test.ts",
+    "src/lib/loom/build.test.ts",
+    "src/lib/loom/experience.test.ts",
+    "src/lib/loom/gateRepair.test.ts",
+    "src/lib/loom/kernelBuild.order.test.ts",
+    "src/lib/organs/api.test.ts",
+    "src/lib/voice/useVoice.test.ts",
+    "src/organs/seeds/seeds.test.ts"
+  ]
+}

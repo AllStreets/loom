@@ -8,7 +8,8 @@
 //!
 //! ```text
 //!   generations/<sha>/loom       the executable for that generation
-//!   generations/<sha>/meta.json  { sha, wovenAt, sizeBytes, reason }
+//!   generations/<sha>/meta.json  { sha, wovenAt, sizeBytes, reason,
+//!                                  failedAt?, failedReason? }
 //!   generations.json             { current, previous, kept, keep, confirmed }
 //! ```
 //!
@@ -63,6 +64,15 @@ pub struct Meta {
     pub woven_at: String,
     pub size_bytes: u64,
     pub reason: String,
+    /// When a healer decided this generation failed to be BORN — it crashed
+    /// or never confirmed its boot, and LOOM came home from it (round-4
+    /// review, findings 3 and 4). `None` for every generation that has not
+    /// failed, including every meta written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_at: Option<String>,
+    /// The healer's reason — one of `warden::REASON_*`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_reason: Option<String>,
 }
 
 /// One row of `generations_list` — the ledger's view of a body plus the
@@ -78,6 +88,13 @@ pub struct GenerationView {
     pub commit_subject: String,
     pub is_current: bool,
     pub is_previous: bool,
+    /// This generation was woven, swapped in, and did not boot: a healer put
+    /// the previous body back. The shell reads this before it offers the
+    /// generation as the way home, and before it offers to weave that sha
+    /// again (round-4 review, findings 3 and 4).
+    pub failed_to_boot: bool,
+    /// Why, in the healer's words — `"crashed"`, `"never confirmed"`.
+    pub failed_reason: Option<String>,
 }
 
 // ── Ledger I/O ────────────────────────────────────────────────────────────────
@@ -192,6 +209,10 @@ pub fn record(home: &Home, sha: &str, exe_src: &Path, reason: &str) -> Result<Me
         woven_at: now_rfc3339(),
         size_bytes,
         reason: reason.to_string(),
+        // A fresh birth: whatever the last one under this sha did, this body
+        // has not failed yet.
+        failed_at: None,
+        failed_reason: None,
     };
     crate::threads::write_json_atomic(&home.generation_meta(sha), &meta)?;
 
@@ -203,6 +224,31 @@ pub fn record(home: &Home, sha: &str, exe_src: &Path, reason: &str) -> Result<Me
     remove_gone(home, &gone)?;
     write(home, &ledger)?;
     Ok(meta)
+}
+
+/// Write on a generation's shelf that it failed to be born.
+///
+/// Round-4 review, findings 3 and 4. After a heal the ledger names the failed
+/// generation as `previous` — the thing "return to the previous generation"
+/// takes — and the genome's HEAD is still that sha, so both readiness gates
+/// went on offering the weave that had just failed. The one durable statement
+/// about the failure, `recovery.json`, is surfaced once and deleted, so
+/// nothing outlived the notice and the owner's only way out was a new commit.
+///
+/// The mark lives in the generation's own `meta.json` because that is the
+/// file that exists exactly as long as the body it describes: prune takes it
+/// away with the shelf entry, and `record` replaces it when that sha is woven
+/// AGAIN — a new birth that has not failed yet, and one the healer will mark
+/// again if it fails again.
+///
+/// The ledger is deliberately left alone: `previous` is also what keeps the
+/// failed body out of `prune`, and the spec wants the failed weave kept. What
+/// changes is what the SHELL does with a row that carries this mark.
+pub fn mark_failed(home: &Home, sha: &str, reason: &str) -> Result<(), LoomError> {
+    let mut meta = read_meta(home, sha);
+    meta.failed_at = Some(now_rfc3339());
+    meta.failed_reason = Some(reason.to_string());
+    crate::threads::write_json_atomic(&home.generation_meta(sha), &meta)
 }
 
 /// `YYYY-MM-DDTHH:MM:SSZ` from the system clock, no chrono. Civil-date
@@ -266,6 +312,12 @@ pub fn list(home: &Home) -> Result<Vec<GenerationView>, LoomError> {
     let mut rows = Vec::with_capacity(ledger.kept.len());
     for sha in ledger.kept.iter().rev() {
         let meta = read_meta(home, sha);
+        // A generation is failed when a healer stamped the time; the reason
+        // travels with it so the shell can say which kind of failure.
+        let meta_failed = meta
+            .failed_at
+            .as_ref()
+            .map(|_| meta.failed_reason.clone().unwrap_or_default());
         rows.push(GenerationView {
             sha: sha.clone(),
             woven_at: meta.woven_at,
@@ -274,6 +326,8 @@ pub fn list(home: &Home) -> Result<Vec<GenerationView>, LoomError> {
             commit_subject: subject(sha),
             is_current: ledger.current.as_deref() == Some(sha.as_str()),
             is_previous: ledger.previous.as_deref() == Some(sha.as_str()),
+            failed_to_boot: meta_failed.is_some(),
+            failed_reason: meta_failed,
         });
     }
     Ok(rows)
@@ -290,6 +344,8 @@ fn read_meta(home: &Home, sha: &str) -> Meta {
             woven_at: String::new(),
             size_bytes: 0,
             reason: String::new(),
+            failed_at: None,
+            failed_reason: None,
         })
 }
 
@@ -404,7 +460,14 @@ mod tests {
         assert!(l.current.is_none() && l.previous.is_none() && l.kept.is_empty());
         let v = serde_json::to_value(&l).unwrap();
         assert!(v.get("keep").is_some() && v.get("confirmed").is_some());
-        let m = Meta { sha: "a".into(), woven_at: "t".into(), size_bytes: 1, reason: "r".into() };
+        let m = Meta {
+            sha: "a".into(),
+            woven_at: "t".into(),
+            size_bytes: 1,
+            reason: "r".into(),
+            failed_at: None,
+            failed_reason: None,
+        };
         let v = serde_json::to_value(&m).unwrap();
         assert!(v.get("wovenAt").is_some() && v.get("sizeBytes").is_some());
         assert!(v.get("woven_at").is_none(), "snake_case must not leak");
@@ -448,6 +511,85 @@ mod tests {
         keep(&h, "ccc333").unwrap();
         assert_eq!(read(&h).kept, vec!["old222", "aaa111", "ccc333"]);
         assert!(!h.generations_dir().join("old111").exists(), "a pruned body's directory goes with it");
+    }
+
+    /// Round-4 review, findings 3 and 4. After a heal the ledger names the
+    /// body that just failed to boot as `previous` — the thing "return to the
+    /// previous generation" takes — and the genome's HEAD is still that sha,
+    /// so both gates went on offering the weave that did not hold. Nothing
+    /// anywhere remembered the failure: the recovery record is surfaced once
+    /// and deleted. The shelved `meta.json` is the durable place to say it,
+    /// because it belongs to the generation itself and lives exactly as long
+    /// as the body it describes.
+    #[test]
+    fn a_generation_that_did_not_boot_is_marked_on_its_own_shelf() {
+        let (_d, h) = home();
+        let src = h.root.join("built-loom");
+        std::fs::write(&src, "a body").unwrap();
+        record(&h, "aaa111", &src, "reweave").unwrap();
+        record(&h, "bbb222", &src, "reweave").unwrap();
+        // The ledger a heal leaves: the good body current, the failed one
+        // `previous` — which is what keeps it on the shelf and out of prune.
+        let mut l = read(&h);
+        l.current = Some("aaa111".into());
+        l.previous = Some("bbb222".into());
+        write(&h, &l).unwrap();
+        assert!(list(&h).unwrap().iter().all(|r| !r.failed_to_boot), "nothing has failed yet");
+
+        mark_failed(&h, "bbb222", "crashed").unwrap();
+
+        let rows = list(&h).unwrap();
+        let failed = rows.iter().find(|r| r.sha == "bbb222").unwrap();
+        assert!(failed.failed_to_boot);
+        assert_eq!(failed.failed_reason.as_deref(), Some("crashed"));
+        assert!(failed.is_previous, "the ledger still says so — the shell decides what to do with it");
+        assert!(!rows.iter().find(|r| r.sha == "aaa111").unwrap().failed_to_boot);
+        // The mark is a note ON the generation, not a replacement of it: the
+        // body stays whole on the shelf, so a deliberate RETURN to it is still
+        // possible, and what the meta already recorded is untouched.
+        assert!(shelved_whole(&h, "bbb222"));
+        assert_eq!(failed.reason, "reweave");
+        assert_ne!(failed.woven_at, "");
+        let v = serde_json::to_value(failed).unwrap();
+        assert_eq!(v["failedToBoot"], true);
+        assert_eq!(v["failedReason"], "crashed");
+        // Durable — the next process reads it off the disk, not out of a
+        // one-shot record.
+        let raw = std::fs::read_to_string(h.generation_meta("bbb222")).unwrap();
+        let m: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(m["failedReason"], "crashed");
+        assert!(m["failedAt"].as_str().unwrap().ends_with('Z'));
+
+        // A meta written before this field existed is a generation that has
+        // not failed, not an unreadable one.
+        std::fs::write(
+            h.generation_meta("aaa111"),
+            r#"{"sha":"aaa111","wovenAt":"2026-09-02T00:00:00Z","sizeBytes":6,"reason":"reweave"}"#,
+        )
+        .unwrap();
+        let rows = list(&h).unwrap();
+        let old = rows.iter().find(|r| r.sha == "aaa111").unwrap();
+        assert!(!old.failed_to_boot && old.failed_reason.is_none());
+        assert_eq!(old.woven_at, "2026-09-02T00:00:00Z");
+
+        // Weaving that sha again clears the mark: `record` writes the meta of
+        // a NEW birth, and this one has not failed yet. If it fails again the
+        // healer marks it again.
+        record(&h, "bbb222", &src, "reweave").unwrap();
+        assert!(!list(&h).unwrap().iter().find(|r| r.sha == "bbb222").unwrap().failed_to_boot);
+
+        // A body with no meta at all (shelved by the swap's EnsureCurrentKept)
+        // can still be marked — the mark must never depend on a file the swap
+        // does not write.
+        let bare = h.generation_exe("ccc333");
+        std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+        std::fs::write(&bare, "kept by the swap").unwrap();
+        keep(&h, "ccc333").unwrap();
+        mark_failed(&h, "ccc333", "never confirmed").unwrap();
+        let rows = list(&h).unwrap();
+        let bare_row = rows.iter().find(|r| r.sha == "ccc333").unwrap();
+        assert!(bare_row.failed_to_boot);
+        assert_eq!(bare_row.failed_reason.as_deref(), Some("never confirmed"));
     }
 
     #[test]

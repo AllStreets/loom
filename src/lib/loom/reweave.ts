@@ -25,6 +25,7 @@
  */
 
 import { listen } from "@tauri-apps/api/event";
+import { listGenerations } from "./generations";
 import {
   kernelIdentity,
   reweaveStart,
@@ -108,20 +109,33 @@ export type StartDeps = {
 
 export type StartResult = { ok: true } | { ok: false; reason: string };
 
-export type ReadinessDeps = { identity: typeof kernelIdentity };
+export type ReadinessDeps = {
+  identity: typeof kernelIdentity;
+  /** The shelf, read only to answer "has this weave already failed once?".
+   *  A shelf that cannot be read is not a failure — see `reweaveReadiness`. */
+  generations?: typeof listGenerations;
+};
 
 export type Readiness =
   | {
       ok: true;
-      generation: string | null;
+      /** WHICH BODY IS RUNNING: the sha compiled into this binary. Not the
+       *  ledger's `current`, which is a claim about disk and is allowed to
+       *  lag. This is what the gate compares HEAD against, and it is what
+       *  the core's `check_start` compares against. */
+      body: string;
       /** What a weave would BUILD: the genome's HEAD. The consent line names
-       *  this — never `genomeSha`, which is the body already running. */
+       *  this — never `body`, which is what is already running. */
       genomeHead: string | null;
       mode: "dev" | "packaged";
       /** Whether this body can actually be swapped — read from the core, which
        *  knows. The consent line must not promise a close-and-return that the
        *  platform will refuse. */
       canSwap: boolean;
+      /** This exact sha has been woven, swapped in, and did not boot: a
+       *  healer marked it on the shelf. The consent line says so; the gate
+       *  does NOT refuse — see `reweaveReadiness`. */
+      failedBefore: boolean;
     }
   | { ok: false; reason: string };
 
@@ -133,10 +147,10 @@ export type Readiness =
  *
  * Preconditions read from `kernel_identity`:
  *   - not threaded → REASON_UNTHREADED
- *   - the running generation already IS the genome's HEAD (and not `force`)
- *     → REASON_NOTHING_NEW. A null generation (no body woven yet, or dev mode)
- *     always has something to weave, and so does a genome whose head cannot be
- *     read — the core re-checks, and refuses with its own sentence.
+ *   - the RUNNING BODY already IS the genome's HEAD (and not `force`) →
+ *     REASON_NOTHING_NEW. A genome whose head cannot be read always has
+ *     something to weave — the core re-checks, and refuses with its own
+ *     sentence.
  *
  * Round-3 review, Finding 1: this compared `generation` with `genomeSha` — the
  * sha the RUNNING BINARY was compiled from. Threading's register step sets
@@ -145,6 +159,32 @@ export type Readiness =
  * weave, LOOM could never weave again. A self-edit moves `loomhome/source`
  * HEAD and neither of the others. The gate reads HEAD now, as the core's own
  * `check_start` always did.
+ *
+ * Round-4 review, Finding 1: and it must compare HEAD against the same thing
+ * the core compares it against — `genomeSha`, the sha baked into the running
+ * binary — not `generation`, the ledger's claim. The swap writes the ledger
+ * BEFORE the new body has ever booted (the ledger may lag the body, never
+ * lead it), so a swap that dies at its last step leaves the ledger naming a
+ * body that is not running. Reading the ledger there, this gate said "nothing
+ * new to weave — the body already matches the genome" about a body that did
+ * not, while the core would have allowed the weave; and the remedy it pointed
+ * at, RETURN from Settings, is refused by `check_return` for the same reason,
+ * because that one correctly compares against the running body. Both roads
+ * out were closed.
+ *
+ * Round-4 review, Finding 4: the verdict also says whether the sha it would
+ * weave is one that has ALREADY failed to be born. After a heal the genome's
+ * HEAD is still the failed sha while the body is the previous one, so this
+ * gate — correctly — offers the weave again, and said nothing about it.
+ *
+ * It warns rather than refuses, deliberately. What the healer decided is that
+ * the body did not CONFIRM its boot, and that can be environmental: a machine
+ * under load, a launch that lost a race, a signature macOS would not take
+ * this once. A rebuild of the same commit is not certainly the same outcome,
+ * and the owner may be about to weave the very fix. Refusing would make the
+ * one escape a no-op commit — which is the trap Finding 4 names — while
+ * `force` is not a road the companion offers. So the fact goes in the
+ * sentence and the owner decides.
  */
 export async function reweaveReadiness(
   deps: ReadinessDeps = { identity: kernelIdentity },
@@ -153,17 +193,18 @@ export async function reweaveReadiness(
   try {
     const id = await deps.identity();
     if (!id.threaded) return { ok: false, reason: REASON_UNTHREADED };
-    if (!force && id.genomeHead !== null && id.genomeHead === id.generation) {
+    if (!force && id.genomeHead !== null && id.genomeHead === id.genomeSha) {
       return { ok: false, reason: REASON_NOTHING_NEW };
     }
     // `mode` travels with the verdict so the consent line can say what will
     // actually happen — in dev nothing is swapped and LOOM does not close.
     return {
       ok: true,
-      generation: id.generation,
+      body: id.genomeSha,
       genomeHead: id.genomeHead,
       mode: id.mode,
       canSwap: id.canSwap,
+      failedBefore: await failedBefore(deps.generations ?? listGenerations, id.genomeHead),
     };
   } catch (e) {
     return { ok: false, reason: reasonOf(e) };
@@ -187,6 +228,24 @@ export async function startReweave(
     return { ok: true };
   } catch (e) {
     return { ok: false, reason: reasonOf(e) };
+  }
+}
+
+/**
+ * Has `head` already been woven and refused to boot? An unreadable shelf (no
+ * body woven yet, outside the shell, a torn ledger) answers "no": this is a
+ * sentence the owner reads, never a wall, and LOOM does not warn about a
+ * failure it cannot show.
+ */
+async function failedBefore(
+  generations: typeof listGenerations,
+  head: string | null,
+): Promise<boolean> {
+  if (head === null) return false;
+  try {
+    return (await generations()).some((g) => g.sha === head && g.failedToBoot);
+  } catch {
+    return false;
   }
 }
 

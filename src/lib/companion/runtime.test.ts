@@ -3,6 +3,7 @@ import {
   handle,
   LINE_THREAD_CONSENT,
   LINE_THREADING,
+  LINE_NO_PREVIOUS,
   reweaveConsentLine,
   type CompanionDeps,
   type RebirthDeps,
@@ -168,6 +169,8 @@ function generation(over: Partial<Generation> = {}): Generation {
     commitSubject: "x",
     isCurrent: true,
     isPrevious: false,
+    failedToBoot: false,
+    failedReason: null,
     ...over,
   };
 }
@@ -176,7 +179,7 @@ function rebirth(over: Partial<RebirthDeps> = {}): RebirthDeps {
   return {
     readiness: vi
       .fn()
-      .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
+      .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
     threadStatus: vi.fn().mockResolvedValue(threadStatus()),
     threadLoom: vi.fn().mockResolvedValue(undefined),
     identity: vi.fn().mockResolvedValue(identity()),
@@ -187,7 +190,49 @@ function rebirth(over: Partial<RebirthDeps> = {}): RebirthDeps {
   };
 }
 
+describe("reweaveConsentLine — the weave that did not hold", () => {
+  /**
+   * Round-4 review, Finding 4. After a heal the genome's HEAD is still the sha
+   * that failed while the body is the previous one, so both gates go on
+   * offering "weave generation X" for the generation LOOM just came home from,
+   * saying nothing about it. Refusing outright would be wrong — the failure
+   * can be environmental, and `force` is not a road the companion offers — so
+   * the sentence carries the fact and the owner decides.
+   */
+  it("names the failure in the sentence, and still offers the weave", () => {
+    expect(reweaveConsentLine(SHA_A, "packaged", true, true)).toBe(
+      "weave generation 3f2a1c again — it didn't boot last time — LOOM will close and return",
+    );
+    expect(reweaveConsentLine(SHA_A, "dev", false, true)).toBe(
+      "weave generation 3f2a1c again — it didn't boot last time — in dev the body stays; restart tauri dev to become it",
+    );
+    // A weave that has never failed says nothing about failure.
+    expect(reweaveConsentLine(SHA_A, "packaged", true, false)).toBe(
+      "weave generation 3f2a1c — LOOM will close and return",
+    );
+  });
+});
+
 describe("handle — reweave", () => {
+  it("passes the failed-before verdict into the consent line", async () => {
+    const rb = rebirth({
+      readiness: vi.fn().mockResolvedValue({
+        ok: true,
+        body: SHA_B,
+        genomeHead: SHA_A,
+        mode: "packaged",
+        canSwap: true,
+        failedBefore: true,
+      }),
+    });
+    const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "reweave_consent",
+      line: "weave generation 3f2a1c again — it didn't boot last time — LOOM will close and return",
+    });
+  });
+
   it("nothing new → speaks the nothing-new line, never a model call, never starts", async () => {
     const rb = rebirth({
       readiness: vi
@@ -225,7 +270,7 @@ describe("handle — reweave", () => {
     const rb = rebirth({
       readiness: vi
         .fn()
-        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: true }),
     });
     const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toContain("weave generation 3f2a1c");
@@ -237,7 +282,7 @@ describe("handle — reweave", () => {
     const rb = rebirth({
       readiness: vi
         .fn()
-        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: null, mode: "packaged", canSwap: true }),
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: null, mode: "packaged", canSwap: true }),
     });
     const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toBe(
@@ -247,7 +292,7 @@ describe("handle — reweave", () => {
 
   it("dev → the consent line never promises a close and return that will not happen", async () => {
     const rb = rebirth({
-      readiness: vi.fn().mockResolvedValue({ ok: true, generation: null, genomeHead: SHA_A, mode: "dev" }),
+      readiness: vi.fn().mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "dev" }),
     });
     const turn = await handle("rebuild yourself", [], makeDeps({ rebirth: rb }));
     expect(turn).toEqual({
@@ -261,7 +306,7 @@ describe("handle — reweave", () => {
     const rb = rebirth({
       readiness: vi
         .fn()
-        .mockResolvedValue({ ok: true, generation: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: false }),
+        .mockResolvedValue({ ok: true, body: SHA_B, genomeHead: SHA_A, mode: "packaged", canSwap: false }),
     });
     const turn = await handle("reweave yourself", [], makeDeps({ rebirth: rb }));
     expect(turn.kind === "consent" && turn.line).toBe(
@@ -336,16 +381,81 @@ describe("handle — identity", () => {
     expect(turn).toEqual({ kind: "reply", text: "generation 9b8c7d · packaged · threaded" });
   });
 
-  it("no generation yet → unwoven, not threaded", async () => {
+  /**
+   * Round-4 review, Finding 2. "which generation is this" was answered from
+   * `generation` — the LEDGER's claim about which body is on disk, which is
+   * allowed to lag the body and, after a half-finished swap, names the body
+   * that is NOT running. The binary's baked sha is the one value that cannot
+   * be wrong about which body is executing, so that is the one that answers.
+   */
+  it("names the body that is running, not the ledger's claim", async () => {
+    const rb = rebirth({
+      // The half-finished swap: the ledger already moved to the new sha, the
+      // old body is still the one asking and answering.
+      identity: vi.fn().mockResolvedValue(identity({ genomeSha: SHA_A, generation: SHA_B })),
+    });
+    const turn = await handle("which generation is this", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "generation 3f2a1c · packaged · threaded" });
+  });
+
+  /** And a torn or absent ledger cannot make a real woven body say it is not
+   *  one: `generation: null` is the ledger's silence, not the body's. */
+  it("a silent ledger does not unweave a body that knows its own sha", async () => {
     const rb = rebirth({
       identity: vi.fn().mockResolvedValue(identity({ mode: "dev", generation: null, threaded: false })),
     });
     const turn = await handle("what generation are you?", [], makeDeps({ rebirth: rb }));
-    expect(turn).toEqual({ kind: "reply", text: "generation unwoven · dev · not threaded" });
+    expect(turn).toEqual({ kind: "reply", text: "generation 9b8c7d · dev · not threaded" });
+  });
+
+  /** The one body that genuinely cannot name itself: built outside the
+   *  genome, so `build.rs` baked the literal "unknown". */
+  it("a body built outside the genome says it is unnamed", async () => {
+    const rb = rebirth({
+      identity: vi.fn().mockResolvedValue(identity({ genomeSha: "unknown", generation: SHA_B })),
+    });
+    const turn = await handle("which generation is this", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: "generation unnamed · packaged · threaded" });
   });
 });
 
 describe("handle — generation_return", () => {
+  /**
+   * Round-4 review, Finding 3. The warden's heal writes `{ current: prev,
+   * previous: <the failed sha> }`, so the row flagged PREVIOUS after a heal is
+   * the body that just refused to boot. Taking it meant closing LOOM, swapping
+   * in the body that failed, and trusting the warden to bring it home again.
+   */
+  it("after a heal, the way home is not the body that just failed", async () => {
+    const FAILED = "ccc333ccc333ccc333ccc333ccc333ccc333ccc3";
+    const rb = rebirth({
+      generations: vi.fn().mockResolvedValue([
+        generation({ sha: FAILED, isCurrent: false, isPrevious: true, failedToBoot: true, failedReason: "crashed" }),
+        generation({ sha: SHA_A, isCurrent: true }),
+        generation({ sha: SHA_B, isCurrent: false }),
+      ]),
+    });
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({
+      kind: "consent",
+      consent: "generation_return_consent",
+      sha: SHA_B,
+      line: "return to generation 9b8c7d — LOOM will close and return",
+    });
+  });
+
+  it("a shelf whose only other body failed to boot has no way home", async () => {
+    const FAILED = "ccc333ccc333ccc333ccc333ccc333ccc333ccc3";
+    const rb = rebirth({
+      generations: vi.fn().mockResolvedValue([
+        generation({ sha: FAILED, isCurrent: false, isPrevious: true, failedToBoot: true }),
+        generation({ sha: SHA_A, isCurrent: true }),
+      ]),
+    });
+    const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rb }));
+    expect(turn).toEqual({ kind: "reply", text: LINE_NO_PREVIOUS });
+  });
+
   it("a previous generation → consent turn carrying its sha", async () => {
     const turn = await handle("return to the previous generation", [], makeDeps({ rebirth: rebirth() }));
     expect(turn).toEqual({

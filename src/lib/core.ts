@@ -232,8 +232,10 @@ export async function builderChat(messages: Msg[], opts?: ChatOpts): Promise<str
 /**
  * One woven body on the shelf: the ledger's row plus the genome's memory of
  * the commit it came from (`commitSubject` is `"unknown"` when the genome or
- * the commit is missing). `isCurrent` is the running body; `isPrevious` is the
- * one the warden returns to.
+ * the commit is missing). `isCurrent` is the ledger's running body;
+ * `isPrevious` is the row the ledger's `previous` names — which after a heal
+ * is the generation that FAILED to be born, so it is not by itself the way
+ * home (see `previousGeneration` in `lib/loom/generations.ts`).
  */
 export type Generation = {
   sha: string;
@@ -243,6 +245,16 @@ export type Generation = {
   commitSubject: string;
   isCurrent: boolean;
   isPrevious: boolean;
+  /**
+   * This generation was woven, swapped in, and did not boot — a healer put the
+   * previous body back and stamped its `meta.json` (round-4 review, findings 3
+   * and 4). `isPrevious` alone cannot say this: the warden's heal writes
+   * `{ current: prev, previous: <the failed sha> }`, so after a heal the
+   * ledger's PREVIOUS is exactly the body that would not start.
+   */
+  failedToBoot: boolean;
+  /** Why, in the healer's words — `"crashed"`, `"never confirmed"`. */
+  failedReason: string | null;
 };
 
 /** Every kept generation, newest first. Read by Settings → LOOM and the Shuttle. */
