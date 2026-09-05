@@ -585,9 +585,16 @@ fn job_steps(
             // self-edit while the body is generation N. Best effort: a body
             // that built is worth more than a bundle that did not, and the
             // swap's own re-sign covers whatever this wrote.
+            //
+            // Best effort — except for a CANCEL. The re-stage spawns git
+            // through the runner, so the owner's cancel reaches it first and
+            // comes back here as a failure; swallowing that one printed "the
+            // weave was cancelled" into the log while the swap went on to
+            // replace the running generation (round-4 review, Finding 2).
             if let Some(layout) = ctx.layout.as_ref() {
                 match restage_genome(runner, p, &layout.app_path, source, target, ctx.tools) {
                     Ok(()) => p.line("the carried genome now matches the woven body"),
+                    Err(e) if runner.cancelled() => return Err(e),
                     Err(e) => p.line(&format!(
                         "the carried genome could not be re-staged — {}; the body is unaffected, \
                          but a re-seed would rewind it",
@@ -612,6 +619,18 @@ fn job_steps(
                 return Err(exit_failed(runner, "stage", "the genome could not be checked out at that generation", &out));
             }
         }
+    }
+
+    // The last moment a cancel can be honoured. `stage` is advertised as
+    // cancellable and the card offers CANCEL on it, so a cancel that lands
+    // anywhere in it — during the shelving, the signing, the re-stage, or in
+    // the gap after the last spawn — has to be answered here, before the one
+    // step that cannot be taken back (round-4 review, Finding 2).
+    if runner.cancelled() {
+        return Err(failed(
+            format!("the weave was cancelled — {UNTOUCHED}"),
+            LoomError::Parse("cancelled".into()),
+        ));
     }
 
     // 4 · swap — the point of return. Not cancellable from here.
@@ -1148,6 +1167,39 @@ mod tests {
         }
     }
 
+    /// `ExecRunner`, with the owner's CANCEL landing as a chosen stage ends —
+    /// the real spawns still happen, and `cancelled()` tells the truth from
+    /// that moment on, exactly as `exec::JOB` does after a group kill.
+    struct CancelAt {
+        inner: ExecRunner,
+        at: &'static str,
+        cancelled: bool,
+    }
+
+    impl Runner for CancelAt {
+        fn run(
+            &mut self,
+            stage: &str,
+            argv: &[&str],
+            cwd: &Path,
+            root: &Path,
+            envs: &[(&str, &str)],
+            on_line: &mut dyn FnMut(&str),
+        ) -> Result<ExecOut, LoomError> {
+            let out = self.inner.run(stage, argv, cwd, root, envs, on_line);
+            if stage == self.at {
+                self.cancelled = true;
+            }
+            out
+        }
+        fn detach(&mut self, argv: &[&str], cwd: &Path, root: &Path) -> Result<u32, LoomError> {
+            self.inner.detach(argv, cwd, root)
+        }
+        fn cancelled(&self) -> bool {
+            self.cancelled
+        }
+    }
+
     // ── the seven ──
 
     #[test]
@@ -1371,6 +1423,65 @@ mod tests {
         assert!(cancel_with(&idle).is_err());
         let done = ReweaveState { stage: "done".into(), ..swap.clone() };
         assert!(cancel_with(&done).is_err());
+    }
+
+    /// ROUND-4 review, Finding 2. `stage` advertises itself as cancellable —
+    /// `p.stage("stage", true)`, and the card offers CANCEL on it — but
+    /// nothing between the core build and the swap ever asked
+    /// `runner.cancelled()`. A cancel that landed there was SEEN (the
+    /// re-staging step refused, saying "the weave was cancelled — the running
+    /// generation is untouched") and then DISCARDED into a log line, while
+    /// the swap replaced the running generation anyway.
+    ///
+    /// A cancel that is answered by doing the irreversible thing is worse
+    /// than no cancel at all.
+    #[test]
+    fn a_cancel_during_stage_stops_before_the_swap() {
+        let fx = fixture();
+        let tools = fx.tools();
+        let ctx = fx.ctx(Mode::Packaged, &tools);
+        // The body running now — the one a swap would replace — is on the
+        // shelf, so nothing but the cancel stands between the weave and it.
+        let running = crate::loomhome::genome_sha().to_string();
+        generations::write(&fx.home, &generations::Ledger {
+            current: Some(running.clone()),
+            previous: None,
+            kept: vec![running.clone()],
+            keep: 3,
+            confirmed: true,
+        })
+        .unwrap();
+        fx.shelve(&running, "prev");
+
+        let mut seen = Vec::new();
+        let mut runner = CancelAt { inner: ExecRunner, at: "core", cancelled: false };
+        let err = run_job(&ctx, Kind::Weave, &mut runner, &mut fx.states(&mut seen)).unwrap_err();
+
+        // It ends as a cancel, in LOOM's voice, and never reaches the swap.
+        assert!(matches!(err, LoomError::Parse(ref m) if m == "cancelled"), "got {err:?}");
+        assert_eq!(stages(&seen), vec!["assets", "core", "stage", "cancelled"]);
+        let last = seen.last().unwrap();
+        assert_eq!(last.stage, "cancelled");
+        assert_eq!(
+            last.outcome.as_deref(),
+            Some("the weave was cancelled — the running generation is untouched")
+        );
+        assert!(!last.cancellable);
+        assert_eq!(&persisted(&fx.home), last);
+
+        // And the running generation really is untouched.
+        assert_eq!(std::fs::read_to_string(&fx.lay.exe_path).unwrap(), "old body");
+        assert!(!fx.home.warden_json().exists(), "no warden was armed");
+        assert!(!fx.home.sentinel_json().exists(), "no birth was armed");
+        assert_eq!(
+            generations::read(&fx.home).current.as_deref(),
+            Some(running.as_str()),
+            "the ledger still names the body that is running"
+        );
+        assert!(!fx.root.join("warden-launched.txt").exists(), "nothing was relaunched");
+        // The body it did build is still on the shelf — cancelling a weave
+        // throws away the swap, not the work.
+        assert_eq!(std::fs::read_to_string(fx.home.generation_exe(&fx.head)).unwrap(), "new body");
     }
 
     #[test]
