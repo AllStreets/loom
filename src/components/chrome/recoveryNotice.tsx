@@ -19,6 +19,22 @@ import { RECOVERY_EVENT, type RecoveryDetail } from "../../lib/loom/recovery";
 /** z 1550 — above the notices stack (1500), below the permission modal (2000). */
 const RECOVERY_Z = 1550;
 
+/**
+ * The hinge of the sentence, chosen by what the warden actually saw.
+ *
+ * Rust distinguishes a body that died from one that was still running when the
+ * clock ran out — the second is usually a boundaried error that vetoed the
+ * confirmation, not a crash — and the notice used to flatten both into "and
+ * couldn't", so the reason crossed the whole boundary and died at the last
+ * inch. Any reason it does not recognise reads as the general case rather than
+ * inventing a story.
+ */
+function whyItFailed(reason: string): string {
+  if (reason.startsWith("crashed")) return " and it stopped — it came home to ";
+  if (reason.includes("still running")) return " and couldn't say it was well — it came home to ";
+  return " and couldn't — it came home to ";
+}
+
 export default function RecoveryNotice() {
   const rm = useReducedMotion() ?? false;
   const [notice, setNotice] = useState<RecoveryDetail | null>(null);
@@ -100,7 +116,7 @@ export default function RecoveryNotice() {
                 <>
                   {"LOOM tried to become "}
                   <span style={{ fontFamily: "var(--f-mono)", color: "var(--t2)" }}>{failed7}</span>
-                  {" and couldn't — it came home to "}
+                  {whyItFailed(gen.reason)}
                   <span
                     data-testid="recovery-sha"
                     style={{ fontFamily: "var(--f-mono)", color: "var(--accent)" }}

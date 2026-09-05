@@ -78,11 +78,28 @@ describe("RecoveryNotice — a generation that couldn't be born", () => {
     render(<RecoveryNotice />);
     act(() => heal("3f2a1c9deadbeef", "8b91e0abcdef"));
     expect(screen.getByTestId("recovery-body")).toHaveTextContent(
-      "LOOM tried to become 3f2a1c9 and couldn't — it came home to 8b91e0a. The failed weave is kept under generations.",
+      "LOOM tried to become 3f2a1c9 and it stopped — it came home to 8b91e0a. The failed weave is kept under generations.",
     );
     expect(screen.getByTestId("recovery-sha")).toHaveTextContent("8b91e0a");
     expect(screen.queryByText(/an edit didn't hold/i)).not.toBeInTheDocument();
     expect(screen.getByTestId("recovery-notice").textContent).not.toMatch(/!/);
+  });
+
+  it("says which kind of failure it was — the reason crossed the boundary to be used", () => {
+    // The warden distinguishes a body that died from one that was still
+    // running when the clock ran out (usually a boundaried error vetoing the
+    // confirmation, not a crash). Both used to read "and couldn't".
+    for (const [reason, hinge] of [
+      ["crashed", "and it stopped"],
+      ["never confirmed — still running when the clock ran out", "and couldn't say it was well"],
+      ["never confirmed", "and couldn't"],
+      ["something nobody has written yet", "and couldn't"],
+    ] as const) {
+      const { unmount } = render(<RecoveryNotice />);
+      act(() => heal("3f2a1c9deadbeef", "8b91e0abcdef", reason));
+      expect(screen.getByTestId("recovery-body")).toHaveTextContent(hinge);
+      unmount();
+    }
   });
 
   it("the plain edit variant is unchanged when no generation rides the event", () => {
