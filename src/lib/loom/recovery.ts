@@ -18,6 +18,15 @@
  *                     Clears the pending sentinel: this boot held, so the last
  *                     applied edit is confirmed good.
  *
+ * A NOTE FOR CALLERS (round-4 finding 1): under `<React.StrictMode>` every
+ * effect is mounted, cleaned up, and mounted again in development. A caller
+ * that guards this beacon with "have we SCHEDULED it?" arms the timer on the
+ * first mount, cancels it in the cleanup, and skips the second mount — so the
+ * beacon never fires and every GOOD self-edit is rolled back on the next start.
+ * Schedule freshly on every mount, cancel cleanly, and let the guard mean "the
+ * beacon has FIRED". markBootOk is safe to call more than once: clearing an
+ * absent sentinel is a no-op on the Rust side and errors are swallowed here.
+ *
  * Both swallow errors (outside the desktop shell / no source repo they simply
  * no-op) — recovery must never itself become a boot hazard.
  */
