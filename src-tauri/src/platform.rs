@@ -500,8 +500,7 @@ mod tests {
         let lay = layout(d.path());
         // Generation 0 outside a repo: no ledger, and the baked sha is
         // `unknown`, so the running body has no name to be shelved under.
-        let mut unnamed = Ledger::default();
-        unnamed.current = Some(UNKNOWN_SHA.into());
+        let unnamed = Ledger { current: Some(UNKNOWN_SHA.into()), ..Ledger::default() };
         match swap_plan(&unnamed, &lay, &home, "bbb222", "macos") {
             Err(LoomError::Unsupported(m)) => assert_eq!(m, UNKNOWN_GENERATION),
             other => panic!("expected Unsupported, got {other:?}"),
