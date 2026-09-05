@@ -296,6 +296,26 @@ which is where all the proving had been done.
 
 **Closed after the review, in the same run**
 
+- **The ceremony now runs against real git, npm and cargo**, not shell-script
+  fakes — two `#[ignore]`d, skip-guarded tests over a throwaway genome fixture,
+  with the command to run them in each doc comment. The whole ceremony takes
+  ~730 ms and a resumed one ~5 ms. They stay ignored because `cargo vendor` on a
+  cold registry is the one step that needs the network, which is the residual
+  itself. Running them found two things: the shelved body is not byte-identical
+  to the built one (the ad-hoc re-sign rewrites it, so the test verifies the
+  signature instead — a stronger claim, and the one the swap depends on), and
+  the seed/register sha disagreement below.
+- **The seed lands on the body's own sha** whenever the bundle carries it. Seed
+  followed the bundle's sha while register shelves generation 0 under the baked
+  one; when those disagreed the ledger named a commit the work tree did not have.
+- **Threading has a card.** The ceremony that spends the owner's one network
+  trip and runs for tens of minutes had no rail and no stop button, while
+  `thread_cancel` sat wired, tested and unreachable. `chrome/Threading.tsx`
+  mirrors the reweave card — stations, streamed tail, elapsed, CANCEL — and is
+  protected for the same reason the reweave card is. What it still cannot do is
+  survive a mid-ceremony reload: there is no `thread_state` to read at mount, so
+  its clock starts when the card starts watching, and says so.
+
 - **The carried genome is re-staged at `stage`**, so the bundle inside the app
   names the body it is about to become. It kept the sha the app was first built
   at, and a re-seed would have rewound the genome past every self-edit.
