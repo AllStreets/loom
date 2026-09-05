@@ -26,7 +26,10 @@ export default function RecoveryNotice() {
   useEffect(() => {
     function onRecovered(ev: Event) {
       const detail = (ev as CustomEvent<RecoveryDetail>).detail;
-      if (!detail?.sha) return;
+      // A failed rollback carries no sha — there is no home to name. It is the
+      // one notice the owner most needs, so it must not be dropped for want of
+      // the thing that is missing precisely because it failed.
+      if (!detail || (!detail.sha && !detail.failed)) return;
       // Only one at a time — a live card ignores further events.
       setNotice((prev) => prev ?? detail);
     }
@@ -81,13 +84,19 @@ export default function RecoveryNotice() {
                 marginBottom: 6,
               }}
             >
-              came home
+              {notice?.failed ? "couldn't come home" : "came home"}
             </div>
             <div
               data-testid="recovery-body"
               style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.5 }}
             >
-              {gen ? (
+              {notice?.failed ? (
+                <>
+                  {"LOOM tried to come home and couldn't — it is still running "}
+                  {"the body that failed. Return to a kept generation from "}
+                  {"Settings, or reinstall from a build you trust."}
+                </>
+              ) : gen ? (
                 <>
                   {"LOOM tried to become "}
                   <span style={{ fontFamily: "var(--f-mono)", color: "var(--t2)" }}>{failed7}</span>
