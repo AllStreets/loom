@@ -15,7 +15,10 @@
 //!    one instance;
 //! 3. watch the sentinel: the new body's pre-main marks `booting`, a healthy
 //!    shell's `kernel_boot_ok` marks `ok` and confirms the ledger;
-//! 4. confirmed within `timeoutSecs` → write nothing else, exit;
+//! 4. confirmed within `timeoutSecs` → write nothing else, exit. So does a
+//!    sentinel stamped with ANOTHER birth's sha: a later swap (a RETURN, a
+//!    second weave) owns the body now and has its own warden, and this one's
+//!    shas describe a body no longer on disk (round-3 review, Finding 1);
 //! 5. not confirmed — the process vanished (`crashed`: `CRASH_SAMPLES`
 //!    consecutive empty samples, never one) or the clock ran out (`never
 //!    confirmed`) — → HEAL: copy the previous body back over the executable,
@@ -228,7 +231,9 @@ impl World for RealWorld {
 
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
-    /// The new body confirmed its boot; nothing was written.
+    /// Nothing was written: either the new body confirmed its boot, or the
+    /// birth this warden guarded was superseded by a later swap and is no
+    /// longer this warden's to judge (round-3 review, Finding 1).
     Confirmed,
     /// The new body did not confirm; the previous one is back in place.
     Healed { reason: String },
@@ -280,9 +285,12 @@ pub fn watch(job: &Job, world: &mut dyn World, home: &Home) -> Verdict {
     // can land inside it: the body has by then written the sentinel `ok` and
     // the ledger `confirmed: true`. Healing over that would take back a
     // generation that DID confirm and tell the owner it could not (round-2
-    // review, Finding 4). One last look at the sentinel — the same question
-    // the watch asked, asked once more at the last possible moment.
-    if world.read_sentinel().is_some_and(|s| s.status == "ok") {
+    // review, Finding 4). One last look at the sentinel — the same two
+    // questions the watch asked, asked once more at the last possible moment:
+    // did this birth confirm, and is it still the birth in play at all
+    // (round-3 review, Finding 1)?
+    let last = world.read_sentinel();
+    if last.as_ref().is_some_and(|s| s.status == "ok") || superseded(last.as_ref(), &job.new_sha) {
         return Verdict::Confirmed;
     }
     let (take_it_down, reason) = ending(&reason, !seen.is_empty());
@@ -303,6 +311,23 @@ pub fn watch(job: &Job, world: &mut dyn World, home: &Home) -> Verdict {
         }
         Err(e) => Verdict::HealFailed(e.to_string()),
     }
+}
+
+/// PURE: has the birth this job guards been superseded (round-3 review,
+/// Finding 1)? The sentinel's `applied_sha` is the STAMP of the birth the
+/// file on disk belongs to, and the pre-main backstop already judges a warden
+/// job by it (`kernel.rs`: `j.new_sha == s.applied_sha`). The warden that
+/// backstop backs up must ask the same question: a sentinel naming another
+/// sha was rewritten by a LATER swap — a RETURN, or a second weave — which
+/// moved the ledger and spawned its own guard. This warden's birth is over;
+/// its shas describe a body that is no longer on disk, and healing them would
+/// destroy the body the owner just asked for.
+///
+/// `None` (absent or torn) and an EMPTY stamp are no information, never a
+/// supersede: the source-edit apply flow writes a sentinel before the commit
+/// names its sha, and a warden must not walk away from a birth on that.
+pub fn superseded(sentinel: Option<&Sentinel>, new_sha: &str) -> bool {
+    sentinel.is_some_and(|s| !s.applied_sha.is_empty() && s.applied_sha != new_sha)
 }
 
 /// PURE: how a failed birth ends (round-1 review, Finding 3). `alive` is the
@@ -345,7 +370,8 @@ fn open_with_retry(world: &mut dyn World, app: &Path) -> Result<(), LoomError> {
 }
 
 /// Steps 3–4: watch the sentinel and the machine until one of them answers.
-/// `None` is a confirmed birth; `Some(reason)` is the fact that ended it.
+/// `None` is a birth this warden must not heal — confirmed, or superseded by
+/// a later swap; `Some(reason)` is the fact that ended it.
 ///
 /// Death is only ever declared on `CRASH_SAMPLES` consecutive empty samples
 /// (Finding 2): one empty sample is a hiccup, and a sample that could not be
@@ -357,7 +383,10 @@ fn confirm(job: &Job, world: &mut dyn World) -> Option<String> {
     let mut seen_alive = false;
     let mut empty = 0u32;
     loop {
-        if world.read_sentinel().map(|s| s.status == "ok").unwrap_or(false) {
+        let s = world.read_sentinel();
+        // Confirmed, or no longer this warden's birth to guard — either way
+        // there is nothing here to heal (round-3 review, Finding 1).
+        if s.as_ref().is_some_and(|s| s.status == "ok") || superseded(s.as_ref(), &job.new_sha) {
             return None;
         }
         match world.find_pids(&job.exe_path) {
@@ -576,6 +605,11 @@ mod tests {
         old_pid_gone_at: u32,
         /// (from_tick, sentinel status) — the latest row ≤ tick wins.
         sentinel: Vec<(u32, &'static str)>,
+        /// (from_tick, sentinel applied_sha) — the latest row ≤ tick wins.
+        /// The sentinel's STAMP: which birth the file on disk is about. A
+        /// later swap rewrites it, and that is how a warden learns its own
+        /// birth is over (round-3 review, Finding 1).
+        applied: Vec<(u32, &'static str)>,
         /// (from_tick, pids) — the latest row ≤ tick wins. `None` is a
         /// sample that could not be taken.
         pids: Vec<(u32, Option<Vec<u32>>)>,
@@ -592,6 +626,10 @@ mod tests {
         /// because the window the review found is the final `pgrep` — the one
         /// with a 10 s ceiling — taken after the watch has already given up.
         ok_after_samples: Option<u32>,
+        /// A LATER swap that lands in the same last window: from this sample
+        /// onwards the sentinel is stamped with another birth's sha
+        /// (round-3 review, Finding 1).
+        superseded_after_samples: Option<u32>,
     }
 
     impl FakeWorld {
@@ -602,12 +640,14 @@ mod tests {
                 ticks: 0,
                 old_pid_gone_at: 0,
                 sentinel: vec![(0, "applied")],
+                applied: vec![(0, "bbb222")],
                 pids: vec![(0, Some(vec![4242]))],
                 opens: Vec::new(),
                 open_fails: 0,
                 kills: Vec::new(),
                 samples: std::cell::Cell::new(0),
                 ok_after_samples: None,
+                superseded_after_samples: None,
             }
         }
         fn latest<'a, T>(&self, rows: &'a [(u32, T)]) -> Option<&'a T> {
@@ -637,9 +677,11 @@ mod tests {
         fn read_sentinel(&self) -> Option<Sentinel> {
             let late = self.ok_after_samples.is_some_and(|n| self.samples.get() >= n);
             let status = if late { "ok" } else { *self.latest(&self.sentinel)? };
+            let moved = self.superseded_after_samples.is_some_and(|n| self.samples.get() >= n);
+            let applied = if moved { LATER_SHA } else { *self.latest(&self.applied)? };
             Some(Sentinel {
                 prev_sha: "aaa111".into(),
-                applied_sha: "bbb222".into(),
+                applied_sha: applied.into(),
                 status: status.into(),
                 source_root: String::new(),
                 armed_by: Some("reweave".into()),
@@ -653,6 +695,10 @@ mod tests {
             self.ticks += 1;
         }
     }
+
+    /// The birth a RETURN starts inside this warden's window: another sha
+    /// entirely, stamped on the sentinel by the later swap.
+    const LATER_SHA: &str = "ccc333";
 
     struct Fx {
         _dir: tempfile::TempDir,
@@ -899,6 +945,85 @@ mod tests {
         assert!(!fx.home.recovery_json().exists(), "no record claims a birth that did not fail");
         assert!(w.kills.is_empty(), "nothing of a confirmed body is killed");
         assert_eq!(w.opens.len(), 1, "no second window over the one that confirmed");
+    }
+
+    /// Round-3 review, Finding 1. A live warden never checked that the birth
+    /// it guards is still the one in play. No fault is needed to reach it: a
+    /// weave to bbb222 relaunches and this warden guards it; the body boots
+    /// and paints but never beacons (the ErrorBoundary veto — a stated
+    /// residual); inside the window the owner takes Settings → RETURN to
+    /// ccc333, which is seconds because it skips assets and core — it
+    /// rewrites the sentinel to `applied`/ccc333, moves the ledger and spawns
+    /// its own warden. This clock then ran out, read `applied` rather than
+    /// `ok`, and healed ITS OWN shas: the body the owner asked for destroyed,
+    /// the second warden's ledger rewritten, a terminal `healed` landed on a
+    /// birth still in flight. The sentinel's stamp is the answer — a sentinel
+    /// that no longer names this job's `newSha` says this birth is over.
+    #[test]
+    fn a_warden_whose_birth_was_superseded_heals_nothing() {
+        let fx = fixture();
+        let mut w = FakeWorld::new();
+        w.sentinel = vec![(0, "applied"), (2, "booting"), (6, "applied")];
+        w.applied = vec![(0, "bbb222"), (6, LATER_SHA)];
+        assert_eq!(
+            watch(&fx.job, &mut w, &fx.home),
+            Verdict::Confirmed,
+            "this birth is over — the heal is not this warden's to do"
+        );
+        assert_eq!(fx.exe(), "new body", "the body the owner asked for is left in place");
+        assert!(w.kills.is_empty(), "no process of a later birth is killed");
+        assert_eq!(w.opens.len(), 1, "no second window over the birth in flight");
+        assert!(!fx.home.recovery_json().exists(), "no record of a failure that was not one");
+        assert!(sentinel_status(&fx.home).is_none(), "no terminal `healed` over a live birth");
+        let ledger = generations::read(&fx.home);
+        assert_eq!(
+            ledger.current.as_deref(),
+            Some("bbb222"),
+            "the later warden's ledger is untouched"
+        );
+        assert!(w.ticks < 180, "it left when it saw the stamp move, not at the deadline");
+    }
+
+    /// Finding 1, the other window. The supersede can land in the LAST look —
+    /// the `pgrep` with a 10 s ceiling, taken after the watch has given up —
+    /// exactly as a late `kernel_boot_ok` can. The final look asks the same
+    /// question the watch asked.
+    #[test]
+    fn a_supersede_that_lands_in_the_last_window_is_not_healed_over() {
+        let probe = fixture();
+        let mut w = FakeWorld::new();
+        w.sentinel = vec![(0, "applied"), (2, "booting")];
+        watch(&probe.job, &mut w, &probe.home);
+        let last = w.samples.get();
+
+        let fx = fixture();
+        let mut w = FakeWorld::new();
+        w.sentinel = vec![(0, "applied"), (2, "booting")];
+        w.superseded_after_samples = Some(last);
+        assert_eq!(watch(&fx.job, &mut w, &fx.home), Verdict::Confirmed);
+        assert_eq!(fx.exe(), "new body");
+        assert!(sentinel_status(&fx.home).is_none());
+        assert!(!fx.home.recovery_json().exists());
+        assert!(w.kills.is_empty());
+        assert_eq!(w.opens.len(), 1);
+    }
+
+    /// A sentinel with no stamp at all (`applied_sha` empty — the source-edit
+    /// apply flow writes one before the commit names the sha) is no
+    /// information, not a supersede: the warden keeps watching.
+    #[test]
+    fn an_unstamped_sentinel_is_not_a_supersede() {
+        assert!(!superseded(None, "bbb222"), "no sentinel is no information");
+        let s = |applied: &str| Sentinel {
+            prev_sha: "aaa111".into(),
+            applied_sha: applied.into(),
+            status: "booting".into(),
+            source_root: String::new(),
+            armed_by: Some("reweave".into()),
+        };
+        assert!(!superseded(Some(&s("")), "bbb222"), "an unstamped sentinel is no information");
+        assert!(!superseded(Some(&s("bbb222")), "bbb222"), "this birth, still in play");
+        assert!(superseded(Some(&s(LATER_SHA)), "bbb222"), "another birth entirely");
     }
 
     /// The kill and the second window are reserved for the path where the
