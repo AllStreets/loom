@@ -8,6 +8,7 @@
 
 &nbsp;
 
+<img alt="tests" src="https://img.shields.io/badge/tests-1%2C315_passing-4ADE80?style=for-the-badge&labelColor=060b18"/>
 <img alt="vessel" src="https://img.shields.io/badge/vessel-Tauri_v2-22D3EE?style=for-the-badge&labelColor=060b18"/>
 <img alt="runs" src="https://img.shields.io/badge/runs-100%25_offline-22D3EE?style=for-the-badge&labelColor=060b18"/>
 <img alt="self-building" src="https://img.shields.io/badge/it-builds_itself-7DD3FC?style=for-the-badge&labelColor=060b18"/>
