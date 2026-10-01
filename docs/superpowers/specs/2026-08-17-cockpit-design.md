@@ -1,6 +1,6 @@
 # The Sovereign Cockpit — Merger Design (Phase 9, Stage 1)
 
-**Decision record (2026-08-17, user-approved):** LOOM becomes the Sovereign Cockpit. The portfolio merges INTO LOOM rather than any project being rebuilt: AUSPEX (living globe), AgentZeus (constellation/salience/ledger — later stages), Flexport terminal decks (later), EMBER failsafe (later), AGORA/KEEL/PRISM/SIGNET (deferred decks). Builder gains a cloud override: local Ollama default, Claude API opt-in. First deck: AUSPEX globe.
+**Decision record (2026-08-17, user-approved):** LOOM becomes the Sovereign Cockpit. The portfolio merges INTO LOOM rather than any project being rebuilt: AUSPEX (living globe), AgentZeus (constellation/salience/ledger — later stages), freight terminal decks (later), EMBER failsafe (later), AGORA/KEEL/PRISM/SIGNET (deferred decks). Builder gains a cloud override: local Ollama default, Claude API opt-in. First deck: AUSPEX globe.
 
 North-star: `~/Downloads/AgentZeus/VISION-SOVEREIGN-COCKPIT.md` ("JARVIS for the planet") — the orb speaks, the globe turns to what it's talking about, agents light up as they work, and the machine builds its own instruments on request. This stage delivers the first fusion: **orb + living world + voice command of the world + a builder that can actually build.**
 

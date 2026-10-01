@@ -219,4 +219,4 @@ Rough order (the implementation plan will detail each):
 
 ---
 
-*Sibling parked seeds (in ~/Downloads): KEEL (Flexport control tower), PRISM (truth engine), SIGNET (provenance). LOOM is the active flagship.*
+*Sibling parked seeds (in ~/Downloads): KEEL (freight control tower), PRISM (truth engine), SIGNET (provenance). LOOM is the active flagship.*
