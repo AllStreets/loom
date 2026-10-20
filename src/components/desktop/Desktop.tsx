@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useOrgans, type OrganState } from "../../lib/organs/host";
-import { POWER_LABELS, type Power } from "../../lib/loom/validate";
+import { organGrant } from "../../lib/core";
 import OrganWindow from "./OrganWindow";
+import PermissionCard from "./PermissionCard";
 import Dock from "./Dock";
 import { windowRegistry } from "../../lib/ambient/windowRegistry";
 
@@ -211,9 +212,27 @@ export default function Desktop() {
     } catch { /* ignore */ }
   }
 
+  // After approving, a short-lived "Undo" lets the owner take the grant back.
+  const [justApproved, setJustApproved] = useState<{ id: string; name: string } | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   async function handleApprove(id: string) {
+    const name = organs.find((o) => o.entry.id === id)?.manifest.name ?? id;
     await approve(id);
     setModalOrganId(null);
+    setJustApproved({ id, name });
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    undoTimer.current = setTimeout(() => setJustApproved(null), 12000);
+  }
+
+  async function handleUndoApprove() {
+    if (!justApproved) return;
+    const { id } = justApproved;
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setJustApproved(null);
+    dismissedRef.current.add(id);          // don't pop the card straight back up
+    await organGrant(id, "[]");
+    reload();
   }
 
   const modalOrgan: OrganState | undefined =
@@ -309,122 +328,58 @@ export default function Desktop() {
           }}
           onClick={(e) => { if (e.target === e.currentTarget) setModalOrganId(null); }}
         >
+          <PermissionCard
+            key={modalOrgan.entry.id}
+            organ={modalOrgan}
+            onApprove={() => handleApprove(modalOrgan.entry.id)}
+            onDismiss={() => {
+              dismissedRef.current.add(modalOrgan.entry.id);
+              setModalOrganId(null);
+            }}
+          />
+        </div>
+      )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {justApproved && (
           <motion.div
-            initial={rm ? false : { opacity: 0, scale: 0.96, y: 12 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={rm ? undefined : { opacity: 0, scale: 0.96, y: 12 }}
-            transition={rm ? {} : { type: "spring", stiffness: 400, damping: 30 }}
+            role="status"
+            data-testid="approve-undo"
+            initial={rm ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={rm ? undefined : { opacity: 0, y: 8 }}
             style={{
-              background: "var(--glass)",
+              position: "fixed",
+              left: "50%",
+              bottom: DOCK_CLEARANCE + 16,
+              transform: "translateX(-50%)",
+              zIndex: 1500,
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              padding: "10px 12px 10px 16px",
+              background: "var(--glass-raised)",
               backdropFilter: "blur(var(--blur))",
               WebkitBackdropFilter: "blur(var(--blur))",
               border: "1px solid var(--glass-border)",
-              borderRadius: 14,
-              padding: "24px 28px",
-              minWidth: 320,
-              maxWidth: 440,
-              position: "relative",
+              borderRadius: 10,
+              boxShadow: "var(--shadow-2)",
+              fontSize: 13,
+              color: "var(--t1)",
+              pointerEvents: "auto",
             }}
           >
-            <div style={{ fontWeight: 700, fontSize: 16, color: "var(--t1)", marginBottom: 6 }}>
-              {modalOrgan.manifest.name}
-            </div>
-            <div
-              style={{
-                color: "var(--t2)",
-                fontSize: 13,
-                marginBottom: 16,
-                maxHeight: 160,
-                overflowY: "auto",
-                overflowWrap: "break-word",
-              }}
+            <span>{justApproved.name} is approved and running.</span>
+            <button
+              type="button"
+              onClick={handleUndoApprove}
+              style={{ background: "none", border: "1px solid var(--glass-border)", borderRadius: 6, padding: "5px 10px", color: "var(--accent)", fontSize: 12.5, cursor: "pointer" }}
             >
-              {modalOrgan.manifest.description}
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ color: "var(--t3)", fontSize: 12, marginBottom: 6 }}>
-                Requested permissions:
-              </div>
-              <div style={{ maxHeight: 140, overflowY: "auto" }}>
-                {modalOrgan.manifest.permissions.map((p) => (
-                  <div
-                    key={p}
-                    style={{
-                      fontFamily: "var(--f-mono)",
-                      fontSize: 12,
-                      color: "var(--t2)",
-                      padding: "2px 0",
-                      overflowWrap: "break-word",
-                    }}
-                  >
-                    {p}
-                  </div>
-                ))}
-              </div>
-            </div>
-            {(modalOrgan.manifest.powers ?? []).length > 0 && (
-              <div style={{ marginBottom: 16 }} data-testid="powers-section">
-                <div style={{ color: "var(--t3)", fontSize: 12, marginBottom: 6 }}>
-                  this organ can:
-                </div>
-                <div style={{ maxHeight: 140, overflowY: "auto" }}>
-                  {(modalOrgan.manifest.powers ?? []).map((p) => (
-                    <div
-                      key={p}
-                      style={{
-                        fontSize: 12,
-                        color: "var(--t2)",
-                        padding: "2px 0",
-                        display: "flex",
-                        alignItems: "baseline",
-                        gap: 6,
-                        overflowWrap: "break-word",
-                      }}
-                    >
-                      <span aria-hidden style={{ color: "var(--accent)", fontSize: 10 }}>·</span>
-                      <span>{POWER_LABELS[p as Power] ?? p}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                onClick={() => handleApprove(modalOrgan.entry.id)}
-                style={{
-                  background: "var(--accent)",
-                  color: "#000",
-                  border: "none",
-                  borderRadius: 4,
-                  padding: "7px 18px",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                  fontSize: 13,
-                }}
-              >
-                Approve
-              </button>
-              <button
-                onClick={() => {
-                  if (modalOrgan) dismissedRef.current.add(modalOrgan.entry.id);
-                  setModalOrganId(null);
-                }}
-                style={{
-                  background: "rgba(255,255,255,.06)",
-                  color: "var(--t2)",
-                  border: "1px solid var(--glass-border)",
-                  borderRadius: 4,
-                  padding: "7px 18px",
-                  cursor: "pointer",
-                  fontSize: 13,
-                }}
-              >
-                Not now
-              </button>
-            </div>
+              Undo approval
+            </button>
           </motion.div>
-        </div>
-      )}
+        )}
       </AnimatePresence>
 
       <Dock organs={organs} windowStates={windowStates} onTileClick={handleDockClick} />

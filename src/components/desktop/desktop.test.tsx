@@ -1035,8 +1035,9 @@ describe("permission card powers", () => {
       expect(screen.getByText("Stand Up")).toBeInTheDocument();
     });
 
-    // Plain-language powers, not raw tokens
-    expect(screen.getByTestId("powers-section")).toBeInTheDocument();
+    // Plain-language powers, not raw tokens, each with its impact
+    expect(screen.getByTestId("grant-voice")).toHaveTextContent("low impact");
+    expect(screen.getByTestId("grant-pulse")).toHaveTextContent("medium impact");
     expect(screen.getByText("speak aloud")).toBeInTheDocument();
     expect(screen.getByText("notify you")).toBeInTheDocument();
     expect(screen.getByText("run on a schedule (up to every 30s)")).toBeInTheDocument();
@@ -1054,7 +1055,7 @@ describe("permission card powers", () => {
     });
   });
 
-  it("an organ with no powers renders the card unchanged (no powers section)", async () => {
+  it("an organ with no powers lists only its permissions, in plain language", async () => {
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "organ_list") return [UNAPPROVED_ORGAN];
       return null;
@@ -1065,7 +1066,66 @@ describe("permission card powers", () => {
     await waitFor(() => {
       expect(screen.getByText("Run Tracker")).toBeInTheDocument();
     });
-    expect(screen.queryByTestId("powers-section")).not.toBeInTheDocument();
+    expect(screen.getByTestId("grant-storage")).toHaveTextContent("keep its own data on this Mac");
+    expect(screen.queryByTestId("grant-voice")).not.toBeInTheDocument();
+  });
+});
+
+describe("permission card as a dialog", () => {
+  const CODE = "export default {\n  render(el) { el.textContent = 'runs'; }\n};";
+  const TESTS = "test('a', () => {});\ntest('b', () => {});";
+  function mockCard() {
+    invoke.mockImplementation(async (cmd: string, args?: { name?: string }) => {
+      if (cmd === "organ_list") return [UNAPPROVED_ORGAN];
+      if (cmd === "organ_grant") return "sha";
+      if (cmd === "organ_read") return args?.name === "test.js" ? TESTS : CODE;
+      return null;
+    });
+  }
+
+  it("is a labelled modal dialog with Not now focused first", async () => {
+    mockCard();
+    render(<Desktop />);
+    const dlg = await screen.findByRole("dialog", { name: "Run Tracker" });
+    expect(dlg).toHaveAttribute("aria-modal", "true");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Not now" })).toHaveFocus());
+  });
+
+  it("Escape dismisses without granting anything", async () => {
+    mockCard();
+    render(<Desktop />);
+    await screen.findByRole("dialog");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(invoke).not.toHaveBeenCalledWith("organ_grant", expect.anything());
+  });
+
+  it("shows what will run, with the checks it passed, and the code on request", async () => {
+    mockCard();
+    render(<Desktop />);
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(screen.getByText(/its 2 own tests/)).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Read the code" }));
+    expect(screen.getByTestId("organ-code")).toHaveTextContent("el.textContent = 'runs'");
+  });
+
+  it("says that approval is consent, not a sandbox", async () => {
+    mockCard();
+    render(<Desktop />);
+    await screen.findByRole("dialog");
+    expect(screen.getByText(/consent, not a sandbox/)).toBeInTheDocument();
+  });
+
+  it("offers Undo after approving, which revokes every grant", async () => {
+    mockCard();
+    render(<Desktop />);
+    await screen.findByRole("dialog");
+    await userEvent.click(screen.getByRole("button", { name: /approve/i }));
+    const undo = await screen.findByRole("button", { name: "Undo approval" });
+    await userEvent.click(undo);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("organ_grant", expect.objectContaining({ id: "runner", grantedJson: "[]" }));
+    });
   });
 });
 

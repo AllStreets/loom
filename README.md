@@ -22,7 +22,7 @@ An optional **Review code before saving** setting adds a fourth step: you read t
 
 ## Powers and permission
 
-An organ can only reach outside itself through powers it declares in its manifest: `timeline`, `voice`, `notify` and `pulse`. The permission card lists them in plain language, each one has a budget, and you can revoke any of them while the organ is running. In the sandbox the powers are mocked deterministically, so the builder's tests check real behaviour.
+An organ can only reach outside itself through powers it declares in its manifest: `timeline`, `voice`, `notify` and `pulse`. Before a new organ runs, the permission card says what it will be able to do, one plain-language line per grant with how much each one matters, then what will run: the organ's own file, which you can read in place, and the checks it already passed. It says that approval is consent, not a sandbox. The card is a real dialog (focus stays inside, Escape is Not now, and Not now has focus first, so a reflexive Enter grants nothing), and right after you approve there's an Undo. Each power has a budget, and you can revoke any of them from the organ's window while it runs. In the sandbox the powers are mocked deterministically, so the builder's tests check real behaviour.
 
 LOOM can also propose an organ on its own, from a local usage observer and a rules engine that only fires on repeated evidence. The proposal is a card with three choices (weave it, not now, never), it's rate-limited, and it can be silenced.
 
@@ -101,7 +101,7 @@ In phases, each one tested and reviewed before the next. Two of them were cuts. 
 | 23 | Rebuilding itself offline from its own history |
 | Next | Real organ isolation, sandboxed validation outside the app process, Windows and Linux, Developer ID signing |
 
-There are 1,315 tests. The design record is in [`docs/superpowers/specs`](docs/superpowers/specs), and open follow-ups are in [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
+There are more than 1,300 tests (1,320 on the frontend alone). The design record is in [`docs/superpowers/specs`](docs/superpowers/specs), and open follow-ups are in [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
 
 I built LOOM with coding agents. I set the direction and the constraints, and I review, test and decide what stays.
 
