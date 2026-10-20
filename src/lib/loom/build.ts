@@ -6,6 +6,7 @@ import type { organWrite, Msg, OrganFile, ChatOpts } from "../core";
 import { isBusy as _isBusy, withFlight } from "./flight";
 import { runGateWithRepair } from "./gateRepair";
 import { recordExperience, retrieveExemplars, retrieveLessons } from "./experience";
+import { errorText } from "../errorText";
 
 export type BuildEvent = { ts: number; phase: string; detail: string; role?: "builder" | "companion" | "rewriter" };
 export type BuildResult = { ok: boolean; organId?: string; sha?: string; error?: string; stage?: string; log: BuildEvent[] };
@@ -231,8 +232,8 @@ export async function buildOrgan(request: string, deps: BuildDeps): Promise<Buil
     return { ok: true, organId, sha, log };
 
     } catch (err) {
-      emit("error", String(err));
-      return { ok: false, error: String(err), stage: "error", log };
+      emit("error", errorText(err));
+      return { ok: false, error: errorText(err), stage: "error", log };
     }
   });
 

@@ -13,6 +13,7 @@ import { handle, LINE_THREADING, type CompanionTurn } from "../lib/companion/run
 import { turnStartMood, firstEventMood, settleMood, dispatchMood } from "../lib/orb/moods";
 import { getSetting, setSetting } from "../lib/voice/settings";
 import { playWav } from "../lib/voice/player";
+import { errorText } from "../lib/errorText";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -617,7 +618,7 @@ function ConsentCardView({
 
 function isFleetUnreachable(err: unknown): boolean {
   if (!err) return false;
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = errorText(err);
   // Ollama connection refused / network errors
   return /connection refused|econnrefused|network|ECONNREFUSED|No connection|fleet.*unavailable|ollama/i.test(msg);
 }

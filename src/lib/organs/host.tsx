@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { organList, organRead, organGrant, type OrganEntry } from "../core";
 import { manifestGuard, type OrganManifest } from "../loom/validate";
 import { makeLoomApi } from "./api";
+import { errorText } from "../errorText";
 
 export type OrganState = {
   entry: OrganEntry;
@@ -79,6 +80,6 @@ export async function mountOrgan(
     }
     return null;
   } catch (err) {
-    return String(err);
+    return errorText(err);
   }
 }

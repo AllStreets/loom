@@ -6,6 +6,7 @@ import { recordExperience } from "../loom/experience";
 import type { gate } from "../loom/validate";
 import type { organWrite, organRead, OrganFile, Msg, ChatOpts } from "../core";
 import type { BuildEvent, BuildResult } from "../loom/build";
+import { errorText } from "../errorText";
 
 export type EditDeps = {
   chat: (role: string, messages: Msg[], opts?: ChatOpts) => Promise<string>;
@@ -80,7 +81,7 @@ export async function editOrgan(
     } catch (err) {
       // SEARCH mismatch: one retry with error appended
       emit("edit", "SEARCH mismatch — retrying edit...");
-      const retryUser = editUser + `\n\nPrevious attempt failed with: ${String(err)}\nTry again with exact SEARCH text from the current file.`;
+      const retryUser = editUser + `\n\nPrevious attempt failed with: ${errorText(err)}\nTry again with exact SEARCH text from the current file.`;
       const retryRaw = await deps.chat("builder", [
         { role: "system", content: editSystem },
         { role: "user", content: retryUser },
@@ -157,8 +158,8 @@ export async function editOrgan(
     return { ok: true, organId, sha, log };
 
     } catch (err) {
-      emit("error", String(err));
-      return { ok: false, error: String(err), stage: "error", log };
+      emit("error", errorText(err));
+      return { ok: false, error: errorText(err), stage: "error", log };
     }
   });
 
