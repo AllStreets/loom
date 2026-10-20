@@ -1,4 +1,4 @@
-<img src=".github/assets/hero.png" alt="LOOM" width="100%"/>
+<img src=".github/assets/orb.gif" alt="The LOOM orb over the tapestry lines, shifting from cyan to a white glow as a build starts" width="100%"/>
 
 # LOOM
 
@@ -15,6 +15,13 @@ LOOM grew out of the Forge inside [EMBER](https://github.com/AllStreets/ember), 
 <img src=".github/assets/weave.svg" alt="How LOOM builds an organ: your sentence, the builder writes three files, the gate validates them with a repair loop, the timeline commits, you approve and it runs" width="100%"/>
 
 The model's output stays small: one file at a time, or one edit region. Three things stand between that output and your machine: the validation gate (a manifest check, a sandboxed render and the organ's own tests), the git timeline, and your approval. When a build fails, the errors go back to the builder. Tests are treated as the spec, so a failing "should not add an empty item" gets fixed in the code, not deleted from the tests.
+
+<p>
+<img src=".github/assets/build-live.gif" alt="LOOM building a water intake organ: the stage bar moves from manifest to code to probe while log lines report each step" width="49%"/>
+<img src=".github/assets/build-repair.gif" alt="The gate fails the organ's own tests and LOOM starts repair round 1, asking the builder to fix organ.js" width="49%"/>
+</p>
+
+*A real build from a screen recording. Left: manifest, code and a render probe pass. Right: the gate fails the organ's tests and the errors go back to the builder.*
 
 The builder doesn't invent visual design. It composes from a small design kit (`loom.ui`) of cards, stats, progress bars, lists and buttons, so every organ looks like it belongs, and each one lives in its own window on the desktop.
 
