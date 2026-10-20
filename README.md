@@ -1,260 +1,110 @@
-<div align="center">
-
 <img src=".github/assets/hero.png" alt="LOOM" width="100%"/>
 
-### the sovereign loom
+# LOOM
 
-<em>offline &nbsp;·&nbsp; local models &nbsp;·&nbsp; it builds itself &nbsp;·&nbsp; it rebuilds itself &nbsp;·&nbsp; yours</em>
+LOOM is a desktop app that builds its own tools. You describe a capability in one sentence. A local model plans it, writes the code and its tests, runs both through a validation gate, repairs its own failures, commits the result to a git timeline, and asks your permission before the new tool (an "organ") runs. Everything happens offline on your machine, with local models through Ollama.
 
-&nbsp;
+**Approval is consent, not a sandbox.** Code is validated in isolation before you see it, but once you approve an organ it runs inside the app's own process (`src/lib/organs/host.tsx` loads it with a Blob URL and `import()`). There is no iframe or process boundary yet. Real organ isolation is on the roadmap, and until it lands the permission card is a decision you make, not a wall that contains the code.
 
-<img alt="tests" src="https://img.shields.io/badge/tests-1%2C315_passing-4ADE80?style=for-the-badge&labelColor=060b18"/>
-<img alt="vessel" src="https://img.shields.io/badge/vessel-Tauri_v2-22D3EE?style=for-the-badge&labelColor=060b18"/>
-<img alt="runs" src="https://img.shields.io/badge/runs-100%25_offline-22D3EE?style=for-the-badge&labelColor=060b18"/>
-<img alt="self-building" src="https://img.shields.io/badge/it-builds_itself-7DD3FC?style=for-the-badge&labelColor=060b18"/>
-<a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-4ADE80?style=for-the-badge&labelColor=060b18"/></a>
+It also needs a big machine: about 35 GB of models, sized to sit in memory on a 64 GB Mac. If you can't run it, the walkthrough below shows what it does.
 
-<br/>
+LOOM grew out of the Forge inside [EMBER](https://github.com/AllStreets/ember), which showed that a small local model could maintain real software offline if a person reviewed every change. LOOM makes that loop the whole product.
 
-<img alt="core" src="https://img.shields.io/badge/core-Rust_%C2%B7_git2-6b7382?style=flat-square&labelColor=060b18"/>
-<img alt="ui" src="https://img.shields.io/badge/kernel-React_%C2%B7_Vite_%C2%B7_TS-6b7382?style=flat-square&labelColor=060b18"/>
-<img alt="fleet" src="https://img.shields.io/badge/fleet-qwen3--coder_%C2%B7_gpt--oss_%C2%B7_qwen3-6b7382?style=flat-square&labelColor=060b18"/>
-<img alt="sandbox" src="https://img.shields.io/badge/validation-sandboxed_%2B_self--repairing-6b7382?style=flat-square&labelColor=060b18"/>
-<img alt="history" src="https://img.shields.io/badge/history-git_Timeline-6b7382?style=flat-square&labelColor=060b18"/>
+## How an organ gets built
 
-&nbsp;
+<img src=".github/assets/weave.svg" alt="How LOOM builds an organ: your sentence, the builder writes three files, the gate validates them with a repair loop, the timeline commits, you approve and it runs" width="100%"/>
 
-<a href="#what-this-is"><kbd> &nbsp; <b>What this is</b> &nbsp; </kbd></a> &nbsp;
-<a href="#what-has-shipped"><kbd> &nbsp; <b>What has shipped</b> &nbsp; </kbd></a> &nbsp;
-<a href="#how-it-weaves"><kbd> &nbsp; <b>How it weaves</b> &nbsp; </kbd></a> &nbsp;
-<a href="#anatomy"><kbd> &nbsp; <b>Anatomy</b> &nbsp; </kbd></a> &nbsp;
-<a href="#the-fleet"><kbd> &nbsp; <b>The fleet</b> &nbsp; </kbd></a> &nbsp;
-<a href="#quickstart"><kbd> &nbsp; <b>Quickstart</b> &nbsp; </kbd></a> &nbsp;
-<a href="#roadmap"><kbd> &nbsp; <b>Roadmap</b> &nbsp; </kbd></a>
+The model's output stays small: one file at a time, or one edit region. Three things stand between that output and your machine: the validation gate (a manifest check, a sandboxed render and the organ's own tests), the git timeline, and your approval. When a build fails, the errors go back to the builder. Tests are treated as the spec, so a failing "should not add an empty item" gets fixed in the code, not deleted from the tests.
 
-</div>
+The builder doesn't invent visual design. It composes from a small design kit (`loom.ui`) of cards, stats, progress bars, lists and buttons, so every organ looks like it belongs, and each one lives in its own window on the desktop.
 
----
+An optional **Review code before saving** setting adds a fourth step: you read the files and choose Apply or Discard before anything is written.
 
-## What this is
+## Powers and permission
 
-A *loom* weaves loose thread into cloth. To *loom* is also to rise into view — a presence gathering on the horizon. **LOOM is both: a computer that weaves itself into being, and grows into a presence you live beside.**
+An organ can only reach outside itself through powers it declares in its manifest: `timeline`, `voice`, `notify` and `pulse`. The permission card lists them in plain language, each one has a budget, and you can revoke any of them while the organ is running. In the sandbox the powers are mocked deterministically, so the builder's tests check real behaviour.
 
-You describe a capability in one sentence and press Enter. LOOM's local model plans it, writes the code **and its tests**, proves the whole thing inside a sandbox, repairs its own failures, commits the result to a git timeline, and asks your permission before the new organ runs — **fully offline, no cloud, no subscription, versioned so nothing is ever lost.** The grid goes down and it still evolves. You own it, and it becomes whatever you need. Forever.
+LOOM can also propose an organ on its own, from a local usage observer and a rules engine that only fires on repeated evidence. The proposal is a card with three choices (weave it, not now, never), it's rate-limited, and it can be silenced.
 
-> *You shouldn't rent your tools from the cloud. You should own one thing that becomes whatever you need.*
+## Editing itself
 
-This is a proven idea, generalized. Its predecessor — the Forge engine inside **EMBER**, an offline survival console — first demonstrated that a local model can build and maintain real software offline and verify its own work. LOOM makes that engine the heart, hardened at every layer that ever failed.
+In dev mode, LOOM can edit its own TypeScript kernel and its own Rust core behind five checks:
 
----
+1. validation in an isolated git worktree with real `tsc`, `vitest`, `cargo check` and `cargo test`
+2. you approve the diff
+3. the change is committed to source
+4. a recovery boot rolls back an edit that breaks startup
+5. a rule enforced in Rust stops it from editing its own safety code
 
-## What has shipped
+The packaged app can rebuild itself offline. It carries its own git history. A one-time setup step ("threading", which needs the network once and says so) finds the build tools on the machine, vendors every crate and warms a build. After that, with the network unplugged, an approved core edit builds a new binary, keeps the running one as a previous generation, swaps the executable and relaunches. The previous generation watches the new one's first boot and restores itself if that boot never confirms.
 
-LOOM was built in phases, each a working, tested, reviewed milestone. The roadmap table below is the record; this is the shape of it.
+### What has actually been run
 
-**The engine (Phases 1–6).** A Tauri v2 shell over a Rust core; a resident local model fleet; a git Timeline for everything LOOM makes. The Loom itself: a sandboxed validation gate, a three-round self-repair loop, permission-gated organs, an optional review-before-save wall, and a real-model selftest. The Companion (prompt compiler, the presence, organ editing by sentence, seed organs). The orb and the living dashboard; the `loom.ui` design kit and the glass-window desktop; fully offline whisper + piper voice with push-to-talk; threads of light, the ambient field, ignition, and a DOM-grounded builder.
+On a clean clone with no prior build: threading cloned the history, vendored all 559 crates and built LOOM from source in 90 seconds. A re-run resumed in 0.03 seconds. A committed core edit built a new body offline in 18.5 seconds. The rebuilt app launched and drew its interface, and its watcher confirmed it in 2.6 seconds. A deliberately broken edit after that was rolled back in 1.8 seconds.
 
-**Identity (Phase 16).** The woven mark on every surface and `docs/BRAND.md`; the Tapestry — LOOM's own git, organ and build history woven live behind the orb; the Shuttle — a ⌘K palette and voice sharing one drift-proof command catalog, and "what can you do" spoken from it.
+The first full run failed, and the failure taught me the most. Every part of the pipeline was correct, and the binary it produced had no interface inside it, because Tauri decides "this is a development build" from a flag its own CLI passes and a bare `cargo build` doesn't. One flag fixed it. An earlier review also found that the packaged app had never been built on that branch. Since then the rule is: build it and launch it before calling it shipped.
 
-**Vigor (Phase 19).** Organs grow hands: powers declared in the manifest, carded in plain language, budgeted, revocable live, mocked deterministically in the sandbox so the builder's generated tests are grounded. After Rebirth the powers are `timeline · voice · notify · pulse`.
+### Limits
 
-**Initiative (Phase 20).** LOOM proposes an organ unprompted — a local usage observer and a deterministic rules engine that fires only on earned evidence, a calm consented proposal card, rate-limited, silenceable, tombstoned. After Rebirth one archetype remains: a morning brief rooted in the timeline.
+- Organs run in the app's process once approved (see the top of this page).
+- Setup needs the network once. The speech archive it downloads lands in a macOS cache LOOM doesn't own, and if the system clears it, offline rebuilding stops until the network is back.
+- Re-signing a new build may make macOS ask for microphone permission again.
+- A generation that boots and draws is confirmed even if it misbehaves later. Boot health is the check, and Settings can return you to an older generation.
+- The LOOM home folder is several gigabytes, and Settings shows the size.
+- Self-rebuild is macOS only for now.
+- Not yet tested end to end: starting setup from LOOM's own interface rather than its functions, and relaunching through the system launcher rather than spawning the executable directly.
 
-**Selfhood and Marrow (Phases 21–22).** LOOM edits its own TypeScript kernel and its own Rust core, in dev mode, behind five walls: isolated-worktree validation with real `tsc`, `vitest`, `cargo check` and `cargo test`; owner diff-approval; commit to source; recovery boot that rolls a bad edit back; and a self-protection invariant enforced in Rust — it cannot edit its own safety machinery. A pre-compile guard and a pre-`main` heal close the gap where a compile-clean core edit panics at startup.
+## The models
 
-**The Cockpit (Phases 9–15, 17 — excised in 23a).** For a stretch LOOM grew a world behind the orb: a bundled globe deck, a market terminal with its own Rust quote engine, a salience watch, an opt-in cloud builder. It was good work and none of it was the thesis — any wrapper could ship a dashboard. Phase 18 cut the exchange dock; Phase 23a cut the rest. What survived from that era is what only LOOM has: the Tapestry, the Shuttle, the organ powers, initiative, and the chrome design language. The code stays in git history.
+| Role | Model | Ollama tag | Size |
+|---|---|---|---|
+| Builder: writes LOOM's code | Qwen3-Coder-30B-A3B | `qwen3-coder:30b-a3b-q4_K_M` | 19 GB |
+| Companion: the always-on assistant | gpt-oss-20b | `gpt-oss:20b` | 14 GB |
+| Rewriter: restructures your request for the builder | Qwen3-1.7B | `qwen3:1.7b` | 1.4 GB |
 
-**Rebirth (Phase 23).** The packaged LOOM rebuilds itself, offline. It carries its own **genome** — the full git history it was woven from, bundled into the app. **Threading** the loom is a one-time ceremony: LOOM finds the tools already on the machine (git · cargo · rustc · node · npm · cmake · clang · codesign), seeds the genome into its own home, vendors every crate, installs its node modules, and warms a build. That step needs the network once and says so. From then on, with the cable unplugged, a core edit travels the five walls and then a sixth: **reweave** — assets, core, stage, swap, relaunch — builds a new binary from the genome, shelves the running one as a **generation**, swaps the executable inside the bundle, and relaunches. The **warden** is the previous generation's own binary: it watches the new body's first boot and, if that boot never confirms, brings LOOM home to the last good generation and leaves an honest record. Any kept generation can be returned to from Settings or by voice. The Tapestry weaves each generation as a knot in the cloth.
+All three stay loaded together. A slow or missing model times out, retries once, then falls back, so the interface never hangs. If the builder is missing, LOOM uses the best coder model you have installed.
 
-Round-1 review found that the packaged app had never been built or launched on
-this branch — it failed to compile, and once it compiled it died at startup on a
-missing library, in dev as well. Both are fixed and verified; the app builds,
-bundles, and runs. **The lesson is written into the house rhythm: build it and
-launch it before calling it shipped.**
+Voice is optional and offline: Whisper for speech in and Piper for speech out, downloaded once from Settings. Hold the orb or Space to talk.
 
-What CI proves, against fakes: tool discovery and drift, the ceremony's steps and
-resumption, the swap plan as a pure enumerable list, the warden's decision table
-against a faked world, the ledger never pruning a live body, the sentinel's
-ownership rule, the protected set by enumeration, and that no validation argv
-reaches for `npx`. Every cargo argv the code composes carries `--offline`; the
-one deliberate exception is threading's `cargo vendor`, which is one of the two
-steps allowed to touch the network.
+## Run it
 
-**What has actually been run.** The ceremony, end to end, on a real app and the
-real genome — twice, after the first run found the bug that made it impossible.
-
-From a clean clone on a machine with no prior LOOM build: install, the full
-suite, a cold-registry `cargo test`, `npm run tauri build`, and launching the
-app. Then, against a copy of that app and a fresh loomhome: threading cloned
-LOOM's whole history, installed its dependencies, vendored all 559 crates and
-built LOOM from source in 90 seconds. A re-run resumed in 0.03 seconds. A
-committed core edit wove a new body offline in 18.5 seconds, resolving entirely
-from the vendored crates. The swap replaced the executable, shelved the old
-body, armed the sentinel, moved the ledger and re-staged the carried genome.
-
-**The rewoven body launched and painted** — the console, the Timeline organ, the
-permission card, the Tapestry, and its own reweave card reading *woven — this is
-the generation the weave made*. **The warden then stood down**: verdict
-`Confirmed` in 2.6 seconds, nothing healed. That generation went on to weave the
-next one, which printed *this body was woven BY a body LOOM wove*. A deliberately
-panicking edit after that was healed home in 1.8 seconds, and the recovery
-notice was consumed by the shell of the body that came back — which is how we
-know it booted and painted too.
-
-The first run failed, and the failure was the point: every part of the machine
-was correct and the body it produced could not paint, because a weave ran a bare
-release build. Tauri derives "this is a development build" from the absence of a
-feature its own tool passes, so LOOM was weaving itself a binary with no frontend
-inside it. One flag, in the one place cargo spawns are composed.
-
-What is still proven only against fakes: nothing in the chain. What is still not
-proven: the ceremony driven from LOOM's own interface rather than from its own
-functions, and the warden's relaunch going through the system launcher rather
-than spawning the executable directly — that step was faked so the rehearsal
-could not touch the owner's real home. `LOOM_REHEARSAL_HOME` now exists so the
-next rehearsal need not fake it.
-
-Honest residuals: threading needs the network once, and the speech archive it
-fetches lands in a macOS cache LOOM does not own — if the system purges it,
-offline reweaving stops until the network returns; ad-hoc re-signing may make
-macOS ask for the microphone again; a generation that boots and paints is
-confirmed even if it misbehaves later — boot health is the wall, and Generations
-is the way back; loomhome is several gigabytes (vendor + warm build) and Settings
-shows the number; the swap is macOS-only in this generation.
-
-**Rebirth (Phase 23a).** The second excision. Four decks, the watch, the market engine, the cloud override, and every phrase, setting, power, and Rust command that served them are gone — migration-clean, tests green at every commit. One brain: the local fleet.
-
----
-
-## How it weaves
-
-<img src=".github/assets/weave.svg" alt="How LOOM weaves an organ: your sentence, the builder writes three files, the gate validates in a sandbox with a repair loop, the timeline commits, you approve and it lives" width="100%"/>
-
-The builder does not invent design — it **composes a curated design kit** (`loom.ui`): glass cards, stats, progress, lists, buttons — so every organ is born beautiful, and lives as a draggable window on the desktop.
-
-The load-bearing idea: **the model's output stays tiny** (one file at a time, or a single edit region), and three independent walls stand between model output and your machine — the validation gate, the git timeline, and your permission. When a build fails, the errors go **back to the builder**, which fixes its own code — tests are treated as the spec, so "should not add an empty item" gets fixed in the code, not deleted from the tests.
-
-An optional **Review code before saving** toggle adds a fourth wall: you read the three files and choose Apply or Discard before anything touches disk.
-
----
-
-## Anatomy
-
-<img src=".github/assets/anatomy.svg" alt="LOOM anatomy: a protected kernel hosting the orb, companion, loom, organ host, timeline and safe-boot, over a native Rust core with the model fleet, git timeline, organ store and offline voice" width="100%"/>
-
-The kernel/organ split is load-bearing: the **kernel** is built, protected, and (in v1) only edited behind a gate; **organs** are no-build modules the Loom writes and rewrites freely, each isolated behind its own error wall and permission grant. Full self-modification — LOOM editing its own kernel — is a deliberate later flip of that guardrail, not a rebuild.
-
----
-
-## The fleet
-
-Three local specialists, resident together on 64GB — no swapping, no cloud, pinned in memory. A slow or absent model times out, retries once, then falls back — it never hangs the UI.
-
-| role | model | Ollama tag | ~RAM | why |
-|---|---|---|---|---|
-| **Builder** — writes LOOM's own code | Qwen3-Coder-30B-A3B | `qwen3-coder:30b-a3b-q4_K_M` | 19 GB | MoE, 3B active → fast; 256K context |
-| **Companion** — the always-on presence | gpt-oss-20b | `gpt-oss:20b` | 14 GB | quick, adjustable reasoning depth |
-| **Rewriter** — the prompt compiler | Qwen3-1.7B | `qwen3:1.7b` | 1.4 GB | sub-second; restructures your words for the model |
-
-If the configured builder is missing, LOOM automatically falls back to the **best installed coder model** before anything else — it degrades, it does not stop.
-
-**Voice** — fully offline speech, downloaded once from Settings (like pulling the fleet):
-
-| piece | model | size |
-|---|---|---|
-| Ears (STT) | whisper `ggml-base.en` (Metal) | 148 MB |
-| Voice: Lessac — warm, neutral (US, default) | `en_US-lessac-medium` | ~64 MB |
-| Voice: Alba — calm (British) | `en_GB-alba-medium` | ~64 MB |
-| Voice: LibriTTS — rich (US) | `en_US-libritts-high` | ~100 MB |
-
-Hold the **orb** (or **Space**) to talk; release to send. Replies are spoken aloud. Audition and switch voices in the Settings organ — which, being an organ, LOOM can edit for you.
-
----
-
-## First five minutes
-
-**Prerequisites:** macOS (Apple Silicon recommended), [Node](https://nodejs.org) 20+, the [Rust toolchain](https://rustup.rs), and [Ollama](https://ollama.com). About 35 GB free for the model fleet. Voice is optional — download it from Settings after first launch.
+You need macOS (Apple Silicon recommended), Node 20+, the [Rust toolchain](https://rustup.rs) and [Ollama](https://ollama.com), plus about 35 GB free for the models.
 
 ```bash
-# 1. Clone and install
 git clone https://github.com/AllStreets/loom.git
 cd loom && npm install
 
-# 2. Pull the model fleet (once, ~35 GB total — do this while you explore the code)
-ollama pull qwen3-coder:30b-a3b-q4_K_M   # builder: writes and repairs code
-ollama pull gpt-oss:20b                  # companion: the always-on presence
-ollama pull qwen3:1.7b                   # rewriter: structures your words for the model
+ollama pull qwen3-coder:30b-a3b-q4_K_M
+ollama pull gpt-oss:20b
+ollama pull qwen3:1.7b
 
-# 3. Verify everything is wired up
-npm run check      # vitest + cargo test — must be fully green
-
-# 4. Open LOOM
+npm run check        # vitest and cargo test, should be fully green
 npm run tauri dev
 ```
 
-On first launch the companion greets you. When the fleet is ready, type or speak your first build request — *"build me a water tracker"* or *"build an organ that tracks my reading log"* — and watch LOOM plan it, write it, test it, repair it if needed, and ask your permission before anything runs. Approve the card and your new organ is alive in the desktop.
+Then type something like *"Build an organ that tracks my daily water intake with a goal and a progress bar"* and press Enter. Watch it write, validate, repair and commit, then approve the permission card.
 
-**Voice:** hold the **orb** (or press **Space**) to talk; release to send. To download voices, open Settings from the dock and use the Download button next to each voice — no account, no network call beyond the download.
+To package it, run `npm run tauri build`, open the app and say "thread the loom" (or Settings, LOOM, Thread the loom).
 
----
+## How it was built
 
-## Quickstart (short form)
+In phases, each one tested and reviewed before the next. Two of them were cuts. For a while LOOM grew a globe, a market terminal and an optional cloud builder. It was good work, but none of it was the point, since any wrapper can ship a dashboard. Phases 18 and 23a removed all of it, and the code stays in git history.
 
-```bash
-git clone https://github.com/AllStreets/loom.git
-cd loom && npm install
-ollama pull qwen3-coder:30b-a3b-q4_K_M && ollama pull gpt-oss:20b && ollama pull qwen3:1.7b
-npm run check && npm run tauri dev
-```
+| Phase | What shipped |
+|---|---|
+| 1 to 6 | Tauri shell over a Rust core, the model fleet, the git timeline, the build loop with validation, repair and permission, the companion, the design kit and desktop, offline voice |
+| 16 | The Tapestry (LOOM's history drawn live behind the orb) and the Shuttle (a ⌘K palette and voice sharing one command list) |
+| 19 | Organ powers: declared, explained in plain language, budgeted, revocable, mocked in tests |
+| 20 | Proposals LOOM makes on its own, with consent |
+| 21 and 22 | Editing its own TypeScript kernel, then its own Rust core, behind the five checks |
+| 18 and 23a | Removing the dashboard era |
+| 23 | Rebuilding itself offline from its own history |
+| Next | Real organ isolation, sandboxed validation outside the app process, Windows and Linux, Developer ID signing |
 
-To package it: `npm run tauri build`, open the app, then say **"thread the loom"** (or Settings → LOOM → THREAD THE LOOM). That needs the network once. After it, unplug and say *"give yourself …"* — approve the diff, then *"reweave yourself"*, and LOOM returns as its next generation.
+There are 1,315 tests. The design record is in [`docs/superpowers/specs`](docs/superpowers/specs), and open follow-ups are in [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
 
-Type into LOOM — *"Build an organ that tracks my daily water intake with a goal and a progress bar."* — and press **Enter**. Watch it write, validate, repair if needed, and commit; approve the permission card and your new organ is alive.
+I built LOOM with coding agents. I set the direction and the constraints, and I review, test and decide what stays.
 
----
+## License
 
-## Roadmap
-
-Built in phases, each a working, tested, reviewed milestone.
-
-| phase | what | status |
-|---|---|---|
-| **1 · Foundation** | Tauri shell · Rust core · resident model fleet · git Timeline · CI | shipped |
-| **2 · The Loom** | self-building engine: sandboxed validation · self-repair loop · permission-gated organs · review toggle · real-model selftest | **shipped** |
-| **3 · Companion** | prompt compiler · the presence (text) · organ editing by sentence · seed organs | **shipped** |
-| **4 · The orb + living UI** | react-three-fiber oracle-light orb · breathing motion · the living dashboard | **shipped** |
-| **4.5 · The Atelier** | loom.ui design kit — organs beautiful by construction · OS desktop: glass windows + dock | **shipped** |
-| **5 · Voice** | offline whisper + piper voices · hold-the-orb / Space push-to-talk · spoken replies · Settings organ | **shipped** |
-| **6 · Vitality** | threads of light · ambient field · ignition · kit v2 (hero/spark/section) · DOM-grounded builder · first-run greeting | **shipped** |
-| **9–15 · The Cockpit** | decks (globe · terminal · EMBER · AGORA) · salience watch · cloud-override builder · market proxy · chrome design language · ownership | excised (18, 23a) |
-| **16 · Identity** | the brand system (woven mark on every surface, BRAND.md) · the Tapestry (constellation removed; LOOM's history woven live behind the orb) · the Shuttle (⌘K palette + voice sharing one drift-proof command catalog, "what can you do") | **shipped** |
-| **17 · Depth** | the keyless market engine and Terminal depth | excised (23a) |
-| **18 · Excision** | AGORA removed entirely (spawn subsystem, deck, settings, voice — migration-clean) · the floor folds into the Terminal as the crypto detail overlay · four decks | **shipped** |
-| **19 · Vigor** | organs grow hands: real powers (after Rebirth: timeline · voice · notify · pulse) — manifest-declared, permission-carded, budgeted, revocable live, sandbox-mocked · the builder learns the power APIs with grounded tests | **shipped** |
-| **20 · Initiative** | LOOM proposes organs unprompted — a local usage observer + a deterministic rules engine that only fires on earned evidence · a calm consented proposal card (weave it / not now / never) whose "weave it" flows into the normal build pipeline · rate-limited, silenceable, tombstoned | **shipped** |
-| **21 · Selfhood** | LOOM edits its own TypeScript kernel behind five walls — isolated-worktree validation (real tsc + vitest) · owner diff-approval · commit to source + hot-reload · recovery boot that rolls back a bad edit · a self-protection invariant (it cannot edit its own safety machinery) | **shipped** |
-| **22 · Marrow** | LOOM edits its own Rust core (dev-mode) — same five walls, `cargo check` + `cargo test` validation · honest "restart to load" (no hot-reload) · the recovery gap closed by a pre-compile guard + pre-`main` rollback so a bad core edit self-heals · self-protection extended over the whole Rust safety core + Cargo manifests | **shipped** |
-| **23a · Rebirth** | the second excision — the Cockpit is cut in full (decks · watch · market · cloud · their settings, powers, phrases and Rust commands) · one brain (local) · initiative re-rooted in the timeline | **shipped** |
-| **23 · Rebirth** | packaged self-rebuild, offline — the genome bundled into the app · threading (one-time tool discovery, vendor, warm build) · reweave (assets · core · stage · swap · relaunch) · generations ledger with return · the warden (the previous generation guards the next one's first boot and heals) · Settings → LOOM · reweave card · Tapestry generation knots · self-protection over the whole rebirth machinery | **shipped** |
-| **later** | toolchain distribution (rustup/node inside the app) · Windows/Linux swap · Developer-ID signing · sandboxed validation · timeline-aware organs · embedding-based intent classifier · real organ isolation · KEEL · PRISM · SIGNET | vision |
-
-Design record: [`docs/superpowers/specs`](docs/superpowers/specs) · plans: [`docs/superpowers/plans`](docs/superpowers/plans) · brand: [`docs/BRAND.md`](docs/BRAND.md) · tracked follow-ups: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md)
-
----
-
-## Principles
-
-- **Sovereign.** It runs on your machine, off the grid, forever. No cloud, no subscription, no telemetry, no wall.
-- **Self-verifying before impressive.** Nothing goes live until it passes the manifest guard, a sandboxed render, and its own tests. A bad build is caught — then repaired — never shipped.
-- **It can't strand you.** Every change is a git commit; a broken kernel boots into recovery and rolls back. You can always get home.
-- **Alive, calm, yours.** A breathing, luminous presence — light that emerges from dark. It becomes what *you* need, not what an algorithm wants.
-
----
-
-<div align="center">
-
-The active flagship of four. **LOOM** builds itself · **KEEL** predicts the supply chain · **PRISM** shows where narratives diverge · **SIGNET** proves what's real.
-
-<sub>Lineage: EMBER's Forge, generalized and hardened · design in <a href="docs/superpowers/specs">docs/superpowers/specs</a></sub>
-
-</div>
+Apache-2.0. See [LICENSE](LICENSE).
