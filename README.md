@@ -108,7 +108,7 @@ In phases, each one tested and reviewed before the next. Two of them were cuts. 
 | 23 | Rebuilding itself offline from its own history |
 | Next | Real organ isolation, sandboxed validation outside the app process, Windows and Linux, Developer ID signing |
 
-There are more than 1,300 tests (1,320 on the frontend alone). The design record is in [`docs/superpowers/specs`](docs/superpowers/specs), and open follow-ups are in [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
+There are more than 1,300 tests (1,320 on the frontend alone). The design records (specs and plans, with the reasons for each decision) are in [`docs/design`](docs/design), and open follow-ups are in [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
 
 I built LOOM with coding agents. I set the direction and the constraints, and I review, test and decide what stays.
 

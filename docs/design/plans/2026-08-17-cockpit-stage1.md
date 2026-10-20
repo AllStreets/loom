@@ -4,7 +4,7 @@
 
 **Goal:** LOOM becomes the Sovereign Cockpit stage 1: a deck layer with the living AUSPEX globe behind the orb, voice command of the world, and a Claude cloud-override for the builder.
 
-**Architecture:** See spec `docs/superpowers/specs/2026-08-17-cockpit-design.md` (authoritative for all decisions). Deck layer renders between ambient Field and orb band; AUSPEX embeds as a bundled-static iframe driven by postMessage → its existing bridge-command executor; cloud builder is a Rust `cloud_chat` command (key in Tauri-side store, never webview-readable) with local fallback.
+**Architecture:** See spec `docs/design/specs/2026-08-17-cockpit-design.md` (authoritative for all decisions). Deck layer renders between ambient Field and orb band; AUSPEX embeds as a bundled-static iframe driven by postMessage → its existing bridge-command executor; cloud builder is a Rust `cloud_chat` command (key in Tauri-side store, never webview-readable) with local fallback.
 
 **Tech Stack:** existing LOOM stack + Anthropic Messages API (Rust reqwest, already a dependency for voice downloads).
 

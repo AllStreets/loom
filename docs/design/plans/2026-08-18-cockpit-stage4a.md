@@ -9,7 +9,7 @@
 **Tech Stack:** existing only.
 
 ## Global Constraints
-- Micro design language + SCREENSHOT GATE from `docs/superpowers/plans/2026-08-18-cockpit-stage3.md` Global Constraints apply to ALL UI work in this phase (read them).
+- Micro design language + SCREENSHOT GATE from `docs/design/plans/2026-08-18-cockpit-stage3.md` Global Constraints apply to ALL UI work in this phase (read them).
 - Brand: navy #060b18, cyan #22d3ee, NO yellow, NO emojis. Layout law: border-box, no width+padding overflow, no fixed chrome under transformed ancestors.
 - Settings whitelist pattern in `src/lib/voice/settings.ts`; seed organ srcdoc-safety (ASCII, no backticks/`${`/`</script`, data-actions, kit-composed).
 - Destructive actions (organ delete, reset-to-defaults) require an in-UI confirm step; deletions must clean ALL organ residue: git-side files (organDelete command exists in core.ts), `loom.win.<id>`, organ storage keys (`organ.<id>.*` — check api.ts key() namespacing for the exact prefix), windowRegistry entry, open-window state, dock entry (organs-changed event refresh).

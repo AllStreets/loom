@@ -8,7 +8,7 @@ Phases 21 and 22 gave LOOM a body it can edit — TypeScript kernel and Rust cor
 
 Phase 23 makes the packaged LOOM **self-rebuilding**: it carries its own genome, threads the loom once from tools already on the machine, and from then on — with the network unplugged — edits its source, validates in isolation, weaves a new binary, swaps itself, relaunches, and heals if the new body cannot boot. The previous generation guards the birth of the next.
 
-This phase follows the second excision (`docs/superpowers/plans/2026-09-02-rebirth-excision.md`): the Cockpit is gone, the cloud builder is gone. One brain, local. One body, self-woven.
+This phase follows the second excision (`docs/design/plans/2026-09-02-rebirth-excision.md`): the Cockpit is gone, the cloud builder is gone. One brain, local. One body, self-woven.
 
 ## Vocabulary (brand-consistent, see BRAND.md)
 

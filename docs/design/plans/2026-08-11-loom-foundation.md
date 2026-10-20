@@ -45,7 +45,7 @@ LOOM/
 │     ├─ timeline.rs               # git-backed Timeline (init/commit/log/rollback/last_good)
 │     └─ error.rs                   # shared error type → serializable to the UI
 ├─ .github/workflows/check.yml      # cargo test + vitest gate
-└─ docs/superpowers/…               # spec + this plan (already committed)
+└─ docs/design/…               # spec + this plan (already committed)
 ```
 
 Responsibilities: `ollama.rs` = raw HTTP only. `fleet.rs` = policy (which model per role, pin, retry, fallback). `timeline.rs` = all git. `core.ts` = the single typed boundary the UI uses. Files that change together live together; each file has one job.

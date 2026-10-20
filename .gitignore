@@ -54,3 +54,6 @@ src-tauri/libs/
 # machine-local (it names an absolute loomhome path) and PROTECTED in the
 # genome; it is not the repository's to carry.
 .cargo/config.toml
+
+# Notes written to coding agents while building this; kept locally, not published.
+docs/HANDOFF.md
